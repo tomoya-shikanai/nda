@@ -15,8 +15,14 @@ Built with Claude: Japan 2026 の提出作品「んだ (nDa)」。父（整備�
 ## 技術
 - Next.js（工場の PC でローカル起動、審査員向けは同じコードを hosted）。DB は libSQL（ローカルはファイル）。
 - Claude: Messages API Tool Runner（betaZodTool）＋ structured outputs ＋ vision。分離と一問は `claude-opus-5-5`、補助は `claude-haiku-5-5`。
-- STT は外部ベンダ（2 社を実録音で比較して 1 社に決める）。ストリーミングは使わない。ファイル取込が正。
+- STT は外部ベンダ（Scribe v2／AmiVoice／Gemini 3.5 Transcribe を実録音で比較して 1 社に決める。基準線は kotoba-whisper）。ストリーミングは使わない。ファイル取込が正。
 - 不採用: computer use（例外条件を満たした場合のみ 4h 上限）、Managed Agents、異音分類、話者分離の自作。
 
 ## 出力
 - 最終回答は日本語。コミットメッセージは日本語の conventional commit。
+
+## 夜間ループ
+- 起動: `nohup pnpm night >/dev/null 2>&1 &`（Mac は AC 電源、蓋は開けたまま）。`main` から `night/<日付>` を作り、`../nda-night` の worktree だけで動く。push しない。
+- 朝: `.night/<日付>/report.md` を読み、画面を確認してから `main` へマージして push する。失敗分は `night-failed/*` に残る。
+- 回すのは `tasks/backlog.md` のタスクだけ。架空の素材で検証でき、仕様が確定したものに限る。評価の実行、事前登録の記入、父の言葉の解釈、録音の処理は回さない。
+- 完了はエージェントの申告でなく `pnpm check` で決める。

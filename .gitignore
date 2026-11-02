@@ -27,3 +27,5 @@ next-env.d.ts
 data/transcripts/
 data/kartes/
 data/audio/
+# 夜間ループのログ
+.night/

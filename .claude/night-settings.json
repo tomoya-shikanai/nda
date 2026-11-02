@@ -1,0 +1,53 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash(pnpm test*)",
+      "Bash(pnpm lint*)",
+      "Bash(pnpm typecheck*)",
+      "Bash(pnpm build*)",
+      "Bash(pnpm check*)",
+      "Bash(pnpm tsx *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(ls*)"
+    ],
+    "deny": [
+      "Read(**/.env*)",
+      "Read(**/data/recordings/**)",
+      "Read(**/data/audio/**)",
+      "Read(**/data/transcripts/**)",
+      "Read(**/data/kartes/**)",
+      "Edit(**/docs/preregistration.md)",
+      "Write(**/docs/preregistration.md)",
+      "Edit(**/tasks/backlog*.md)",
+      "Write(**/tasks/backlog*.md)",
+      "Bash(git push*)",
+      "Bash(git commit*)",
+      "Bash(git reset*)",
+      "Bash(curl*)",
+      "Bash(wget*)",
+      "Bash(pnpm add*)",
+      "Bash(pnpm install*)",
+      "Bash(vercel*)",
+      "WebFetch",
+      "WebSearch",
+      "Agent"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/deny-dangerous-bash.sh", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
