@@ -1,11 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "Read",
-      "Edit",
-      "Write",
-      "Glob",
-      "Grep",
       "Bash(pnpm test*)",
       "Bash(pnpm lint*)",
       "Bash(pnpm typecheck*)",
@@ -18,6 +13,11 @@
       "Bash(ls*)"
     ],
     "deny": [
+      "Read(//**/data/recordings/**)",
+      "Read(//**/data/audio/**)",
+      "Read(//**/data/transcripts/**)",
+      "Read(//**/data/kartes/**)",
+      "Read(//**/.env*)",
       "Read(**/.env*)",
       "Read(**/data/recordings/**)",
       "Read(**/data/audio/**)",
@@ -45,7 +45,11 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "$HOME/.claude/hooks/deny-dangerous-bash.sh", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/deny-dangerous-bash.sh",
+            "timeout": 10
+          }
         ]
       }
     ]

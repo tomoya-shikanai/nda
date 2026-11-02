@@ -12,6 +12,7 @@ BACKLOG=${NIGHT_BACKLOG:-tasks/backlog.md}
 MAX_TASKS=${NIGHT_MAX_TASKS:-5}
 TASK_SEC=${NIGHT_TASK_SEC:-2700}
 CLAUDE_BIN=${NIGHT_CLAUDE:-claude}
+MODEL=${NIGHT_MODEL:-claude-opus-5-5}
 LOG=${NIGHT_LOG:-$ROOT/.night/$DAY}
 BASE_REF=${NIGHT_BASE:-main}
 REPORT=$LOG/report.md
@@ -24,7 +25,8 @@ say() { echo "$*" | tee -a "$REPORT"; }
 stop() { say "- 停止: $1"; say "- 差分: $(git -C "$WT" diff --shortstat "$BASE" HEAD)"; exit "${2:-0}"; }
 
 if [ -d "$WT/.git" ] || [ -f "$WT/.git" ]; then
-  git -C "$WT" switch -q "$BRANCH" || exit 1
+  # 2 晩目以降は既存 worktree に新しいブランチを作る
+  git -C "$WT" switch -q "$BRANCH" 2>/dev/null || git -C "$WT" switch -q -c "$BRANCH" "$BASE_REF" || exit 1
 else
   git -C "$ROOT" worktree add -q -B "$BRANCH" "$WT" "$BASE_REF" || exit 1
 fi
@@ -53,7 +55,7 @@ while [ "$done_n" -lt "$MAX_TASKS" ]; do
   { cat "$ROOT/tasks/night-prompt.md"; printf '\n## タスク\n%s\n' "$line"; } | \
     perl -e 'alarm shift; exec @ARGV' "$limit" "$CLAUDE_BIN" -p --output-format json \
       --setting-sources project --settings "$ROOT/.claude/night-settings.json" \
-      --permission-mode dontAsk --model claude-opus-5-5 --effort medium > "$out" 2> "$out.err"
+      --permission-mode acceptEdits --model "$MODEL" --effort medium > "$out" 2> "$out.err"
   rc=$?
   sec=$(( $(date +%s) - t0 ))
   result=$(jq -r '.result // ""' "$out" 2>/dev/null)
