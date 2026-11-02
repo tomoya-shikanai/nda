@@ -87,6 +87,8 @@ export const Karte = KarteDraft.extend({
   createdAt: z.string(),
   status: KarteStatus,
   ledger: z.array(LedgerResult),
+  /** 出所の後検証の不合格。1 件でもあれば承認できない。 */
+  verificationFailures: z.array(z.string()),
   /** 分岐の一問とその回答。発火しなかった理由も残す。 */
   question: z
     .object({

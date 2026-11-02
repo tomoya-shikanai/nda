@@ -2,6 +2,7 @@ import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { claude, MODEL_MAIN } from "../claude";
 import type { Karte } from "../karte/schema";
+import { allProvenance, normalize } from "../karte/verify";
 
 export const STOP_MESSAGE = "まいね。まだ父さ聞いでね";
 
@@ -30,7 +31,41 @@ const SYSTEM = `あなたは整備士の息子の問いに、父が「んだ」�
 - 答えるときは必ず cited に根拠の原文と時刻を入れる。cited が空なら answerable=false。
 - 「父ならどこから確かめるか」を checkOrder に、カルテの確かめた順のまま出す。`;
 
-export async function ask(question: string, approved: Karte[]): Promise<SonAnswer> {
+/** モデルに渡す範囲。父が承認していない一問の回答は渡さない。 */
+export function karteView(k: Karte) {
+  return {
+    id: k.id,
+    recordingId: k.recordingId,
+    summary: k.summary,
+    symptoms: k.symptoms,
+    checks: k.checks,
+    senses: k.senses,
+    decision: k.decision,
+    approvedCondition:
+      k.question?.fired && k.question.answerApproved === true
+        ? { question: k.question.text, answer: k.question.answer }
+        : null,
+  };
+}
+
+/** 引用が承認済みカルテの出所と一致するか。不一致の説明を返す。 */
+export function citationFailures(cited: SonAnswer["cited"], approved: Karte[]): string[] {
+  return cited.flatMap((c) => {
+    const k = approved.find((x) => x.id === c.karteId && x.status === "approved");
+    if (!k) return [`承認済みカルテに無い: ${c.karteId}`];
+    const hit = allProvenance(k).some(
+      (p) =>
+        p.recordingId === c.recordingId &&
+        p.startSec === c.startSec &&
+        p.endSec === c.endSec &&
+        normalize(p.quote) === normalize(c.quote),
+    );
+    return hit ? [] : [`出所と一致しない引用:「${c.quote}」`];
+  });
+}
+
+export async function ask(question: string, approvedInput: Karte[]): Promise<SonAnswer> {
+  const approved = approvedInput.filter((k) => k.status === "approved");
   if (approved.length === 0) {
     return { answerable: false, answer: null, checkOrder: [], cited: [], whyNot: "承認済みカルテが 0 件" };
   }
@@ -44,20 +79,7 @@ export async function ask(question: string, approved: Karte[]): Promise<SonAnswe
         content: [
           `息子の問い: ${question}`,
           "承認済みカルテ:",
-          JSON.stringify(
-            approved.map((k) => ({
-              id: k.id,
-              recordingId: k.recordingId,
-              summary: k.summary,
-              symptoms: k.symptoms,
-              checks: k.checks,
-              senses: k.senses,
-              decision: k.decision,
-              question: k.question,
-            })),
-            null,
-            1,
-          ),
+          JSON.stringify(approved.map(karteView), null, 1),
         ].join("\n\n"),
       },
     ],
@@ -67,6 +89,10 @@ export async function ask(question: string, approved: Karte[]): Promise<SonAnswe
   if (!a) throw new Error("息子の問いの出力を解釈できない");
   if (!a.answerable || a.cited.length === 0) {
     return { ...a, answerable: false, answer: null };
+  }
+  const bad = citationFailures(a.cited, approved);
+  if (bad.length > 0) {
+    return { answerable: false, answer: null, checkOrder: [], cited: [], whyNot: bad.join(" / ") };
   }
   return a;
 }
