@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.env
+.env.*
+*.db
+*.db-journal
+data/recordings/
+data/private/
+mapping*
+private/
+*.wav
+*.m4a
+*.mp3
+*.aac
+*.flac
+.DS_Store
