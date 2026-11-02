@@ -14,3 +14,16 @@ private/
 *.aac
 *.flac
 .DS_Store
+# next.js
+/.next/
+/out/
+/build
+*.pem
+*.tsbuildinfo
+next-env.d.ts
+.vercel
+.pnpm-debug.log*
+# 文字起こし・カルテ・音声は実名や客の情報を含み得る
+data/transcripts/
+data/kartes/
+data/audio/
