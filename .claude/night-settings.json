@@ -50,7 +50,21 @@
       "Edit(**/package.json)",
       "Write(**/package.json)",
       "Edit(**/.gitignore)",
-      "Write(**/.gitignore)"
+      "Write(**/.gitignore)",
+      "Edit(**/node_modules/**)",
+      "Write(**/node_modules/**)",
+      "Edit(**/eslint.config.*)",
+      "Write(**/eslint.config.*)",
+      "Edit(**/tsconfig.json)",
+      "Write(**/tsconfig.json)",
+      "Edit(**/next.config.*)",
+      "Write(**/next.config.*)",
+      "Edit(**/pnpm-workspace.yaml)",
+      "Write(**/pnpm-workspace.yaml)",
+      "Edit(**/.npmrc)",
+      "Write(**/.npmrc)",
+      "Edit(**/pnpm-lock.yaml)",
+      "Write(**/pnpm-lock.yaml)"
     ]
   },
   "hooks": {
