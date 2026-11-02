@@ -35,6 +35,9 @@ cd "$WT" || exit 1
 BASE=$(git rev-parse HEAD)
 pnpm install --offline --frozen-lockfile --silent || exit 1
 
+# ゲートと規則そのもの。エージェントが変えたら不合格にする。
+PROTECTED='^(\.claude/|\.githooks/|tasks/|scripts/(check|night)\.sh$|lib/karte/verify\.ts$|docs/preregistration\.md$|package\.json$|pnpm-lock\.yaml$|\.gitignore$|eslint\.config\.mjs$)'
+
 mark() { # ID 記号
   sed -i '' "s/^- \[ \] $1 |/- [$2] $1 |/" "$BACKLOG"
   git add "$BACKLOG" && git commit -q -m "chore: 夜間タスク $1 を [$2] にする"
@@ -79,6 +82,7 @@ while [ "$done_n" -lt "$MAX_TASKS" ]; do
   elif [ "$(printf '%s' "$result" | head -1 | cut -c1-8)" = "BLOCKED:" ]; then reason=$(printf '%s' "$result" | head -1)
   elif ! git add -A; then reason="git add 失敗"
   elif [ -z "$(git status --porcelain)" ]; then reason="変更なし"
+  elif touched=$(git diff --cached --name-only "$start" | grep -E "$PROTECTED"); then reason="保護対象を変更: $(echo $touched)"
   elif ! pnpm -s check > "$LOG/$id.check.log" 2>&1; then reason="ゲート不合格（$LOG/$id.check.log）"
   elif ! git commit -q -m "$title" -m "夜間ループで実装した。" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"; then reason="コミット失敗"
   fi

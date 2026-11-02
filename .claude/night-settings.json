@@ -6,7 +6,6 @@
       "Bash(pnpm typecheck*)",
       "Bash(pnpm build*)",
       "Bash(pnpm check*)",
-      "Bash(pnpm tsx *)",
       "Bash(git status*)",
       "Bash(git diff*)",
       "Bash(git log*)",
@@ -37,7 +36,21 @@
       "Bash(vercel*)",
       "WebFetch",
       "WebSearch",
-      "Agent"
+      "Agent",
+      "Edit(**/.claude/**)",
+      "Write(**/.claude/**)",
+      "Edit(**/.githooks/**)",
+      "Write(**/.githooks/**)",
+      "Edit(**/scripts/check.sh)",
+      "Write(**/scripts/check.sh)",
+      "Edit(**/scripts/night.sh)",
+      "Write(**/scripts/night.sh)",
+      "Edit(**/lib/karte/verify.ts)",
+      "Write(**/lib/karte/verify.ts)",
+      "Edit(**/package.json)",
+      "Write(**/package.json)",
+      "Edit(**/.gitignore)",
+      "Write(**/.gitignore)"
     ]
   },
   "hooks": {
