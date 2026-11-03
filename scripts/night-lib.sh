@@ -21,7 +21,9 @@ night_settings() { # <worktree> <出力先>
   # tsx は一時フォルダにソケットを作る。Claude の sandbox が割り当てる一時フォルダの下だけ許す。
   tmp=/tmp/claude-$(id -u)
   # --args の後ろは全部文字列扱いになるので、設定ファイルは標準入力で渡す
+  # Read の道具にも同じ場所を絶対パスで拒否する（//** の glob は試験の一時フォルダまで塞ぐので使わない）
   jq --arg t "$tmp" --args '.sandbox.filesystem.denyRead = $ARGS.positional
+    | .permissions.deny += ($ARGS.positional | map("Read(/" + . + ")", "Read(/" + . + "/**)"))
     | .sandbox.network.allowUnixSockets = [$t, "/private" + $t]' "${deny[@]}" \
     < "$ROOT/.claude/night-settings.json" > "$2"
 }

@@ -10,16 +10,8 @@
       "Bash(ls*)"
     ],
     "deny": [
-      "Read(//**/data/recordings/**)",
-      "Read(//**/data/audio/**)",
-      "Read(//**/data/transcripts/**)",
-      "Read(//**/data/kartes/**)",
       "Read(//**/.env*)",
       "Read(**/.env*)",
-      "Read(**/data/recordings/**)",
-      "Read(**/data/audio/**)",
-      "Read(**/data/transcripts/**)",
-      "Read(**/data/kartes/**)",
       "Edit(**/docs/preregistration.md)",
       "Write(**/docs/preregistration.md)",
       "Edit(**/tasks/backlog*.md)",
