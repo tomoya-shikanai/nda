@@ -7,8 +7,6 @@
       "Bash(pnpm build*)",
       "Bash(pnpm check*)",
       "Bash(git status*)",
-      "Bash(git diff*)",
-      "Bash(git log*)",
       "Bash(ls*)"
     ],
     "deny": [
@@ -45,6 +43,10 @@
       "Write(**/scripts/check.sh)",
       "Edit(**/scripts/night.sh)",
       "Write(**/scripts/night.sh)",
+      "Edit(**/scripts/night-lib.sh)",
+      "Write(**/scripts/night-lib.sh)",
+      "Edit(**/scripts/night-probe.sh)",
+      "Write(**/scripts/night-probe.sh)",
       "Edit(**/lib/karte/verify.ts)",
       "Write(**/lib/karte/verify.ts)",
       "Edit(**/package.json)",
@@ -80,5 +82,26 @@
         ]
       }
     ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": false,
+    "filesystem": {
+      "denyRead": []
+    },
+    "network": {
+      "allowedDomains": [],
+      "allowLocalBinding": true
+    },
+    "credentials": {
+      "envVars": [
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "mode": "deny"
+        }
+      ]
+    }
   }
 }

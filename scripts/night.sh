@@ -5,14 +5,18 @@ set -uo pipefail
 [ -z "${NIGHT_AWAKE:-}" ] && NIGHT_AWAKE=1 exec caffeinate -is "$0" "$@"
 
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+. "$ROOT/scripts/night-lib.sh"
+
+# 拒否の点検に通らなければ始めない（NIGHT_SKIP_PROBE=1 は試験用）
+if [ -z "${NIGHT_SKIP_PROBE:-}" ]; then
+  "$ROOT/scripts/night-probe.sh" || { echo "点検に不合格のため夜間を始めない"; exit 1; }
+fi
 DAY=$(date +%Y%m%d)
 BRANCH=${NIGHT_BRANCH:-night/$DAY}
 WT=${NIGHT_WORKTREE:-$ROOT/../nda-night}
 BACKLOG=${NIGHT_BACKLOG:-tasks/backlog.md}
 MAX_TASKS=${NIGHT_MAX_TASKS:-5}
 TASK_SEC=${NIGHT_TASK_SEC:-2700}
-CLAUDE_BIN=${NIGHT_CLAUDE:-claude}
-MODEL=${NIGHT_MODEL:-claude-opus-5-5}
 LOG=${NIGHT_LOG:-$ROOT/.night/$DAY}
 BASE_REF=${NIGHT_BASE:-main}
 REPORT=$LOG/report.md
@@ -33,10 +37,12 @@ fi
 cd "$WT" || exit 1
 [ -z "$(git status --porcelain)" ] || { echo "worktree が汚れている: $WT"; exit 1; }
 BASE=$(git rev-parse HEAD)
-pnpm install --offline --frozen-lockfile --silent || exit 1
+pnpm install --prefer-offline --frozen-lockfile --silent || exit 1
+NIGHT_SETTINGS=$LOG/settings.json
+night_settings "$WT" "$NIGHT_SETTINGS" || exit 1
 
 # ゲートと規則そのもの。エージェントが変えたら不合格にする。
-PROTECTED='^(\.claude/|\.githooks/|tasks/|scripts/(check|night)\.sh$|lib/karte/verify\.ts$|docs/preregistration\.md$|package\.json$|pnpm-lock\.yaml$|\.gitignore$|eslint\.config\.[^/]+$|tsconfig\.json$|next\.config\.[^/]+$|pnpm-workspace\.yaml$|\.npmrc$)'
+PROTECTED='^(\.claude/|\.githooks/|tasks/|scripts/(check|night|night-lib|night-probe)\.sh$|lib/karte/verify\.ts$|docs/preregistration\.md$|package\.json$|pnpm-lock\.yaml$|\.gitignore$|eslint\.config\.[^/]+$|tsconfig\.json$|next\.config\.[^/]+$|pnpm-workspace\.yaml$|\.npmrc$)'
 
 mark() { # ID 記号
   sed -i '' "s/^- \[ \] $1 |/- [$2] $1 |/" "$BACKLOG"
@@ -54,14 +60,12 @@ while [ "$done_n" -lt "$MAX_TASKS" ]; do
   limit=$(( left < TASK_SEC ? left : TASK_SEC ))
   start=$(git rev-parse HEAD); out=$LOG/$id.json; t0=$(date +%s)
 
-  # timeout が macOS に無いので perl の alarm で打ち切る（SIGALRM で終了）
   { cat "$ROOT/tasks/night-prompt.md"; printf '\n## タスク\n%s\n' "$line"; } | \
-    perl -e 'alarm shift; exec @ARGV' "$limit" "$CLAUDE_BIN" -p --output-format json \
-      --setting-sources project --settings "$ROOT/.claude/night-settings.json" \
-      --permission-mode acceptEdits --model "$MODEL" --effort medium > "$out" 2> "$out.err"
+    night_claude "$limit" json --json-schema "$NIGHT_SCHEMA" > "$out" 2> "$out.err"
   rc=$?
   sec=$(( $(date +%s) - t0 ))
-  result=$(jq -r '.result // ""' "$out" 2>/dev/null)
+  status=$(jq -r '.structured_output.status // "none"' "$out" 2>/dev/null)
+  result=$(jq -r '.structured_output | "\(.summary // "")\(if .reason then "（\(.reason)）" else "" end)"' "$out" 2>/dev/null)
   cost=$(jq -r '.total_cost_usd // "?"' "$out" 2>/dev/null)
 
   rollback() {
@@ -79,7 +83,8 @@ while [ "$done_n" -lt "$MAX_TASKS" ]; do
 
   reason=""
   if [ "$rc" -ne 0 ]; then reason="claude 終了コード $rc"
-  elif [ "$(printf '%s' "$result" | head -1 | cut -c1-8)" = "BLOCKED:" ]; then reason=$(printf '%s' "$result" | head -1)
+  elif [ "$status" = "blocked" ]; then reason="BLOCKED: $result"
+  elif [ "$status" != "done" ]; then reason="結果の形が不正（status=${status}）"
   elif ! git add -A; then reason="git add 失敗"
   elif [ -z "$(git status --porcelain)" ]; then reason="変更なし"
   elif ! changed=$(git diff --cached --no-renames --name-only -z "$start" | tr '\0' '\n'; exit "${PIPESTATUS[0]}"); then reason="差分の取得に失敗"
