@@ -3,26 +3,27 @@
 # 環境変数は最小にし、道具・権限・sandbox は night-settings.json だけで決める。
 # --bare は使わない（OAuth を読まず、危険コマンドのフックと CLAUDE.md も読み飛ばすため）。
 
-# 実行時の設定を作る。sandbox で読めなくする場所は、作業する worktree 以外の
-# ~/dev の案件すべて、本体リポジトリ（.git を除く）、秘密の置き場。
-# ホーム全体を拒否すると node（Volta）が現在のフォルダを解決できず動かないので列挙する。
+# 実行時の設定を作る。sandbox で読めなくする場所は、ホーム直下のすべて
+# （node・pnpm・git が要る .volta・Library/pnpm・.gitconfig* を除く）、作業する worktree 以外の
+# ~/dev の案件すべて、本体リポジトリ（.git を除く）。
+# ホームそのものを拒否すると node（Volta）が現在のフォルダを解決できず動かないので、中身を列挙する。
 night_settings() { # <worktree> <出力先>
-  local wt deny=() d
-  wt=$(cd "$1" && pwd -P)
-  for d in "$HOME"/dev/* "$HOME"/dev/personal/* "$ROOT"/* "$ROOT"/.[!.]*; do
-    d=$(cd "$d" 2>/dev/null && pwd -P || echo "$d")
+  local wt root deny=() d tmp
+  wt=$(cd "$1" && pwd -P); root=$(cd "$ROOT" && pwd -P)
+  for d in "$HOME"/* "$HOME"/.[!.]* "$HOME"/Library/* "$HOME"/dev/* "$HOME"/dev/personal/* "$root"/* "$root"/.[!.]*; do
+    [ -e "$d" ] || [ -L "$d" ] || continue
     case "$d" in
-      "$wt"|"$HOME/dev/personal"|"$ROOT"|"$ROOT/.git") continue ;;
-      "$ROOT"/*) ;;
-      "$(cd "$ROOT" && pwd -P)") continue ;;
+      "$HOME/dev"|"$HOME/.volta"|"$HOME/Library"|"$HOME/Library/pnpm"|"$HOME"/.gitconfig*) continue ;;
+      "$HOME/dev/personal"|"$root/.git"|"$wt") continue ;;
     esac
     deny+=("$d")
   done
-  for d in .ssh .aws .gnupg .config .netrc .npmrc .claude.json Library/Keychains Documents Desktop Downloads Private; do
-    deny+=("$HOME/$d")
-  done
+  # tsx は一時フォルダにソケットを作る。Claude の sandbox が割り当てる一時フォルダの下だけ許す。
+  tmp=/tmp/claude-$(id -u)
   # --args の後ろは全部文字列扱いになるので、設定ファイルは標準入力で渡す
-  jq --args '.sandbox.filesystem.denyRead = $ARGS.positional' "${deny[@]}" < "$ROOT/.claude/night-settings.json" > "$2"
+  jq --arg t "$tmp" --args '.sandbox.filesystem.denyRead = $ARGS.positional
+    | .sandbox.network.allowUnixSockets = [$t, "/private" + $t]' "${deny[@]}" \
+    < "$ROOT/.claude/night-settings.json" > "$2"
 }
 
 # night_claude <秒数> <出力形式 json|stream-json> [追加の引数...] < プロンプト
