@@ -41,7 +41,7 @@ night_claude() {
   # timeout が macOS に無いので perl の alarm で打ち切る（SIGALRM で終了）
   env -i PATH="$run_path" HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" LANG="${LANG:-ja_JP.UTF-8}" TMPDIR="${TMPDIR:-/tmp}" \
     perl -e 'alarm shift; exec @ARGV' "$limit" "$(command -v "${NIGHT_CLAUDE:-claude}")" -p \
-      --output-format "$format" "${extra[@]}" \
+      --output-format "$format" ${extra[@]+"${extra[@]}"} \
       --setting-sources project --settings "$NIGHT_SETTINGS" \
       --permission-mode acceptEdits --permission-prompts none \
       --strict-mcp-config --no-session-persistence \
