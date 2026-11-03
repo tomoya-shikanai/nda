@@ -42,7 +42,7 @@ NIGHT_SETTINGS=$LOG/settings.json
 night_settings "$WT" "$NIGHT_SETTINGS" || exit 1
 
 # ゲートと規則そのもの。エージェントが変えたら不合格にする。
-PROTECTED='^(\.claude/|\.githooks/|tasks/|scripts/(check|night|night-lib|night-probe)\.sh$|lib/karte/verify\.ts$|docs/preregistration\.md$|package\.json$|pnpm-lock\.yaml$|\.gitignore$|eslint\.config\.[^/]+$|tsconfig\.json$|next\.config\.[^/]+$|pnpm-workspace\.yaml$|\.npmrc$)'
+PROTECTED='^(\.claude/|\.githooks/|tasks/|scripts/(check|night|night-lib|night-probe)\.sh$|lib/karte/verify\.ts$|lib/eval/|docs/preregistration\.md$|package\.json$|pnpm-lock\.yaml$|\.gitignore$|eslint\.config\.[^/]+$|tsconfig\.json$|next\.config\.[^/]+$|pnpm-workspace\.yaml$|\.npmrc$)'
 
 mark() { # ID 記号
   sed -i '' "s/^- \[ \] $1 |/- [$2] $1 |/" "$BACKLOG"

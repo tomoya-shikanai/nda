@@ -23,6 +23,8 @@ Built with Claude: Japan 2026 の提出作品「んだ (nDa)」。父（整備�
 
 ## 夜間ループ
 - 起動: `nohup pnpm night >/dev/null 2>&1 &`（Mac は AC 電源、蓋は開けたまま）。`main` から `night/<日付>` を作り、`../nda-night` の worktree だけで動く。push しない。
-- 朝: `.night/<日付>/report.md` を読み、画面を確認してから `main` へマージして push する。失敗分は `night-failed/*` に残る。
+- 朝: `/night-review` で検収する（`night-reviewer` が差分を独立にレビューする）。画面を確認してから `main` へマージして push する。失敗分は `night-failed/*` に残る。
+- 起動前に `scripts/night-probe.sh` が禁止操作と sandbox からの脱出を実際に試し、不合格なら始めない。
+- 間違いと対策は `tasks/lessons.md` に 1 行ずつ残す。2 回出たらこのファイルへ昇格する。
 - 回すのは `tasks/backlog.md` のタスクだけ。架空の素材で検証でき、仕様が確定したものに限る。評価の実行、事前登録の記入、父の言葉の解釈、録音の処理は回さない。
 - 完了はエージェントの申告でなく `pnpm check` で決める。

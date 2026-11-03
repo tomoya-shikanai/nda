@@ -47,6 +47,8 @@
       "Write(**/scripts/night-probe.sh)",
       "Edit(**/lib/karte/verify.ts)",
       "Write(**/lib/karte/verify.ts)",
+      "Edit(**/lib/eval/**)",
+      "Write(**/lib/eval/**)",
       "Edit(**/package.json)",
       "Write(**/package.json)",
       "Edit(**/.gitignore)",

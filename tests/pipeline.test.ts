@@ -4,7 +4,7 @@
  * 素材は架空で、実案件・証明には使わない。
  */
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -61,6 +61,7 @@ const karte = (over: Partial<Karte> = {}): Karte => ({
   status: "approved",
   ledger: [],
   verificationFailures: [],
+  preregistration: null,
   question: null,
   ...over,
 });
@@ -169,16 +170,31 @@ before(async () => {
   cwd = await mkdtemp(join(tmpdir(), "nda-"));
   await mkdir(join(cwd, "data"));
   await writeFile(join(cwd, "t.json"), JSON.stringify(transcript));
+  await commitPreregistration(cwd);
   env = { ...process.env, ANTHROPIC_API_KEY: "test", ANTHROPIC_BASE_URL: `http://127.0.0.1:${addr.port}` };
 });
 after(() => server.close());
 
+// 一時フォルダを git リポジトリにして、架空の事前登録をコミットする
+async function commitPreregistration(dir: string) {
+  await mkdir(join(dir, "docs"), { recursive: true });
+  await writeFile(join(dir, "docs/preregistration.md"), "# 架空の事前登録\n");
+  const git = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "pipe" });
+  git("init", "-q");
+  git("add", "docs/preregistration.md");
+  git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m", "prereg");
+  return git("rev-parse", "HEAD").toString().trim();
+}
+
 const script = (name: string, ...args: string[]) =>
   exec(TSX, [join(ROOT, "scripts", name), ...args], { cwd, env });
+const scriptIn = (dir: string, name: string, ...args: string[]) =>
+  exec(TSX, [join(ROOT, "scripts", name), ...args], { cwd: dir, env });
 
 test("配管: 3 腕→承認→息子の問い→範囲外で停止", async () => {
   const ran = await script("run.ts", "t.json", "--arm", "all");
   assert.match(ran.stdout, /後検証 合格/);
+  assert.match(ran.stdout, /事前登録 [0-9a-f]{7}/);
   assert.match(ran.stdout, /一問\[extract\].*発火せず/);
   assert.match(ran.stdout, /一問\[fixed\].*逆の判断/);
   assert.match(ran.stdout, /一問\[claude\].*どこまで錆びたら/);
@@ -189,6 +205,7 @@ test("配管: 3 腕→承認→息子の問い→範囲外で停止", async () =
   await script("approve.ts", "t-claude", "んだ", "--answer", "穴が開いたら替える");
   const saved = JSON.parse(await readFile(join(cwd, "data/kartes/t-claude.json"), "utf8"));
   assert.equal(saved.status, "approved");
+  assert.match(saved.preregistration, /^[0-9a-f]{40}$/); // 承認で書き戻しても消えない
   assert.equal(saved.question.answerApproved, true);
 
   sonAnswer = {
@@ -218,4 +235,30 @@ test("配管: 後検証に落ちたカルテは承認できない", async () => 
 
 test("配管: 不正な腕の指定は実行前に止まる", async () => {
   await assert.rejects(script("run.ts", "t.json", "--arm", "nope"), /usage/);
+});
+
+test("事前登録: 未コミットの変更があると評価を始めない", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "nda-prereg-"));
+  await writeFile(join(dir, "t.json"), JSON.stringify(transcript));
+  await commitPreregistration(dir);
+  await writeFile(join(dir, "docs/preregistration.md"), "# 出力を見たあとで書き換えた\n");
+  await assert.rejects(scriptIn(dir, "run.ts", "t.json", "--arm", "all"), /未コミットの変更/);
+});
+
+test("事前登録: git の外やコミット前では評価を始めない", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "nda-prereg-"));
+  await writeFile(join(dir, "t.json"), JSON.stringify(transcript));
+  await assert.rejects(scriptIn(dir, "run.ts", "t.json", "--arm", "all"), /確かめられない/);
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  await assert.rejects(scriptIn(dir, "run.ts", "t.json", "--arm", "all"), /コミットされていない/);
+});
+
+test("事前登録: 1 腕だけの試し回しは事前登録を求めない", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "nda-prereg-"));
+  await mkdir(join(dir, "data"));
+  await writeFile(join(dir, "t.json"), JSON.stringify(transcript));
+  const ran = await scriptIn(dir, "run.ts", "t.json", "--arm", "extract");
+  assert.match(ran.stdout, /後検証 合格/);
+  const saved = JSON.parse(await readFile(join(dir, "data/kartes/t-extract.json"), "utf8"));
+  assert.equal(saved.preregistration, null);
 });

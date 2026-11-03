@@ -12,6 +12,7 @@ import { verifyDraft } from "../lib/karte/verify";
 import { loadLedger, lookup } from "../lib/ledger/lookup";
 import { selectQuestion, type Arm } from "../lib/karte/question";
 import { Karte } from "../lib/karte/schema";
+import { committedPreregistration } from "../lib/eval/prereg";
 
 const ALL_ARMS: Arm[] = ["extract", "fixed", "claude"];
 const { values, positionals } = parseArgs({
@@ -24,6 +25,10 @@ if (!transcriptPath || arms.length === 0) {
   console.error("usage: tsx scripts/run.ts <transcript.json> --arm extract|fixed|claude|all [--photo p]");
   process.exit(1);
 }
+
+// 3 腕の比較は評価なので、事前登録がコミット済みでなければ Claude を呼ぶ前に止める
+const preregistration = values.arm === "all" ? await committedPreregistration() : null;
+if (preregistration) console.log(`事前登録 ${preregistration.slice(0, 7)}`);
 
 const t0 = Date.now();
 const t = await loadTranscript(transcriptPath);
@@ -52,6 +57,7 @@ for (const arm of arms) {
     status: "draft",
     ledger: ledgerResults,
     verificationFailures: failures,
+    preregistration,
     question: { ...q, answer: null, answerApproved: null },
   });
   const out = `data/kartes/${karte.id}.json`;
