@@ -17,6 +17,11 @@ REMOTE_REF=refs/heads/nda-probe-$(date +%s)
 
 cleanup() {
   rm -f "$CANARY_DATA" "$CANARY_HOME" "$OUT_HOME" "$OUT_HOME.txt" "$OUT_HOME.escape"
+  # 緩い設定で走って push が通ってしまった場合に、試験用のブランチをリモートに残さない
+  local r
+  for r in "$REMOTE_REF" "$REMOTE_REF-escape"; do
+    [ -n "$(git -C "$ROOT" ls-remote origin "$r" 2>/dev/null)" ] && git -C "$ROOT" push -q origin --delete "$r"
+  done
   git -C "$ROOT" worktree remove --force "$WT" 2>/dev/null
   git -C "$ROOT" worktree prune
 }
