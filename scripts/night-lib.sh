@@ -31,9 +31,14 @@ night_claude() {
   local limit=$1 format=$2; shift 2
   local extra=()
   [ "$format" = "stream-json" ] && extra+=(--verbose)
+  # PATH は最小にする。Volta の pnpm は自分を PATH から外して ~/Library/pnpm に渡すので、
+  # 本物の node の置き場を直接入れる（~/.nvm などは sandbox で読めない）。
+  local node_bin run_path
+  node_bin=$(dirname "$(volta which node 2>/dev/null || command -v node)")
+  run_path="$node_bin:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   # timeout が macOS に無いので perl の alarm で打ち切る（SIGALRM で終了）
-  env -i PATH="$PATH" HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" LANG="${LANG:-ja_JP.UTF-8}" TMPDIR="${TMPDIR:-/tmp}" \
-    perl -e 'alarm shift; exec @ARGV' "$limit" "${NIGHT_CLAUDE:-claude}" -p \
+  env -i PATH="$run_path" HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" LANG="${LANG:-ja_JP.UTF-8}" TMPDIR="${TMPDIR:-/tmp}" \
+    perl -e 'alarm shift; exec @ARGV' "$limit" "$(command -v "${NIGHT_CLAUDE:-claude}")" -p \
       --output-format "$format" "${extra[@]}" \
       --setting-sources project --settings "$NIGHT_SETTINGS" \
       --permission-mode acceptEdits --permission-prompts none \
