@@ -7,7 +7,13 @@
       "Bash(pnpm build*)",
       "Bash(pnpm check*)",
       "Bash(git status*)",
-      "Bash(ls*)"
+      "Bash(ls*)",
+      "Bash(pnpm -s test*)",
+      "Bash(pnpm -s lint*)",
+      "Bash(pnpm -s typecheck*)",
+      "Bash(pnpm -s build*)",
+      "Bash(pnpm -s check*)",
+      "Bash(node --import tsx --test tests/*)"
     ],
     "deny": [
       "Read(//**/.env*)",

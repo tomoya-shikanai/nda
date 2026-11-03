@@ -1,6 +1,9 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* 回線の無い工場 PC と夜間の sandbox でもビルドできるよう、Web フォントは取得しない */
+  --font-geist-sans: system-ui, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  --font-geist-mono: ui-monospace, "SF Mono", Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {

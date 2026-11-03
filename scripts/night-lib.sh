@@ -14,7 +14,7 @@ night_settings() { # <worktree> <出力先>
     [ -e "$d" ] || [ -L "$d" ] || continue
     case "$d" in
       "$HOME/dev"|"$HOME/.volta"|"$HOME/Library"|"$HOME/Library/pnpm"|"$HOME"/.gitconfig*) continue ;;
-      "$HOME/dev/personal"|"$root/.git"|"$wt") continue ;;
+      "$HOME/dev/personal"|"$root"|"$root/.git"|"$wt") continue ;;
     esac
     deny+=("$d")
   done
@@ -22,8 +22,13 @@ night_settings() { # <worktree> <出力先>
   tmp=/tmp/claude-$(id -u)
   # --args の後ろは全部文字列扱いになるので、設定ファイルは標準入力で渡す
   # Read の道具にも同じ場所を絶対パスで拒否する（//** の glob は試験の一時フォルダまで塞ぐので使わない）
-  jq --arg t "$tmp" --args '.sandbox.filesystem.denyRead = $ARGS.positional
+  jq --arg t "$tmp" --arg w "$wt" --args '.sandbox.filesystem.denyRead = $ARGS.positional
     | .permissions.deny += ($ARGS.positional | map("Read(/" + . + ")", "Read(/" + . + "/**)"))
+    | .permissions.deny |= map(
+        # 保護ファイルの Edit/Write 拒否は sandbox にも効く。**/package.json のままだと
+        # .next/package.json まで書けずビルドが落ちるので、worktree の直下に固定する。
+        if test("^(Edit|Write)\\(\\*\\*/") and (test("node_modules") | not)
+        then sub("\\(\\*\\*/"; "(/" + $w + "/") else . end)
     | .sandbox.network.allowUnixSockets = [$t, "/private" + $t]' "${deny[@]}" \
     < "$ROOT/.claude/night-settings.json" > "$2"
 }
