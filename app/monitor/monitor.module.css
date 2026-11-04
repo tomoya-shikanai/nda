@@ -488,3 +488,17 @@
 }
 .sayable b { font-weight: 900; }
 .sayable span { color: #5d5a6b; font-weight: 700; }
+
+/* 決まったお客様と車（#45）。未定なら「お客様: 未指定」 */
+.customer {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 calc(40 * var(--u));
+  font-size: calc(40 * var(--u));
+  font-weight: 700;
+  color: #5d5a6b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.customer b { color: #1f1d29; font-weight: 900; }

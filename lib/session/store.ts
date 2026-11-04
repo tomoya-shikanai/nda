@@ -13,6 +13,7 @@ import type { Question } from "../invoice/questions";
 import type { InvoiceRefs } from "../invoice/schema";
 import { Provenance } from "../karte/schema";
 import type { Transcript } from "../stt/types";
+import { customerPending } from "./customer";
 
 export const SESSION_STATES = ["idle", "listening", "thinking", "drafting", "asking", "done"] as const;
 export const SessionStatus = z.enum(SESSION_STATES);
@@ -29,6 +30,8 @@ export const AnswerAction = z.discriminatedUnion("kind", [
   /** 「X は何の数ですか」に「関係ない」。その行の使われない数の確認事項を解く。 */
   z.object({ kind: z.literal("unrelated") }),
   z.object({ kind: z.literal("approve") }),
+  /** 答えで客が決まった（名前と下 4 桁が一覧の同じ 1 件に合った）。id だけを残す。 */
+  z.object({ kind: z.literal("setCustomer"), id: z.string() }),
   /**
    * 明細が 0 行の作業への返事を、作業の話の続きとして文字起こしの後ろに足して抽出し直した（run.ts の continueSession）。
    * offsetSec は足した発話を後ろにずらした秒数。文字起こしの時刻 − offsetSec が、返事の録音（provenance.recordingId）の時刻。
@@ -79,6 +82,9 @@ const SessionSchema = z.object({
   error: z.string().nullable(),
   /** 前の版のファイルには無いので、無ければ null。 */
   extraction: ExtractionCost.nullable().default(null),
+  /** 前の版のファイルには無いので、無ければ客の照合なし。 */
+  customerRequired: z.boolean().default(false),
+  customerId: z.string().nullable().default(null),
 });
 
 export type Session = {
@@ -99,6 +105,10 @@ export type Session = {
   error: string | null;
   /** 抽出の費用（トークン数とかかった秒数）。抽出の前は null。 */
   extraction: ExtractionCost | null;
+  /** 客の照合が有効か（作業を作ったときに一覧があったか）。true なら客が決まるまで承認できない。 */
+  customerRequired: boolean;
+  /** 決まった客の id（名前・ナンバーは保存しない。表示のときに一覧から引く）。 */
+  customerId: string | null;
 };
 
 /** 形を確かめて Session として返す。不正なら throw。 */
@@ -133,6 +143,8 @@ export function newSession(id: string, now: Date): Session {
     approvedAt: null,
     error: null,
     extraction: null,
+    customerRequired: false,
+    customerId: null,
   };
 }
 
@@ -155,6 +167,7 @@ export function transition(s: Session, to: SessionStatus, now: Date): Session {
     if (s.invoice === null || s.invoice.confirmations.length !== 0) {
       throw new Error("確認事項が残っているので done にできない");
     }
+    if (customerPending(s)) throw new Error("お客様が決まっていないので done にできない");
   }
   const at = now.toISOString();
   return { ...s, status: to, updatedAt: at, history: [...s.history, { status: to, at }] };
@@ -169,7 +182,7 @@ function fileOf(dir: string, id: string): string {
 function assertDone(s: Session): void {
   if (s.status !== "done") return;
   const confs: unknown = s.invoice?.confirmations;
-  if (s.approved !== true || !Array.isArray(confs) || confs.length !== 0) {
+  if (s.approved !== true || !Array.isArray(confs) || confs.length !== 0 || customerPending(s)) {
     throw new Error(`done なのに承認されていないか確認事項が残っている: ${s.id}`);
   }
 }

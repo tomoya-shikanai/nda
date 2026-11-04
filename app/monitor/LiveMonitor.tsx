@@ -161,6 +161,15 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<FaceKey, 
         <div className={styles.brand}>
           んだ <span>nDa</span>
         </div>
+        <div className={styles.customer}>
+          {view.customer ? (
+            <>
+              お客様: <b>{view.customer.name}様</b>　車: <b>{view.customer.car}</b>
+            </>
+          ) : (
+            "お客様: 未指定"
+          )}
+        </div>
         <div className={styles.status}>
           <span className={styles.lamp} />
           {labels[face]}

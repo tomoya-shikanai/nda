@@ -2,6 +2,8 @@
  * モニター用の 1 つの JSON（W2）。純粋な関数。入力を書き換えない。
  * 金額を推測で出さない。null は null のまま返し、「値段？」の表示は画面がする。
  */
+import type { Customer } from "../customer/match";
+import { customerView, pendingCount } from "./customer";
 import { keptLines } from "./kept";
 import type { Session, SessionStatus } from "./store";
 
@@ -34,6 +36,8 @@ export type MonitorView = {
   questions: string[];
   confirmationCount: number;
   approved: boolean;
+  /** 決まった客（名前と車）。未定・照合なし・一覧に無いなら null（画面は「お客様: 未指定」）。 */
+  customer: { name: string; car: string } | null;
   credit: typeof VOICE_CREDIT;
 };
 
@@ -80,9 +84,10 @@ export function yenText(n: number | null): string | null {
   return n === null ? null : `¥${n.toLocaleString("ja-JP")}`;
 }
 
-const NOT_ANSWERS = new Set(["unread", "approve", "continue"]);
+const NOT_ANSWERS = new Set(["unread", "approve", "continue", "setCustomer"]);
 
-export function toMonitorView(s: Session | null): MonitorView {
+/** customers は客の一覧（表示のときに id から名前と車を引く）。無ければ客は null。 */
+export function toMonitorView(s: Session | null, customers: Customer[] | null = null): MonitorView {
   const segs = s?.transcript?.segments ?? [];
   const confirmations = s?.invoice?.confirmations ?? [];
   const answers = s?.answers ?? [];
@@ -105,12 +110,13 @@ export function toMonitorView(s: Session | null): MonitorView {
     heard: segs.length ? segs.map((x) => x.text).join("") : null,
     say: sayOf(s),
     sayId: s === null ? "none" : `${s.id}:${s.history.length}:${s.answers.length}`,
-    awaitingApproval: s?.status === "asking" && s.invoice !== null && confirmations.length === 0,
+    awaitingApproval: s?.status === "asking" && s.invoice !== null && pendingCount(s) === 0,
     lines,
     total: s?.invoice?.total ?? null,
     questions: (s?.questions ?? []).map((q) => q.text),
-    confirmationCount: confirmations.length,
+    confirmationCount: s ? pendingCount(s) : 0,
     approved: s?.approved ?? false,
+    customer: customerView(s?.customerId ?? null, customers),
     credit: VOICE_CREDIT,
   };
 }

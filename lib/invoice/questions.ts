@@ -21,6 +21,7 @@ export const QUESTION_REASONS = [
   "ledger", // 料金表
   "total", // 合計
   "other", // その他（同じ根拠・20 秒・参照が不正・確かでない など）
+  "customer", // 客（名前とナンバーの下 4 桁）。確認事項からは作らず、作業が足す（lib/session/customer.ts）
 ] as const;
 export type QuestionReason = (typeof QUESTION_REASONS)[number];
 
@@ -165,6 +166,7 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return `${name}は料金表のどの品目ですか`;
       case "total":
       case "other":
+      case "customer":
         return `${name}は、言ったとおりで合っていますか`;
     }
   };

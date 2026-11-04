@@ -22,6 +22,7 @@ import type { InvoiceLine, InvoiceRefs } from "../invoice/schema";
 import { choicesOf, findEntry, itemKey, type LedgerEntry } from "../ledger/lookup";
 import type { Segment, Transcript } from "../stt/types";
 import { bareAnswer, isApproval, isNo, isUnrelated, isYes, onlyValue } from "./approval";
+import { pendingCount, withCustomerQuestion } from "./customer";
 import { keptLines } from "./kept";
 import { type Answer, type Session, transition } from "./store";
 
@@ -175,6 +176,8 @@ export function readAnswer(
     case "ledger":
     case "total":
       return unread("人が画面で直す");
+    case "customer":
+      return unread("お客様が分からない");
   }
 }
 
@@ -273,7 +276,7 @@ export function answerSession(s: Session, utterance: Segment, ledger: LedgerEntr
   if (isApproval(utterance.text)) {
     // 客の声では承認しない（話者が分からない声は通す。最後は父が画面で見る）
     if (speaker === "customer") return keep(-1, -1, unread("客の声"));
-    if (s.invoice.confirmations.length === 0) {
+    if (pendingCount(s) === 0) {
       const answers: Answer[] = [...s.answers, { ...base, questionIndex: -1, lineIndex: -1, action: { kind: "approve" } }];
       return transition({ ...s, answers, approved: true, approvedAt: at }, "done", now);
     }
@@ -283,6 +286,8 @@ export function answerSession(s: Session, utterance: Segment, ledger: LedgerEntr
   const x = { candidates: s.candidates, refs: s.refs };
   const q = s.questions[0];
   if (q === undefined) return keep(-1, -1, unread("聞いている質問が無い"));
+  // 客の答えは作業の側で一覧と照らす（run.ts の replySession）。ここに来るのは照合が決まらなかった答え
+  if (q.reason === "customer") return keep(0, -1, unread("お客様が分からない"));
   const kept = keptLines(s.refs.lines.length, s.answers);
   const line = q.lineIndex >= 0 ? s.invoice.lines[q.lineIndex] : undefined;
   let action = readAnswer(q, line, utterance, ledger, s.candidates);
@@ -295,6 +300,6 @@ export function answerSession(s: Session, utterance: Segment, ledger: LedgerEntr
   const drafting = transition({ ...s, answers }, "drafting", now);
   const r = applyAnswers(x, s.transcript, ledger, answers);
   const invoice: AssembledInvoice = { lines: r.lines, confirmations: r.confirmations, total: r.total, unused: r.unused };
-  const questions = toQuestions(invoice, s.candidates, s.transcript, ledger);
+  const questions = withCustomerQuestion(toQuestions(invoice, s.candidates, s.transcript, ledger), s);
   return transition({ ...drafting, invoice, questions }, "asking", now);
 }

@@ -14,7 +14,9 @@ import { toQuestions } from "../invoice/questions";
 import type { InvoiceRefs } from "../invoice/schema";
 import type { LedgerEntry } from "../ledger/lookup";
 import { type Segment, type Transcript, TranscriptSchema } from "../stt/types";
+import { type Customer, identifyCustomer } from "../customer/match";
 import { answerBase, answerSession } from "./answer";
+import { customerPending, withCustomerQuestion } from "./customer";
 import { isApproval } from "./approval";
 import { type Answer, type ExtractionCost, newSession, type Session, transition, writeSession } from "./store";
 
@@ -52,12 +54,12 @@ async function extractWithCost(
 }
 
 /** 抽出の結果から、明細・質問・参照を組む（startSession と continueSession で同じ）。 */
-function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[]) {
+function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[], c: { customerRequired: boolean; customerId: string | null }) {
   const { candidates } = out;
   // 言い換えの言葉の行を補う（足した参照も保存する。答えの後の組み直しが同じ行を作るため）
   const refs = addAmbiguousLines(out, ledger);
   const invoice = assembleInvoice({ candidates, ...refs }, t, ledger);
-  const questions = toQuestions(invoice, candidates, t, ledger);
+  const questions = withCustomerQuestion(toQuestions(invoice, candidates, t, ledger), c);
   return { candidates, refs, invoice, questions };
 }
 
@@ -68,20 +70,30 @@ export async function startSession(x: {
   extract?: Extractor;
   now?: () => Date;
   id?: string;
+  /** 客の一覧。null・省略なら客の照合なし。あれば名前と下 4 桁を伏せ字にしてから保存・抽出し、客が決まるまで承認させない。 */
+  customers?: Customer[] | null;
 }): Promise<Session> {
   const now = x.now ?? (() => new Date());
-  let s = newSession(x.id ?? randomUUID(), now());
+  const customers = x.customers ?? null;
+  let transcript = x.transcript;
+  let customer = { customerRequired: false, customerId: null as string | null };
+  if (customers !== null) {
+    const found = identifyCustomer(transcript.segments.map((g) => g.text), customers);
+    transcript = { ...transcript, segments: transcript.segments.map((g, i) => ({ ...g, text: found.texts[i] })) };
+    customer = { customerRequired: true, customerId: found.customerId };
+  }
+  let s: Session = { ...newSession(x.id ?? randomUUID(), now()), ...customer };
   s = transition(s, "listening", now());
-  s = { ...transition(s, "thinking", now()), transcript: x.transcript };
+  s = { ...transition(s, "thinking", now()), transcript };
   await writeSession(x.dir, s);
 
-  const r = await extractWithCost(x.extract ?? extractInvoice, x.transcript, x.ledger);
+  const r = await extractWithCost(x.extract ?? extractInvoice, transcript, x.ledger);
   if (!r.ok) {
     const failed = { ...transition(s, "idle", now()), error: extractionError(r.error), extraction: r.cost };
     await writeSession(x.dir, failed);
     throw r.error;
   }
-  s = { ...transition(s, "drafting", now()), ...draft(r.out, x.transcript, x.ledger), extraction: r.cost };
+  s = { ...transition(s, "drafting", now()), ...draft(r.out, transcript, x.ledger, s), extraction: r.cost };
   await writeSession(x.dir, s);
   s = transition(s, "asking", now());
   await writeSession(x.dir, s);
@@ -137,7 +149,7 @@ export async function continueSession(x: {
     await writeSession(x.dir, back);
     return back;
   }
-  const next = transition({ ...drafting, ...draft(r.out, transcript, x.ledger), extraction: r.cost }, "asking", now());
+  const next = transition({ ...drafting, ...draft(r.out, transcript, x.ledger, s), extraction: r.cost }, "asking", now());
   await writeSession(x.dir, next);
   return next;
 }
@@ -145,6 +157,7 @@ export async function continueSession(x: {
 /**
  * 質問中の作業への返事の 1 発話を当てて保存する。明細が 0 行なら作業の話の続き（continueSession）、
  * それ以外と承認の言葉は従来どおり answerSession（承認の言葉は抽出し直さない）。
+ * 客の照合が有効な作業では、先に返事の名前と下 4 桁を伏せ字にする。客が未定で、返事が一覧の 1 件に合えば、客を決めて終わる。
  */
 export async function replySession(x: {
   dir: string;
@@ -153,9 +166,33 @@ export async function replySession(x: {
   ledger: LedgerEntry[];
   extract?: Extractor;
   now?: () => Date;
+  customers?: Customer[] | null;
 }): Promise<Session> {
-  if (isEmptyDraft(x.session) && !isApproval(x.utterance.text)) return continueSession(x);
-  const next = answerSession(x.session, x.utterance, x.ledger, (x.now ?? (() => new Date()))());
+  const now = x.now ?? (() => new Date());
+  const s = x.session;
+  let utterance = x.utterance;
+  if (s.customerRequired && x.customers) {
+    const found = identifyCustomer([utterance.text], x.customers);
+    utterance = { ...utterance, text: found.texts[0] };
+    if (customerPending(s) && found.customerId !== null) {
+      if (s.status !== "asking") throw new Error(`asking でないので答えを受けられない: ${s.status}`);
+      const base = answerBase(s, utterance, now());
+      const answer: Answer = {
+        ...base,
+        questionIndex: s.questions.findIndex((q) => q.reason === "customer"),
+        lineIndex: -1,
+        action: { kind: "setCustomer", id: found.customerId },
+      };
+      const decided = { ...s, customerId: found.customerId };
+      const questions = withCustomerQuestion(s.questions, decided);
+      const next: Session = { ...decided, answers: [...s.answers, answer], questions, updatedAt: base.at };
+      await writeSession(x.dir, next);
+      return next;
+    }
+  }
+  const y = { ...x, utterance };
+  if (isEmptyDraft(s) && !isApproval(utterance.text)) return continueSession(y);
+  const next = answerSession(s, utterance, x.ledger, now());
   await writeSession(x.dir, next);
   return next;
 }

@@ -4,6 +4,7 @@
  * ベンダーは呼ぶ側が選ぶ（2 社の照合・自動の切り替えは #31 で実録音の後に決める）。
  */
 import { randomUUID } from "node:crypto";
+import { loadCustomers } from "../customer/load";
 import { type LedgerEntry, ledgerPath, loadLedger } from "../ledger/lookup";
 import { transcribeGemini } from "../stt/gemini";
 import { transcribeScribe } from "../stt/scribe";
@@ -62,8 +63,9 @@ export async function startFromAudio(form: AudioForm): Promise<Response> {
   const transcript = await transcribe(form, id);
   if (transcript instanceof Response) return transcript;
   try {
-    const s = await startSession({ dir: sessionDir(), transcript, ledger: await ledger(), id });
-    return Response.json({ id: s.id, view: toMonitorView(s) }, { status: 201 });
+    const customers = await loadCustomers();
+    const s = await startSession({ dir: sessionDir(), transcript, ledger: await ledger(), id, customers });
+    return Response.json({ id: s.id, view: toMonitorView(s, customers) }, { status: 201 });
   } catch {
     return Response.json({ error: "明細に分けられませんでした" }, { status: 502 });
   }
@@ -82,8 +84,9 @@ async function askingSession(id: string) {
 export async function answerWith(id: string, utterance: Segment): Promise<Response> {
   const s = await askingSession(id);
   if (s instanceof Response) return s;
-  const next = await replySession({ dir: sessionDir(), session: s, utterance, ledger: await ledger() });
-  return Response.json({ view: toMonitorView(next) }, { headers: NO_STORE });
+  const customers = await loadCustomers();
+  const next = await replySession({ dir: sessionDir(), session: s, utterance, ledger: await ledger(), customers });
+  return Response.json({ view: toMonitorView(next, customers) }, { headers: NO_STORE });
 }
 
 /**
