@@ -17,3 +17,4 @@
 - 2026-11-04 | 実装役が同じ作業ツリーで作業中に、メインが `git add <file> && git commit` をしたため、実装役がステージしていた別の変更まで自分のコミットに入った | 委ねた作業が動いている間は、メインのコミットを `git commit -- <パス>` でパスを限定して行う。大きな委任は worktree で分ける
 - 2026-11-04 | pnpm 経由の起動では PATH に ~/.volta/bin が無く、`command -v node` が ~/.nvm の node を返して sandbox で読めず点検が落ちた。手で起動した点検は通っていた | pnpm 経由の起動では PATH が変わる。本番と同じ起動経路（`pnpm night`）で点検を試す
 - 2026-11-04 | 点検を 2 つ同時に流すと ../nda-probe の作業コピーがぶつかった | 点検は同時に動かすと作業コピーがぶつかる。ロック（mkdir）で防ぐ
+- 2026-11-04 | `git merge ... | tail -1 && pnpm check && git push` と繋ぎ、merge の失敗が tail で隠れて check と push まで進んだ（push する物が無く実害なし）。夜間ブランチと main の両方が progress.md に追記するので、merge のたびに衝突する（2 回目） | merge は単独で流し、終了コードを見てから次へ進む。progress.md の衝突は両方の行を残して解く
