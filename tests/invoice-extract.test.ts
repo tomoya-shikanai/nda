@@ -348,6 +348,53 @@ test("言い直し（D3b）: correctedFrom・correctedTo に品目の ID は「�
 
 // --- (7) 条件 18 ---
 
+test("条件 18（規則）: 否定の文が行の候補を含まなくても、同じ品目の語があればその行、品目の語が無ければ行に付かない「否定」", () => {
+  const datsu = (cs: Candidate[]) => [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))];
+  // 別の発話の同じ品目の否定
+  const t1 = seq("脱着4本。", "脱着はやってない。");
+  const c1 = enumerateCandidates(t1, ledger);
+  const r1 = resolveInvoice(datsu(c1), c1, t1, ledger, [{ seg: 1, text: "脱着はやってない。" }]);
+  assert.ok(has(r1.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r1.confirmations));
+  // 同じ発話の 2 回目の語の否定
+  const t2 = seq("脱着4本。脱着はいらない。");
+  const c2 = enumerateCandidates(t2, ledger);
+  const r2 = resolveInvoice(datsu(c2), c2, t2, ledger, [{ seg: 0, text: "脱着はいらない。" }]);
+  assert.ok(has(r2.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r2.confirmations));
+  // 料金表に無い品目（{seg,text}）の 2 回目の語の否定
+  const t3 = seq("ワイパー2本。ワイパーはいらない。");
+  const c3 = enumerateCandidates(t3, ledger);
+  const r3 = resolveInvoice([ref({ seg: 0, text: "ワイパー" }, id(c3, "qty", 0, "2本"))], c3, t3, ledger, [{ seg: 0, text: "ワイパーはいらない。" }]);
+  assert.ok(has(r3.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r3.confirmations));
+  // 品目の語が無い否定の文（同じ発話・発話をまたぐ）は行に付かない「否定」
+  for (const t of [seq("脱着4本。やっぱりやめます。"), seq("脱着4本。", "やっぱりやめます。")]) {
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice(datsu(cs), cs, t, ledger, [{ seg: t.segments.length - 1, text: "やっぱりやめます。" }]);
+    assert.ok(has(r.confirmations, "line", "（否定）", -1), JSON.stringify(r.confirmations));
+  }
+  // 品目の語があり、同じ品目の行が無ければ確認事項なし（モデルが正しく行を作らなかった）
+  const t5 = seq("脱着4本。", "バランスは大丈夫です。");
+  const c5 = enumerateCandidates(t5, ledger);
+  const r5 = resolveInvoice(datsu(c5), c5, t5, ledger, [{ seg: 1, text: "バランスは大丈夫です。" }]);
+  assert.deepEqual(r5.confirmations, []);
+});
+
+test("条件 5（語彙）: 同じ品目の別の語の文に否定の合図があれば、その行も「否定」（negations が無くても止まる）", () => {
+  const t = seq("脱着4本。脱着はいらない。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], cs, t, ledger, []);
+  assert.ok(has(r.confirmations, "line", "否定の合図", 0), JSON.stringify(r.confirmations));
+  // 別名で言っても同じ正式名なら拾う
+  const t2 = seq("脱着4本。", "履き替えはいらない。");
+  const c2 = enumerateCandidates(t2, ledger);
+  const r2 = resolveInvoice([ref(id(c2, "item", 0, "脱着"), id(c2, "qty", 0, "4本"))], c2, t2, ledger, []);
+  assert.ok(has(r2.confirmations, "line", "否定の合図", 0), JSON.stringify(r2.confirmations));
+  // 別の品目の否定は付けない
+  const t3 = seq("脱着4本。バランスはいらない。");
+  const c3 = enumerateCandidates(t3, ledger);
+  const r3 = resolveInvoice([ref(id(c3, "item", 0, "脱着"), id(c3, "qty", 0, "4本"))], c3, t3, ledger, []);
+  assert.ok(!has(r3.confirmations, "line", "否定の合図", 0), JSON.stringify(r3.confirmations));
+});
+
 /** Codex の 2 回目のレビューの例（架空）と、その文で作る行の品目。 */
 const NEGATED: [string, (cs: Candidate[]) => LineRef["item"], boolean][] = [
   ["脱着4本は替えてない。", (cs) => id(cs, "item", 0, "脱着"), true],

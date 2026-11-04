@@ -4,6 +4,7 @@
  * 行（lineIndex 0 以上）は 1 行につき 1 問、行に付かない事項（lineIndex -1）は理由ごとに 1 問。
  * 同じ質問の確認事項は理由の種類にまとめ、優先度の最上位の理由で 1 文の質問を作る。数は候補の文字列だけを使う。
  */
+import { itemKey } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 import type { Candidate } from "./candidates";
 import type { Confirmation, PricedInvoice } from "./price";
@@ -52,6 +53,16 @@ export function reasonOf(c: Confirmation): QuestionReason {
 
 const rank = (r: QuestionReason) => QUESTION_REASONS.indexOf(r);
 
+/** 音声で読む質問の長さの目安。 */
+export const MAX_QUESTION_CHARS = 40;
+
+/** 値を全部言う。目安を超えるなら「500円など3つ」と数を言う（値を黙って省かない）。 */
+function listed(vals: string[], build: (s: string) => string): string {
+  const full = build(vals.join("・"));
+  if (vals.length <= 1 || full.length <= MAX_QUESTION_CHARS) return full;
+  return build(`${vals[0]}など${vals.length}つ`);
+}
+
 type Result = Pick<PricedInvoice, "lines" | "confirmations">;
 type Line = Result["lines"][number];
 
@@ -88,8 +99,6 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
     return best?.text ?? line.item;
   };
   const qtyText = (line: Line) => (line.qty === null ? null : `${line.qty}${line.unit ?? ""}`);
-  const choice = (vals: string[]) =>
-    vals.length === 2 ? `${vals[0]}と${vals[1]}のどちらですか` : `${vals.slice(0, 3).join("・")}のどれですか`;
 
   const lineText = (line: Line, reason: QuestionReason, cs: Confirmation[]): string => {
     const name = spoken(line);
@@ -105,13 +114,14 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         const q = qtyText(line);
         if (explicit.length === 0 && q !== null) {
           const others = distinctTexts(related(mine)).filter((x) => x !== q);
-          if (others.length) return `${name}は${q}ですか。${others.slice(0, 2).join("・")}は何の数ですか`;
+          if (others.length) return listed(others, (x) => `${name}は${q}ですか。${x}は何の数ですか`);
         }
         const vals = distinctTexts(related(mine));
         if (vals.length === 0 && q !== null) vals.push(q);
         if (vals.length === 0) return `${name}の数はいくつですか`;
         if (vals.length === 1) return `${name}は${vals[0]}で合っていますか`;
-        return `${name}は${choice(vals)}`;
+        if (vals.length === 2) return `${name}は${vals[0]}と${vals[1]}のどちらですか`;
+        return listed(vals, (x) => `${name}は${x}のどれですか`);
       }
       case "unparsed":
         return `${name}の数が聞き取れません。いくつですか`;
@@ -124,7 +134,10 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
       case "unit":
         return line.ledger.unit ? `${name}は何${line.ledger.unit}ですか` : `${name}の単位は何ですか`;
       case "ledger":
-        if (mine.some((c) => c.message.includes("二重"))) return `${name}が2行あります。別の作業ですか`;
+        if (mine.some((c) => c.message.includes("二重"))) {
+          const n = result.lines.filter((l) => itemKey(l.item) === itemKey(line.item)).length;
+          return `${name}が${n}行あります。別の作業ですか`;
+        }
         return `${name}は料金表のどの品目ですか`;
       case "total":
       case "other":
@@ -140,14 +153,22 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return items.length === 1
           ? `「${items[0]}」は何と言いましたか`
           : `聞き取れない数が${items.length}か所あります。何と言いましたか`;
-      case "unitPrice":
-        return `${distinctTexts(rel).slice(0, 2).join("・") || items[0]}はどの作業の値段ですか`;
+      case "negation":
+        return cs.length === 1 ? "何をやめましたか" : `やめる話が${cs.length}つあります。何をやめましたか`;
+      case "unitPrice": {
+        const vals = distinctTexts(rel);
+        return listed(vals.length ? vals : items, (x) => `${x}はどの作業の値段ですか`);
+      }
       case "ledger": {
         const names = distinctTexts(rel.filter((c) => c.kind === "item"));
-        return `${(names.length ? names : items).slice(0, 3).join("・")}もやりましたか`;
+        return listed(names.length ? names : items, (x) => `${x}もやりましたか`);
       }
       case "total": {
-        if (cs.some((c) => c.message.includes("作業が 1 つもない"))) return "請求する作業はありませんか";
+        if (cs.some((c) => c.message.includes("作業が 1 つもない"))) {
+          const said = distinctTexts(rel.filter((c) => c.kind === "total"));
+          if (said.length === 0) return "請求する作業はありませんか";
+          return listed(said, (x) => `請求する作業はありませんか。${x}は何の合計ですか`);
+        }
         const said = rel.find((c) => c.kind === "total" && c.taxIncluded !== true);
         if (said && said.value !== null) {
           const amounts = result.lines.map((l) => l.amount);
@@ -159,7 +180,7 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return "税込みの合計は確かめられません。税抜きでいくらですか";
       }
       default:
-        return `「${items[0]}」は、どういうことですか`;
+        return cs.length === 1 ? `「${items[0]}」は、どういうことですか` : `「${items[0]}」など${cs.length}件は、どういうことですか`;
     }
   };
 

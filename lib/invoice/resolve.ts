@@ -103,6 +103,24 @@ export function resolveInvoice(
   const lineCands: Candidate[][] = [];
   /** 行ごとの、`{seg,text}` の品目の語の位置。 */
   const lineWords: (Span | null)[] = [];
+  /** 行ごとの、品目の正式名（料金表で 1 つに決まる語はその正式名、無ければ語そのもの）と、指した品目の語（正規化後）。 */
+  const lineKeys: string[] = [];
+  const lineNeedles: string[] = [];
+  /**
+   * 品目の正式名が key の語（同じ正式名の item 候補と、料金表に無い品目の語 needle）が、
+   * 範囲 r（無ければ、否定の合図のある文）に入るか。同じ品目の 2 回目の語の否定（「脱着4本。脱着はいらない。」）を拾う。
+   */
+  const sameItemIn = (key: string, needle: string, r: Span | null): boolean => {
+    const ok = (sp: Span) => (r === null ? negated(sp) : sp.seg === r.seg && sp.start >= r.start && sp.end <= r.end);
+    if (candidates.some((c) => c.kind === "item" && (c.ledgerItem ?? c.text) === key && ok(c))) return true;
+    if (needle === "") return false;
+    return normSegs.some((n, seg) => {
+      for (let at = n.indexOf(needle); at >= 0; at = n.indexOf(needle, at + 1)) {
+        if (ok({ seg, start: at, end: at + needle.length })) return true;
+      }
+      return false;
+    });
+  };
 
   refs.forEach((ref, lineIndex) => {
     const segs = new Set<number>();
@@ -163,6 +181,10 @@ export function resolveInvoice(
       [itemCand, qty, unitPrice, amount, correctedFrom, correctedTo].filter((c): c is Candidate => c !== null),
     );
     lineWords.push(typeof ref.item === "string" ? null : itemSpan);
+    const key = itemCand ? (itemCand.ledgerItem ?? itemCand.text) : (findEntry(ledger, item)?.item ?? item);
+    const needle = itemCand ? "" : normalizeText(item);
+    lineKeys.push(key);
+    lineNeedles.push(needle);
 
     const order = [...segs].sort((a, b) => a - b);
     lineSegs.push(order);
@@ -195,7 +217,8 @@ export function resolveInvoice(
       add("qty", `「${item}」の数量 ${qty.text} が整数でない（数量が整数でない）`);
     }
     if (itemWordMissing) add("item", `「${item}」は指した発話に無い（品目の語が発話に無い）`);
-    if ([itemSpan, qty, unitPrice, amount].some((sp) => sp !== null && negated(sp))) {
+    // 行が使った候補の文か、同じ品目の語のある文に否定の合図がある
+    if ([itemSpan, qty, unitPrice, amount].some((sp) => sp !== null && negated(sp)) || sameItemIn(key, needle, null)) {
       add("line", `「${item}」の行の文に否定の合図がある（否定）`, [qty]);
     }
     if (qty?.unit && unitPrice?.unit && qty.unit !== unitPrice.unit) {
@@ -288,20 +311,31 @@ export function resolveInvoice(
     global(c.ledgerItem, "item", `「${c.text}」（${c.ledgerItem}）と言った（料金表の品目の語が出たのに行が無い）`, [c]);
   }
 
-  // 条件 18: モデルが挙げた否定・取り消し・断りの文に、行が使った候補・品目の語が入る（1 つの文につき 1 件）
+  // 条件 18: モデルが挙げた否定・取り消し・断りの文は、必ずどこかの確認事項にする（1 つの文につき行ごとに 1 件）
+  // - 行が使った候補・品目の語か、同じ品目（正式名）の語が文に入る行 → その行
+  // - 文に品目の語があり、同じ品目の行が無い → 確認事項なし（モデルが正しく行を作らなかった。条件 15 の除外と同じ）
+  // - 文に品目の語が無い（「やっぱりやめます。」）→ 行に付かない確認事項
   for (const neg of negations) {
     const ranges = negRanges.filter((x) => x.neg === neg).map((x) => x.range);
+    if (ranges.length === 0) continue; // 発話に無い文は上で確認事項にした
+    let any = false;
     for (let li = 0; li < lines.length; li++) {
       const word = lineWords[li];
       const hit = ranges.some(
         (range) =>
           lineCands[li].some((c) => NEGATION_SPAN_KINDS.has(c.kind) && inside(c, range)) ||
-          (word !== null && inside(word, range)),
+          (word !== null && inside(word, range)) ||
+          sameItemIn(lineKeys[li], lineNeedles[li], range),
       );
       if (hit) {
+        any = true;
         const qty = lineCands[li].filter((c) => c.kind === "qty");
         lineAdd(li, "line", `「${lines[li].item}」の行がモデルの挙げた否定の文「${neg.text}」に入る（否定）`, qty);
       }
+    }
+    const hasItemWord = ranges.some((range) => candidates.some((c) => c.kind === "item" && inside(c, range)));
+    if (!any && !hasItemWord) {
+      global(neg.text, "line", `「${neg.text}」（モデルの挙げた否定の文に品目が無く、どの行のことか分からない）（否定）`);
     }
   }
 

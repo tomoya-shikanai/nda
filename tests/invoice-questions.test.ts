@@ -169,7 +169,11 @@ test("④ 断り: 数量の無い否定の行は、数を入れずに「ゴム�
     };
   });
   assertShape(r, qs);
-  assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [[2, "negation", "ゴムバルブは替えなかったのですか"]]);
+  // 「バルブ」は料金表の語でない（品目の語が無い）ので、否定の文は行に付かない 1 問にもなる（条件 18 の (3)）
+  assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [
+    [2, "negation", "ゴムバルブは替えなかったのですか"],
+    [-1, "negation", "何をやめましたか"],
+  ]);
   assert.ok(qs[0].reasons.includes("qty"));
 });
 
@@ -237,6 +241,50 @@ test("行が 0 件: 「請求する作業はありませんか」の 1 問（否
     assertShape(r, qs);
     assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [[-1, "total", "請求する作業はありませんか"]]);
   }
+});
+
+test("品目の無い否定の文は「何をやめましたか」、2 つなら数を言う。通しで total null", () => {
+  const { r, qs } = run(seq("脱着4本。", "やっぱりやめます。"), (cs) => ({
+    lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))],
+    negations: [{ seg: 1, text: "やっぱりやめます。" }],
+  }));
+  assertShape(r, qs);
+  assert.equal(r.total, null);
+  assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [[-1, "negation", "何をやめましたか"]]);
+  const two = run(seq("脱着4本。", "やっぱりやめます。それもいいです。"), (cs) => ({
+    lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))],
+    negations: [{ seg: 1, text: "やっぱりやめます。" }, { seg: 1, text: "それもいいです。" }],
+  }));
+  assertShape(two.r, two.qs);
+  assert.deepEqual(two.qs.map((q) => q.text), ["やめる話が2つあります。何をやめましたか"]);
+});
+
+test("値を黙って省かない: 使われない金額 3 つは全部、長ければ「など N つ」、二重の行は実際の行数、その他は件数", () => {
+  const p3 = run(seq("脱着4本。", "500円、600円、700円。"), (cs) => ({ lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], negations: [] }));
+  assertShape(p3.r, p3.qs);
+  assert.deepEqual(p3.qs.map((q) => q.text), ["500円・600円・700円はどの作業の値段ですか"]);
+  const many = run(seq("脱着4本。", "1500円、1600円、1700円、1800円、1900円、2100円。"), (cs) => ({
+    lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))],
+    negations: [],
+  }));
+  assertShape(many.r, many.qs);
+  assert.deepEqual(many.qs.map((q) => q.text), ["1500円など6つはどの作業の値段ですか"]);
+  const dup = run(seq("脱着1本。", "脱着2本。", "脱着3本。"), (cs) => ({
+    lines: [0, 1, 2].map((i) => ref(id(cs, "item", i, "脱着"), id(cs, "qty", i, `${i + 1}本`))),
+    negations: [],
+  }));
+  assertShape(dup.r, dup.qs);
+  assert.deepEqual(dup.qs.map((q) => q.text), Array(3).fill("脱着が3行あります。別の作業ですか"));
+  const other = run(seq("脱着4本。"), (cs) => ({
+    lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))],
+    negations: [{ seg: 0, text: "替えない" }, { seg: 0, text: "いらない" }],
+  }));
+  assertShape(other.r, other.qs);
+  assert.deepEqual(other.qs.map((q) => [q.reason, q.text]), [["other", "「替えない」など2件は、どういうことですか"]]);
+  // 行が 0 件と税込みの合計: 税込みの額も質問に入れる
+  const zero = run(seq("税込みで7260円。"), () => ({ lines: [], negations: [] }));
+  assertShape(zero.r, zero.qs);
+  assert.deepEqual(zero.qs.map((q) => q.text), ["請求する作業はありませんか。税込みで7260円は何の合計ですか"]);
 });
 
 test("税込みの合計は、税抜きを聞く 1 問", () => {
