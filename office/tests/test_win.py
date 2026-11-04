@@ -2,6 +2,7 @@
 Windows 専用のライブラリは偽物に差し替えて import する（Mac でも回せる）。
 """
 
+import importlib
 import sys
 import types
 import unittest
@@ -46,16 +47,34 @@ class _Control:
         return None
 
 
+class _Process:
+    """psutil.Process の偽物。"""
+
+    def __init__(self, pid, name=""):
+        self.pid = pid
+        self.info = {"pid": pid, "name": name}
+
+
+class _Window:
+    def __init__(self, pid, title):
+        self.ProcessId = pid
+        self.Name = title
+
+
 def _fake_modules():
     auto = types.ModuleType("uiautomation")
     auto.PatternId = _PatternId
+    auto.GetRootControl = lambda: types.SimpleNamespace(GetChildren=lambda: [])
     pil = types.ModuleType("PIL")
     pil.ImageGrab = types.ModuleType("PIL.ImageGrab")
     pynput = types.ModuleType("pynput")
     pynput.mouse = types.ModuleType("pynput.mouse")
+    psutil = types.ModuleType("psutil")
+    psutil.Process = _Process
+    psutil.process_iter = lambda attrs=None: []
     return {
         "uiautomation": auto,
-        "psutil": types.ModuleType("psutil"),
+        "psutil": psutil,
         "PIL": pil,
         "PIL.ImageGrab": pil.ImageGrab,
         "pynput": pynput,
@@ -63,15 +82,19 @@ def _fake_modules():
     }
 
 
+def _import_win(case):
+    """偽物のライブラリで recorder.win を読み込み直す。"""
+    patcher = mock.patch.dict(sys.modules, _fake_modules())
+    patcher.start()
+    case.addCleanup(patcher.stop)  # recorder.win も sys.modules から外れる
+    sys.modules.pop("recorder.win", None)
+    # `from recorder import win` だと、前の試験で読んだ古い win（古い偽物を握ったもの）が返る
+    return importlib.import_module("recorder.win")
+
+
 class ElementOfTest(unittest.TestCase):
     def setUp(self):
-        patcher = mock.patch.dict(sys.modules, _fake_modules())
-        patcher.start()
-        self.addCleanup(patcher.stop)  # recorder.win も sys.modules から外れる
-        sys.modules.pop("recorder.win", None)
-        from recorder import win
-
-        self.win = win
+        self.win = _import_win(self)
 
     def test_GetValuePattern_を持たない部品でも値を取る(self):
         e = self.win.element_of(_Control(value="2200"))
@@ -84,6 +107,32 @@ class ElementOfTest(unittest.TestCase):
 
     def test_パスワード欄の印が付く(self):
         self.assertTrue(self.win.element_of(_Control(value="secret", is_password=True)).is_password)
+
+
+class FindTargetTest(unittest.TestCase):
+    def setUp(self):
+        from recorder.config import Config
+
+        self.win = _import_win(self)
+        self.cfg = Config(target_exe=["RacroS.exe"])
+
+    def _find(self, procs, windows=()):
+        sys.modules["psutil"].process_iter = lambda attrs=None: list(procs)
+        sys.modules["uiautomation"].GetRootControl = lambda: types.SimpleNamespace(GetChildren=lambda: list(windows))
+        return self.win.find_target(self.cfg)
+
+    def test_題名だけが一致する窓は対象にならない(self):
+        procs = [_Process(1, "chrome.exe"), _Process(2, "explorer.exe")]
+        windows = [_Window(1, "RacroS III の使い方 - Google Chrome"), _Window(2, "RacroS")]
+        self.assertIsNone(self._find(procs, windows))
+
+    def test_名前が完全一致のときだけ対象になる(self):
+        for name in ["RacroS.exe.bak", "NotRacroS.exe", "RacroS", "racros3.exe"]:
+            self.assertIsNone(self._find([_Process(1, name)]), name)
+        self.assertEqual(self._find([_Process(1, "racros_helper.exe"), _Process(7, "RacroS.exe")]).pid, 7)
+
+    def test_名前は大文字小文字を区別しない(self):
+        self.assertEqual(self._find([_Process(3, "RACROS.EXE")]).pid, 3)
 
 
 if __name__ == "__main__":

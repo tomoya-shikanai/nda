@@ -75,6 +75,7 @@ class Snapshot:
 
     target_pid: int | None
     target_exe: str = ""
+    target_path: str = ""  # 実行ファイルのパス。読めなければ空
     window: Window | None = None
     focus: Element | None = None
     clicks: list[Click] = field(default_factory=list)
@@ -108,7 +109,7 @@ class Tracker:
                 events.append(Event("session_end", {"pid": self.pid}))
                 self.window = None
             if s.target_pid is not None:
-                events.append(Event("session_start", {"pid": s.target_pid, "exe": s.target_exe}))
+                events.append(Event("session_start", {"pid": s.target_pid, "exe": s.target_exe, "path": s.target_path}))
             self.pid = s.target_pid
         if s.target_pid is None:
             return events

@@ -32,6 +32,11 @@ class TrackerTest(unittest.TestCase):
         self.assertEqual(kinds(t.observe(Snapshot(target_pid=10, target_exe="RacroS.exe"))), ["session_start"])
         self.assertEqual(kinds(t.observe(Snapshot(target_pid=None))), ["session_end"])
 
+    def test_起動の記録に対象のプロセスを残す(self):
+        t = Tracker()
+        (e,) = t.observe(Snapshot(target_pid=10, target_exe="RacroS.exe", target_path=r"C:\RacroS\RacroS.exe"))
+        self.assertEqual(e.data, {"pid": 10, "exe": "RacroS.exe", "path": r"C:\RacroS\RacroS.exe"})
+
     def test_窓が変わったら記録してスクリーンショットを撮る(self):
         t = Tracker()
         t.observe(Snapshot(target_pid=10))

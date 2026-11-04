@@ -9,6 +9,7 @@
 - 読むだけです。RacroS III に入力したり、クリックしたりはしません。
 - キー入力そのものは残しません。欄から離れたときに「欄の値がどう変わったか」（前の値 → 後の値）として残します。
 - パスワード欄の値は `***` に伏せます。
+- 記録を始めるとき（`session_start`）に、対象にしたプロセスの名前・pid・実行ファイルのパスを残します。違うソフトを記録していないかを後で確かめられます。
 - 残すのは、窓の切り替わり（題名）、クリックした部品の名前、欄の値の変化、スクリーンショット（窓が変わったとき・ボタンなどを押したとき。2 秒に 1 枚まで、RacroS III の窓の範囲だけ）です。
 
 ## 入れ方（最初の 1 回）
@@ -30,17 +31,19 @@ RacroS III を起動しておいて、次を実行します。
 python -m recorder list
 ```
 
-窓を持つプロセスの一覧が出ます。RacroS III の行の、左端の実行ファイル名（例: `RacroS.exe`）を確かめます。既定では名前に `racros` を含むもの（大文字小文字は区別しない）を対象にします。違っていれば `recorder\config.json` を作って直します（このファイルは PC ごとの設定なので Git には入りません）。
+窓を持つプロセスの一覧が出ます。RacroS III の行の、左端の実行ファイル名を確かめます。
+
+対象にするのは、実行ファイル名が `target_exe` のどれかと**完全に一致する**プロセスだけです（大文字小文字は区別しません）。窓の題名や名前の一部では選びません。題名で選ぶと、「RacroS」を題名に含むブラウザのタブやフォルダの窓まで記録してしまうためです。
+
+既定の `RacroS.exe` は**仮の値**です。必ず `python -m recorder list` で確かめて、`recorder\config.json` を作って直します（このファイルは PC ごとの設定なので Git には入りません）。
 
 ```json
 {
-  "target_exe": ["racros3"],
-  "target_title": ["RacroS"]
+  "target_exe": ["RacroS3.exe"]
 }
 ```
 
-- `target_exe`: 実行ファイル名に含まれる文字（小文字で書く、部分一致）。
-- `target_title`: 実行ファイル名で見つからないときに使う、窓の題名に含まれる文字（部分一致）。
+- `target_exe`: 実行ファイル名（`list` の左端に出た名前を `.exe` まで含めてそのまま書く。完全一致）。
 - そのほかに書けるもの: `keep_days`（残す日数、既定 7）、`poll_sec`（画面を見る間隔の秒、既定 0.3）、`min_shot_interval`（スクリーンショットの最短の間隔の秒、既定 2）、`jpeg_quality`（既定 70）、`show_indicator`（右下の表示、既定 true）、`root`（記録の置き場）。
 
 ### 2. 画面の部品を書き出す
@@ -94,10 +97,10 @@ Windows には、普通の権限のプログラムが管理者権限のプログ
 ## 明日の最初の確認手順
 
 1. RacroS III を起動し、`python -m recorder list` で RacroS III の行を探します。
-2. 実行ファイル名が `racros` を含まなければ、`recorder\config.json` の `target_exe` を直し、もう一度 `list` で確かめます。
+2. 実行ファイル名が仮の値の `RacroS.exe` と違えば、`recorder\config.json` の `target_exe` をその名前に直し、`python -m recorder dump` で対象が見つかるかを確かめます。
 3. RacroS III で請求書の入力などの画面を出し、`python -m recorder dump`。`dumps` のテキストに部品の名前・値が出ているか、JPEG が RacroS III の窓になっているかを見ます。何も出ないときは、RacroS III が管理者権限で動いていないかを確かめます。
 4. `python -m recorder run` を動かし、右下に赤い表示が出るのを確かめます。RacroS III で 1 件だけ操作します（画面を開く・欄に入れる・ボタンを押す）。終わったら Ctrl+C で止めます。
-5. `%LOCALAPPDATA%\nda-recorder\<今日の日付>\session-…\events.jsonl` をメモ帳で開き、操作した順に `window`・`click`・`focus`・`value_changed` が並んでいるかを見ます。`error` の行があれば、その中身を控えます。`screenshots` の JPEG が RacroS III の窓だけを写しているか（他のアプリが写り込んでいないか）を見ます。
+5. `%LOCALAPPDATA%\nda-recorder\<今日の日付>\session-…\events.jsonl` をメモ帳で開き、1 行目の `session_start` の `exe`・`path` が RacroS III のものかを見ます。続いて、操作した順に `window`・`click`・`focus`・`value_changed` が並んでいるかを見ます。`error` の行があれば、その中身を控えます。`screenshots` の JPEG が RacroS III の窓だけを写しているか（他のアプリが写り込んでいないか）を見ます。
 6. 記録を動かしたまま普段どおり数分操作し、PC が重くならないか、RacroS III の動きが遅くならないかを見ます。タスクマネージャーで `python.exe` の CPU とメモリも見ます。
 
 `start-recorder.bat`（`pythonw`）で動かすと、うまく動かないときにエラーが画面に出ません。その場合はコマンドプロンプトで `python -m recorder run` を動かすと、エラーが表示されます。

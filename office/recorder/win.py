@@ -69,20 +69,23 @@ def element_of(c) -> Element | None:
         return None
 
 
+def is_target(name: str, cfg: Config) -> bool:
+    """実行ファイル名が target_exe のどれかと完全一致するか（大文字小文字は区別しない）。
+    部分一致や窓の題名では選ばない。ブラウザのタブやフォルダの窓を対象にしないため。"""
+    return name.lower() in {k.lower() for k in cfg.target_exe}
+
+
+def exe_path(p: psutil.Process) -> str:
+    try:
+        return p.exe()
+    except Exception:  # 権限が無いと読めない
+        return ""
+
+
 def find_target(cfg: Config) -> psutil.Process | None:
-    keys = [k.lower() for k in cfg.target_exe]
     for p in psutil.process_iter(["pid", "name"]):
-        name = (p.info.get("name") or "").lower()
-        if any(k in name for k in keys):
+        if is_target(p.info.get("name") or "", cfg):
             return p
-    # 実行ファイル名で見つからなければ、窓の題名で探す
-    for w in auto.GetRootControl().GetChildren():
-        title = w.Name or ""
-        if any(t in title for t in cfg.target_title):
-            try:
-                return psutil.Process(w.ProcessId)
-            except Exception:
-                return None
     return None
 
 
@@ -96,6 +99,7 @@ class Reader:
         self.listener.start()
         self.last_find = 0.0
         self.proc: psutil.Process | None = None
+        self.proc_path = ""
 
     def _on_click(self, x, y, button, pressed) -> None:
         # pynput の別スレッドで呼ばれる。ここでは UIA を触らず、座標だけ積む。
@@ -110,6 +114,7 @@ class Reader:
             return None
         self.last_find = now
         self.proc = find_target(self.cfg)
+        self.proc_path = exe_path(self.proc) if self.proc is not None else ""
         return self.proc
 
     def snapshot(self) -> Snapshot:
@@ -120,7 +125,7 @@ class Reader:
         if proc is None:
             return Snapshot(target_pid=None)
         pid = proc.pid
-        s = Snapshot(target_pid=pid, target_exe=proc.name())
+        s = Snapshot(target_pid=pid, target_exe=proc.name(), target_path=self.proc_path)
 
         fg = auto.GetForegroundControl()
         if fg is not None and fg.ProcessId == pid:
@@ -173,7 +178,7 @@ def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
         ("LegacyIAccessible", auto.PatternId.LegacyIAccessiblePattern),
     ]
     with open(path, "w", encoding="utf-8") as f:
-        f.write(f"# process {proc.name()} pid={proc.pid}\n")
+        f.write(f"# process {proc.name()} pid={proc.pid} path={exe_path(proc)}\n")
         for i, w in enumerate(windows):
             for c, depth in auto.WalkControl(w, includeTop=True, maxDepth=max_depth):
                 e = element_of(c)

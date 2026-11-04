@@ -15,10 +15,9 @@ def _default_root() -> str:
 
 @dataclass
 class Config:
-    # 対象のソフトの実行ファイル名（小文字で部分一致）。明日 `python -m recorder list` で確かめて直す。
-    target_exe: list[str] = field(default_factory=lambda: ["racros"])
-    # 実行ファイル名で見つからないときに使う、窓の題名（部分一致）
-    target_title: list[str] = field(default_factory=lambda: ["RacroS", "ラクロス"])
+    # 対象のソフトの実行ファイル名（完全一致、大文字小文字は区別しない）。
+    # 仮の値。`python -m recorder list` で確かめて config.json で直す。
+    target_exe: list[str] = field(default_factory=lambda: ["RacroS.exe"])
     root: str = field(default_factory=_default_root)
     keep_days: int = 7
     poll_sec: float = 0.3
