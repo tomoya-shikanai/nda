@@ -2,7 +2,7 @@
  * 参照を発話の値に戻す部分（resolveInvoice）の検証。Claude は呼ばない。
  * 候補は enumerateCandidates で作り、参照は手で書く。素材は架空の文字起こし（tire-transcripts.json）と、
  * この試験の中で作る架空の録音（recordingId "adv"）。証明には使わない。
- * 「指摘 N」は tests/invoice-build.test.ts の敵対レビュー（2026-11-04）の例を参照の形に直したもの。
+ * 「指摘 N」は敵対レビュー（2026-11-04）の例（旧 tests/invoice-build.test.ts、V4 で旧 verify とともに削除）を参照の形に直したもの。
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -47,6 +47,10 @@ const ref = (item: LineRef["item"], qty: string | null, unitPrice: string | null
   qty,
   unitPrice,
   amount,
+  status: "done",
+  evidence: [],
+  correctedFrom: null,
+  correctedTo: null,
 });
 
 const run = (refs: LineRef[], t: Transcript, l: LedgerEntry[] = ledger) => {
@@ -413,7 +417,8 @@ test("指摘 7: 別名が 2 つの項目に当たる語は正式名に戻さず�
   assert.equal(r.lines[0].item, "バランス");
   const p = priceInvoice({ lines: r.lines }, ambiguous);
   assert.equal(p.lines[0].ledger.found, false);
-  assert.ok(p.confirmations.some((c) => c.field === "unitPrice"));
+  assert.equal(p.lines[0].unitPrice, null);
+  assert.ok(p.confirmations.some((c) => c.field === "item" && c.message.includes("別名があいまい")));
   assert.equal(p.total, null);
 });
 
@@ -556,6 +561,35 @@ test("条件 16: 数量と「1＋単位」の単価の単位が違えば「単�
 });
 
 // --- (6) 入力を書き換えない ---
+
+test("D4: 「脱着.4本。」は数量を出さず、読めない数として確認事項（4本 と推測しない）", () => {
+  const t = rec([0, 2, "father", "脱着.4本。"]);
+  const cs = enumerateCandidates(t, ledger);
+  assert.ok(!cs.some((c) => c.kind === "qty"), JSON.stringify(cs));
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), null)], cs, t, ledger);
+  assert.ok(has(r.confirmations, "qty", "数が読めない", -1), JSON.stringify(r.confirmations));
+  assert.ok(has(r.confirmations, "qty", "数量が分からない", 0));
+});
+
+test("数量の小数: 本・個・台・輪・枚・つ・箇所・回 の数量が整数でなければ確認事項、セット・式は今のまま", () => {
+  for (const u of ["本", "個", "台", "輪", "枚", "つ", "箇所", "回"]) {
+    const t = rec([0, 2, "father", `脱着0.4${u}。`]);
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, `0.4${u}`))], cs, t, ledger);
+    assert.ok(has(r.confirmations, "qty", "整数でない", 0), `${u} ${JSON.stringify(r.confirmations)}`);
+  }
+  for (const u of ["セット", "式"]) {
+    const t = rec([0, 2, "father", `脱着0.5${u}。`]);
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, `0.5${u}`))], cs, t, ledger);
+    assert.ok(!has(r.confirmations, "qty", "整数でない"), `${u} ${JSON.stringify(r.confirmations)}`);
+  }
+  // 対照: 「4.0本」は整数として読む
+  const t = rec([0, 2, "father", "脱着4.0本。"]);
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4.0本"))], cs, t, ledger);
+  assert.deepEqual(r.confirmations, []);
+});
 
 test("呼び出しの前後で参照・候補・文字起こし・料金表が変わらない", () => {
   const t = byId("tire-002");

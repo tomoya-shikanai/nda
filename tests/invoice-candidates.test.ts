@@ -191,6 +191,17 @@ test("規則 A: 単位の付かない数（「いや2」の 2）は bareNumber�
   assert.deepEqual(ofKind(enumerateCandidates(fake("ゴムバルブ4本、1本330円。"), ledger), "bareNumber"), []);
 });
 
+test("D4: 小数点の片側が欠けた並び（「.4本」「4.本」「.4円」「4.円」）は数にせず、読めない数・読めない円", () => {
+  const kinds = (x: string) => enumerateCandidates(fake(x), ledger).filter((c) => c.kind !== "item").map((c) => [c.kind, c.text, c.value]);
+  assert.deepEqual(kinds("脱着.4本。"), [["unparsedNumber", ".4本", null]]);
+  assert.deepEqual(kinds("脱着4.本。"), [["unparsedNumber", "4.本", null]]);
+  assert.deepEqual(kinds("脱着4本で.2200円。"), [["qty", "4本", 4], ["unparsedYen", ".2200円", null]]);
+  assert.deepEqual(kinds("脱着4本で2200.円。"), [["qty", "4本", 4], ["unparsedYen", "2200.円", null]]);
+  // 対照: 数字に挟まれた小数点は今のまま 1 つの数
+  assert.deepEqual(kinds("脱着0.4本。"), [["qty", "0.4本", 0.4]]);
+  assert.deepEqual(kinds("1個33.0円。"), [["unitPrice", "1個33.0円", 33]]);
+});
+
 test("呼び出しの前後で文字起こしと料金表が変わらない", () => {
   const t = structuredClone(tire002);
   const l = structuredClone(ledger);

@@ -4,7 +4,7 @@
  * 数は「最大の数字の並び」（算用数字・漢数字・十百千万・間の「,」「.」）を 1 つの塊として読み、
  * 塊全体が 1 つの数として読めたときだけ数にする。塊の途中や末尾だけを拾わない。
  * 読めない塊は捨てずに候補にする（円が続けば unparsedYen、そうでなければ unparsedNumber）。数を推測で作らない。
- * `verify.ts` は V4 で消すため、ここからは import しない（必要なものは写した）。
+ * 旧 `verify.ts`（V4 で削除）から必要なものは写した。
  */
 import { type LedgerEntry, findEntry } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
@@ -40,7 +40,7 @@ export type Candidate = {
   ledgerItem?: string;
 };
 
-/** 数量に付く単位。`verify.ts` の UNITS と同じ。長いものを先に置く。 */
+/** 数量に付く単位。長いものを先に置く。 */
 const UNITS = ["セット", "箇所", "か所", "ヶ所", "本", "個", "台", "輪", "つ", "枚", "式", "回"];
 const UNIT = `(?:${UNITS.join("|")})`;
 
@@ -140,12 +140,27 @@ export function normalizeText(s: string): string {
 /** 正規化後の文字列の中の数字の並び。value は読めなければ null。 */
 type NumRun = { start: number; end: number; value: number | null };
 
+const DIGIT_AT = new RegExp(NUM_CHAR);
+
+/**
+ * 数字の並びを列挙する。並びの直前が「.」（「.4本」）、または直後が「.」で次が数字でない（「4.本」）なら、
+ * 小数点の片側が欠けた読めない並びとして、その「.」を範囲に含め value を null にする（「0.4」「4」と推測しない）。
+ */
 function numberRuns(n: string): NumRun[] {
-  return [...n.matchAll(NUM_RUN)].map((m) => ({
-    start: m.index,
-    end: m.index + m[0].length,
-    value: parseRun(m[0]),
-  }));
+  return [...n.matchAll(NUM_RUN)].map((m) => {
+    let start = m.index;
+    let end = m.index + m[0].length;
+    let value = parseRun(m[0]);
+    if (n[start - 1] === ".") {
+      start--;
+      value = null;
+    }
+    if (n[end] === "." && !DIGIT_AT.test(n[end + 1] ?? "")) {
+      end++;
+      value = null;
+    }
+    return { start, end, value };
+  });
 }
 
 /** 位置 i から始まる単位（長いものを先に）。無ければ null。 */

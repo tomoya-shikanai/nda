@@ -1,0 +1,597 @@
+/**
+ * 抽出（extractInvoice・refSchema）と、条件 17〜19 の検証。Claude は偽サーバーで置き換える。モデルの品質は検証しない。
+ * 確かめるのは、要求に発話と候補が入ること、候補に無い ID がスキーマで落ちること、モデルの判定と否定の文が確認事項になること。
+ * 素材は架空の文字起こし（tire-transcripts.json）と、この試験の中で作る架空の録音（recordingId "adv"）。証明には使わない。
+ */
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import { join, resolve } from "node:path";
+import { after, before, test } from "node:test";
+import { type Candidate, enumerateCandidates } from "../lib/invoice/candidates";
+import { extractInvoice, refSchema } from "../lib/invoice/extract";
+import { CORRECTION_CUES, resolveInvoice } from "../lib/invoice/resolve";
+import type { InvoiceRefs, LineRef, NegatedSentence } from "../lib/invoice/schema";
+import type { LedgerEntry } from "../lib/ledger/lookup";
+import type { Segment, Transcript } from "../lib/stt/types";
+
+const ROOT = resolve(import.meta.dirname, "..");
+const ledger = JSON.parse(readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8")) as LedgerEntry[];
+const transcripts = JSON.parse(
+  readFileSync(join(ROOT, "tests/fixtures/tire-transcripts.json"), "utf8"),
+) as Transcript[];
+const byId = (id: string) => {
+  const t = transcripts.find((x) => x.recordingId === id);
+  if (!t) throw new Error(`素材に無い: ${id}`);
+  return t;
+};
+
+/** 架空の録音。発話は [開始, 終了, 話者, 文]。 */
+const rec = (...segs: [number, number, string | null, string][]): Transcript => ({
+  recordingId: "adv",
+  vendor: "fictional",
+  language: "ja",
+  glossaryHint: false,
+  segments: segs.map(([startSec, endSec, speaker, text]): Segment => ({ startSec, endSec, speaker, text })),
+});
+/** 3 秒ずつの発話の架空の録音（話者は父）。 */
+const seq = (...texts: string[]) => rec(...texts.map((x, i): [number, number, string, string] => [i * 3, i * 3 + 3, "father", x]));
+
+const id = (cs: Candidate[], kind: Candidate["kind"], seg: number, text: string, nth = 0): string => {
+  const hit = cs.filter((c) => c.kind === kind && c.seg === seg && c.text === text)[nth];
+  if (!hit) throw new Error(`候補が無い: ${kind} #${seg} ${text} ${nth}`);
+  return hit.id;
+};
+
+const ref = (item: LineRef["item"], qty: string | null, over: Partial<LineRef> = {}): LineRef => ({
+  item,
+  qty,
+  unitPrice: null,
+  amount: null,
+  status: "done",
+  evidence: [],
+  correctedFrom: null,
+  correctedTo: null,
+  ...over,
+});
+
+const has = (cf: { field: string; message: string; lineIndex: number }[], field: string, word: string, lineIndex?: number) =>
+  cf.some((c) => c.field === field && c.message.includes(word) && (lineIndex === undefined || c.lineIndex === lineIndex));
+
+/** 3 fixture の正しい参照。 */
+function goodRefs(t: Transcript, cs: Candidate[]): InvoiceRefs {
+  switch (t.recordingId) {
+    case "tire-001":
+      return {
+        lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本")), ref(id(cs, "item", 1, "バランス"), id(cs, "qty", 1, "4本"))],
+        negations: [],
+      };
+    case "tire-002":
+      return {
+        lines: [
+          ref(id(cs, "item", 0, "組替"), id(cs, "qty", 0, "4本")),
+          ref(id(cs, "item", 1, "バランス"), id(cs, "qty", 1, "4本", 0)),
+          ref(id(cs, "item", 1, "ゴムバルブ"), id(cs, "qty", 1, "4本", 1), { unitPrice: id(cs, "unitPrice", 2, "1本330円") }),
+          ref(id(cs, "item", 3, "廃タイヤ"), id(cs, "qty", 3, "4本")),
+        ],
+        negations: [],
+      };
+    default:
+      return {
+        lines: [
+          ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本")),
+          ref({ seg: 1, text: "ホイールナット" }, id(cs, "qty", 1, "2個", 1), { status: "unsure", evidence: [id(cs, "qty", 1, "2個", 0)] }),
+        ],
+        negations: [{ seg: 2, text: "ナットの値段は後で調べる。" }],
+      };
+  }
+}
+
+let server: Server;
+let received: Record<string, unknown>[] = [];
+let reply: unknown = null;
+/** null 以外なら、応答の content をこれにする（parsed_output が無い応答を作る）。 */
+let rawContent: unknown[] | null = null;
+
+before(async () => {
+  server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      received.push(JSON.parse(body));
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          id: "msg",
+          type: "message",
+          role: "assistant",
+          model: "fake",
+          content: rawContent ?? [{ type: "text", text: JSON.stringify(reply) }],
+          stop_reason: rawContent ? "max_tokens" : "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const addr = server.address();
+  if (addr === null || typeof addr === "string") throw new Error("no port");
+  // claude() は最初の呼び出しで環境変数を読むので、extractInvoice より前に設定する
+  process.env.ANTHROPIC_API_KEY = "test";
+  process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${addr.port}`;
+});
+after(() => server.close());
+
+const userText = (req: Record<string, unknown>) =>
+  (req.messages as { content: { text: string }[] }[]).map((m) => m.content.map((c) => c.text).join("")).join("\n");
+
+// --- (1)(2) 要求と戻り値 ---
+
+test("抽出: 3 fixture で、要求の user に全発話と全候補、schema に候補の ID の enum が入り、無い ID は入らない", async () => {
+  for (const t of transcripts) {
+    const cs = enumerateCandidates(t, ledger);
+    received = [];
+    rawContent = null;
+    reply = goodRefs(t, cs);
+    await extractInvoice(t, ledger);
+    assert.equal(received.length, 1);
+    const req = received[0];
+    const user = userText(req);
+    assert.ok(user.includes(`録音 ID: ${t.recordingId}`));
+    t.segments.forEach((s, i) => {
+      assert.ok(user.includes(`[#${i} `), `添字が無い: #${i}`);
+      assert.ok(user.includes(s.text), `発話が要求に無い: ${s.text}`);
+      assert.ok(user.includes(`[#${i} ${s.startSec}-${s.endSec} ${s.speaker ?? "?"}] ${s.text}`), `発話の行の形: #${i}`);
+    });
+    for (const c of cs) {
+      assert.ok(user.includes(`${c.id} [#${c.seg}] ${c.text}`), `候補が要求に無い: ${c.id} ${c.text}`);
+      if (c.ledgerItem) assert.ok(user.includes(c.ledgerItem), `正式名が無い: ${c.ledgerItem}`);
+    }
+    const oc = req.output_config as { format?: { type?: string; schema?: unknown } } | undefined;
+    assert.equal(oc?.format?.type, "json_schema");
+    // SDK の transformJSONSchema は enum を description の「{enum: [...]}」に移す（値は JSON 文字列の中で \" に包まれる）。
+    // 候補に無い ID は、parse の段で zod が落とす（下の throw の試験）。
+    const schema = JSON.stringify(oc?.format?.schema);
+    const inSchema = (x: string) => new RegExp(`\\\\?"${x}\\\\?"`).test(schema);
+    assert.match(schema, /enum/);
+    for (const c of cs) assert.ok(inSchema(c.id), `enum に無い: ${c.id} ${schema}`);
+    assert.ok(!inSchema("q99"), "候補に無い ID が enum に入っている");
+    assert.ok(!inSchema("i99"));
+  }
+});
+
+test("抽出: 偽サーバーの参照が lines・negations になり、candidates は enumerateCandidates と同じ", async () => {
+  for (const t of transcripts) {
+    const cs = enumerateCandidates(t, ledger);
+    rawContent = null;
+    reply = goodRefs(t, cs);
+    const got = await extractInvoice(t, ledger);
+    assert.deepEqual(got.candidates, cs, t.recordingId);
+    assert.deepEqual(got.lines, (reply as InvoiceRefs).lines, t.recordingId);
+    assert.deepEqual(got.negations, (reply as InvoiceRefs).negations, t.recordingId);
+  }
+});
+
+// --- (3) 解釈できない出力 ---
+
+test("抽出: 存在しない ID・種類の違う ID を返すと throw、parsed_output が無ければ throw", async () => {
+  const t = byId("tire-001");
+  const cs = enumerateCandidates(t, ledger);
+  const good = goodRefs(t, cs);
+  rawContent = null;
+  // [出力, zod が落とした欄]。SDK は「Failed to parse structured output: <zod のエラー>」で throw する
+  const cases: [InvoiceRefs, string][] = [
+    [{ ...good, lines: [ref("i1", "q99")] }, "qty"],
+    [{ ...good, lines: [ref("i99", "q1")] }, "item"],
+    [{ ...good, lines: [ref("i1", "i1")] }, "qty"], // qty 欄に item の ID
+    [{ ...good, lines: [ref("i1", "q1", { evidence: ["q99"] })] }, "evidence"],
+    [{ ...good, lines: [ref("i1", "q1", { correctedTo: "q99" })] }, "correctedTo"],
+    [{ ...good, lines: [ref("i1", "q1", { correctedFrom: "i1" })] }, "correctedFrom"], // 言い直しの欄に品目の ID
+    [{ ...good, lines: [ref("i1", "q1", { status: "maybe" as LineRef["status"] })] }, "status"],
+  ];
+  for (const [bad, field] of cases) {
+    reply = bad;
+    await assert.rejects(
+      extractInvoice(t, ledger),
+      (e: unknown) => {
+        assert.ok(e instanceof Error, String(e));
+        assert.match(e.message, /^Failed to parse structured output: /, JSON.stringify(bad.lines));
+        assert.ok(e.message.includes(`"${field}"`), `${field}: ${e.message}`);
+        return true;
+      },
+      JSON.stringify(bad.lines),
+    );
+  }
+  rawContent = [];
+  await assert.rejects(extractInvoice(t, ledger), /解釈できない/);
+  rawContent = null;
+});
+
+test("refSchema: 候補が 0 件の種類の欄は null だけ、evidence は空配列だけ", () => {
+  const t = seq("こんにちは。");
+  const cs = enumerateCandidates(t, ledger);
+  assert.deepEqual(cs, []);
+  const s = refSchema(cs);
+  const ok = { lines: [ref({ seg: 0, text: "こんにちは" }, null)], negations: [] };
+  assert.ok(s.safeParse(ok).success);
+  assert.ok(!s.safeParse({ ...ok, lines: [ref({ seg: 0, text: "x" }, "q1")] }).success);
+  assert.ok(!s.safeParse({ ...ok, lines: [ref({ seg: 0, text: "x" }, null, { evidence: ["q1"] })] }).success);
+  assert.ok(!s.safeParse({ ...ok, lines: [ref("i1", null)] }).success);
+  // 数量の候補だけがある録音では、単価・金額の欄は null だけ
+  const t2 = seq("ナット2個。");
+  const c2 = enumerateCandidates(t2, ledger);
+  const s2 = refSchema(c2);
+  assert.ok(s2.safeParse({ lines: [ref({ seg: 0, text: "ナット" }, "q1")], negations: [] }).success);
+  assert.ok(!s2.safeParse({ lines: [ref({ seg: 0, text: "ナット" }, "q1", { unitPrice: "q1" })], negations: [] }).success);
+});
+
+// --- (4) system ---
+
+test("抽出: system に数字を書かない・null・津軽弁・negations・status の指示が入る", async () => {
+  const t = byId("tire-001");
+  received = [];
+  rawContent = null;
+  reply = goodRefs(t, enumerateCandidates(t, ledger));
+  await extractInvoice(t, ledger);
+  const system = String(received[0].system);
+  for (const w of [
+    "数字を書かない",
+    "null",
+    "津軽弁",
+    "標準語に直さない",
+    "negations",
+    "status",
+    "done",
+    "negated",
+    "corrected",
+    "unsure",
+    "evidence",
+    "correctedFrom",
+    "correctedTo",
+    "替えてない",
+    "しません",
+    "大丈夫です",
+    "いいです",
+    "行にしたかどうかによらず",
+    "作業でないと判断した発話は行にしない",
+    "後の数を自分で選んで done にしない",
+  ]) {
+    assert.ok(system.includes(w), w);
+  }
+});
+
+// --- (5)(6) 条件 17 ---
+
+test("条件 17: tire-001・tire-002 の正しい参照（done、negations 空）は確認事項 0 件", () => {
+  for (const rid of ["tire-001", "tire-002"]) {
+    const t = byId(rid);
+    const cs = enumerateCandidates(t, ledger);
+    const r = goodRefs(t, cs);
+    assert.deepEqual(resolveInvoice(r.lines, cs, t, ledger, r.negations).confirmations, [], rid);
+  }
+});
+
+test("条件 17: status negated・corrected・unsure の行はそれぞれ確認事項", () => {
+  const t = byId("tire-001");
+  const cs = enumerateCandidates(t, ledger);
+  const base = goodRefs(t, cs).lines;
+  const q0 = id(cs, "qty", 0, "4本");
+  const q1 = id(cs, "qty", 1, "4本");
+  const cases: [Partial<LineRef>, string][] = [
+    [{ status: "negated", evidence: [q1] }, "否定"],
+    [{ status: "corrected", evidence: [q1], correctedFrom: q0, correctedTo: q1 }, "言い直し"],
+    [{ status: "unsure", evidence: [q1] }, "確かでない"],
+  ];
+  for (const [over, word] of cases) {
+    const refs = [base[0], { ...base[1], ...over }];
+    const r = resolveInvoice(refs, cs, t, ledger);
+    assert.ok(has(r.confirmations, "line", word, 1), `${word} ${JSON.stringify(r.confirmations)}`);
+    assert.ok(!r.confirmations.some((c) => c.lineIndex === 0), word);
+  }
+  // 言い直しの確認事項は、訂正前・訂正後の候補の文字列を含む
+  const corrected = resolveInvoice([{ ...base[1], ...cases[1][0] }], cs, t, ledger);
+  assert.ok(has(corrected.confirmations, "line", "4本 → 4本", 0), JSON.stringify(corrected.confirmations));
+});
+
+test("条件 17: evidence・correctedFrom・correctedTo の ID が候補に無ければ「参照が不正」", () => {
+  const t = byId("tire-001");
+  const cs = enumerateCandidates(t, ledger);
+  const base = goodRefs(t, cs).lines[0];
+  for (const over of [{ evidence: ["q99"] }, { correctedFrom: "q99" }, { correctedTo: "z1" }]) {
+    const r = resolveInvoice([{ ...base, ...over }], cs, t, ledger);
+    assert.ok(has(r.confirmations, "line", "参照が不正", 0), JSON.stringify(over));
+  }
+});
+
+test("言い直し（D3）: status が done でも correctedFrom・correctedTo を書いた行は「言い直し」（訂正前・訂正後の値つき）", () => {
+  const t = seq("脱着4本。", "訂正、2本。", "バランスも。");
+  const cs = enumerateCandidates(t, ledger);
+  const q4 = id(cs, "qty", 0, "4本");
+  const q2 = id(cs, "qty", 1, "2本");
+  const lines = [
+    ref(id(cs, "item", 0, "脱着"), q4, { evidence: [q4, q2], correctedFrom: q4, correctedTo: q2 }),
+    ref(id(cs, "item", 2, "バランス"), q2),
+  ];
+  const r = resolveInvoice(lines, cs, t, ledger);
+  assert.ok(has(r.confirmations, "line", "言い直し: 4本 → 2本", 0), JSON.stringify(r.confirmations));
+  // 片方だけでも確認事項
+  for (const over of [{ correctedFrom: q4 }, { correctedTo: q2 }]) {
+    const r1 = resolveInvoice([{ ...lines[0], ...over, evidence: [] }, lines[1]], cs, t, ledger);
+    assert.ok(has(r1.confirmations, "line", "言い直し", 0), JSON.stringify(over));
+  }
+  // 両方 null の done の行は言い直しにならない（対照）
+  const r2 = resolveInvoice([ref(id(cs, "item", 0, "脱着"), q4), lines[1]], cs, t, ledger);
+  assert.ok(!r2.confirmations.some((c) => c.lineIndex === 0 && c.message.includes("言い直し:")), JSON.stringify(r2.confirmations));
+});
+
+test("言い直し（D3b）: correctedFrom・correctedTo に品目の ID は「参照が不正」、refSchema も数の種類の ID だけ", () => {
+  const t = seq("脱着4本、1本550円。", "脱着4本で2200円、いや2。");
+  const cs = enumerateCandidates(t, ledger);
+  const i1 = id(cs, "item", 0, "脱着");
+  const q1 = id(cs, "qty", 0, "4本");
+  for (const over of [{ correctedFrom: i1, correctedTo: q1 }, { correctedFrom: q1, correctedTo: i1 }]) {
+    const r = resolveInvoice([ref(i1, q1, { status: "corrected", ...over })], cs, t, ledger);
+    assert.ok(has(r.confirmations, "line", "参照が不正", 0), JSON.stringify(over));
+  }
+  const s = refSchema(cs);
+  const ok = (over: Partial<LineRef>) => s.safeParse({ lines: [ref(i1, q1, over)], negations: [] }).success;
+  for (const c of cs) {
+    const num = ["qty", "bareNumber", "unitPrice", "amount"].includes(c.kind);
+    assert.equal(ok({ correctedFrom: c.id }), num, `correctedFrom ${c.id} ${c.kind}`);
+    assert.equal(ok({ correctedTo: c.id }), num, `correctedTo ${c.id} ${c.kind}`);
+    // evidence は全種類のまま
+    assert.ok(ok({ evidence: [c.id] }), `evidence ${c.id}`);
+  }
+  assert.ok(cs.some((c) => c.kind === "bareNumber") && cs.some((c) => c.kind === "amount") && cs.some((c) => c.kind === "unitPrice"));
+});
+
+// --- (7) 条件 18 ---
+
+test("条件 18（規則）: 否定の文が行の候補を含まなくても、同じ品目の語があればその行、品目の語が無ければ行に付かない「否定」", () => {
+  const datsu = (cs: Candidate[]) => [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))];
+  // 別の発話の同じ品目の否定
+  const t1 = seq("脱着4本。", "脱着はやってない。");
+  const c1 = enumerateCandidates(t1, ledger);
+  const r1 = resolveInvoice(datsu(c1), c1, t1, ledger, [{ seg: 1, text: "脱着はやってない。" }]);
+  assert.ok(has(r1.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r1.confirmations));
+  // 同じ発話の 2 回目の語の否定
+  const t2 = seq("脱着4本。脱着はいらない。");
+  const c2 = enumerateCandidates(t2, ledger);
+  const r2 = resolveInvoice(datsu(c2), c2, t2, ledger, [{ seg: 0, text: "脱着はいらない。" }]);
+  assert.ok(has(r2.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r2.confirmations));
+  // 料金表に無い品目（{seg,text}）の 2 回目の語の否定
+  const t3 = seq("ワイパー2本。ワイパーはいらない。");
+  const c3 = enumerateCandidates(t3, ledger);
+  const r3 = resolveInvoice([ref({ seg: 0, text: "ワイパー" }, id(c3, "qty", 0, "2本"))], c3, t3, ledger, [{ seg: 0, text: "ワイパーはいらない。" }]);
+  assert.ok(has(r3.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r3.confirmations));
+  // 品目の語が無い否定の文（同じ発話・発話をまたぐ）は行に付かない「否定」
+  for (const t of [seq("脱着4本。やっぱりやめます。"), seq("脱着4本。", "やっぱりやめます。")]) {
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice(datsu(cs), cs, t, ledger, [{ seg: t.segments.length - 1, text: "やっぱりやめます。" }]);
+    assert.ok(has(r.confirmations, "line", "（否定）", -1), JSON.stringify(r.confirmations));
+  }
+  // 品目の語があり、同じ品目の行も近くの negated の行も無ければ、品目つきの行に付かない「否定」（例外なく確認事項）
+  const t5 = seq("脱着4本。", "バランスは大丈夫です。");
+  const c5 = enumerateCandidates(t5, ledger);
+  const r5 = resolveInvoice(datsu(c5), c5, t5, ledger, [{ seg: 1, text: "バランスは大丈夫です。" }]);
+  assert.deepEqual(
+    r5.confirmations.map((c) => [c.lineIndex, c.field, c.candidates]),
+    [[-1, "line", [id(c5, "item", 1, "バランス")]]],
+  );
+  assert.ok(has(r5.confirmations, "line", "否定の文の品目の行が無い", -1));
+  // 再現: 「やっぱりやめて、バランスだけにします。」（脱着 done、バランスの行なし）も確認事項
+  const t6 = seq("脱着4本。", "やっぱりやめて、バランスだけにします。");
+  const c6 = enumerateCandidates(t6, ledger);
+  const r6 = resolveInvoice(datsu(c6), c6, t6, ledger, [{ seg: 1, text: "やっぱりやめて、バランスだけにします。" }]);
+  assert.ok(has(r6.confirmations, "line", "（否定）", -1), JSON.stringify(r6.confirmations));
+  // 条件 15 の「行が無い」とは重ならない（同じ品目で 2 件出さない）
+  assert.ok(!r6.confirmations.some((c) => c.message.includes("料金表の品目の語が出たのに行が無い")), JSON.stringify(r6.confirmations));
+});
+
+test("条件 5（語彙）: 同じ品目の別の語の文に否定の合図があれば、その行も「否定」（negations が無くても止まる）", () => {
+  const t = seq("脱着4本。脱着はいらない。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], cs, t, ledger, []);
+  assert.ok(has(r.confirmations, "line", "否定の合図", 0), JSON.stringify(r.confirmations));
+  // 別名で言っても同じ正式名なら拾う
+  const t2 = seq("脱着4本。", "履き替えはいらない。");
+  const c2 = enumerateCandidates(t2, ledger);
+  const r2 = resolveInvoice([ref(id(c2, "item", 0, "脱着"), id(c2, "qty", 0, "4本"))], c2, t2, ledger, []);
+  assert.ok(has(r2.confirmations, "line", "否定の合図", 0), JSON.stringify(r2.confirmations));
+  // 別の品目の否定は付けない
+  const t3 = seq("脱着4本。バランスはいらない。");
+  const c3 = enumerateCandidates(t3, ledger);
+  const r3 = resolveInvoice([ref(id(c3, "item", 0, "脱着"), id(c3, "qty", 0, "4本"))], c3, t3, ledger, []);
+  assert.ok(!has(r3.confirmations, "line", "否定の合図", 0), JSON.stringify(r3.confirmations));
+});
+
+/** Codex の 2 回目のレビューの例（架空）と、その文で作る行の品目。 */
+const NEGATED: [string, (cs: Candidate[]) => LineRef["item"], boolean][] = [
+  ["脱着4本は替えてない。", (cs) => id(cs, "item", 0, "脱着"), true],
+  ["バランスはしません。", (cs) => id(cs, "item", 0, "バランス"), false],
+  ["バルブは替えね。", () => ({ seg: 0, text: "バルブ" }), false],
+  ["バランスは大丈夫です。", (cs) => id(cs, "item", 0, "バランス"), false],
+  ["バランスはいいです。", (cs) => id(cs, "item", 0, "バランス"), false],
+];
+
+test("条件 18: Codex の 2 回目の例は、行を negated にしても、done で文を negations に挙げても「否定」", () => {
+  for (const [s, item, withQty] of NEGATED) {
+    const t = seq(s);
+    const cs = enumerateCandidates(t, ledger);
+    const it = item(cs);
+    const qty = withQty ? id(cs, "qty", 0, "4本") : null;
+    const ev = typeof it === "string" ? [it] : [];
+
+    const asLine = resolveInvoice([ref(it, qty, { status: "negated", evidence: ev })], cs, t, ledger);
+    assert.ok(has(asLine.confirmations, "line", "否定", 0), `negated ${s} ${JSON.stringify(asLine.confirmations)}`);
+
+    const neg: NegatedSentence[] = [{ seg: 0, text: s }];
+    const asSentence = resolveInvoice([ref(it, qty)], cs, t, ledger, neg);
+    assert.ok(
+      has(asSentence.confirmations, "line", "モデルの挙げた否定の文", 0) && has(asSentence.confirmations, "line", "（否定）", 0),
+      `negations ${s} ${JSON.stringify(asSentence.confirmations)}`,
+    );
+  }
+});
+
+test("条件 18: 否定の文の一部（文の中の語句）を挙げても、文全体に広げて、その文に入る行は「否定」、別の文の行は出ない", () => {
+  const t = seq("今日は脱着4本は替えてない。バランスだけ。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice(
+    [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本")), ref(id(cs, "item", 0, "バランス"), null)],
+    cs,
+    t,
+    ledger,
+    [{ seg: 0, text: "脱着4本は替えてない" }],
+  );
+  assert.ok(has(r.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r.confirmations));
+  assert.ok(!has(r.confirmations, "line", "モデルの挙げた否定の文", 1), JSON.stringify(r.confirmations));
+});
+
+test("条件 18（D1）: 「脱着4本は替えてない。」で negations が「替えてない」だけでも、文全体に広げて「否定」", () => {
+  const t = seq("脱着4本は替えてない。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], cs, t, ledger, [
+    { seg: 0, text: "替えてない" },
+  ]);
+  assert.ok(has(r.confirmations, "line", "モデルの挙げた否定の文「替えてない」", 0), JSON.stringify(r.confirmations));
+});
+
+test("条件 18（D1）: 「、」では切らないので、同じ文の「、」の後の品目の行も「否定」", () => {
+  const t = seq("今日は脱着4本は替えてない、バランスだけ。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice(
+    [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本")), ref(id(cs, "item", 0, "バランス"), null)],
+    cs,
+    t,
+    ledger,
+    [{ seg: 0, text: "替えてない" }],
+  );
+  assert.ok(has(r.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r.confirmations));
+  assert.ok(has(r.confirmations, "line", "モデルの挙げた否定の文", 1), JSON.stringify(r.confirmations));
+});
+
+test("条件 18（D2）: 同じ否定の文が 2 回あれば、2 回目の文の品目を使う行も「否定」（1 つの文につき 1 件）", () => {
+  const t = seq("バランスは大丈夫です。バランスは大丈夫です。4本。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "バランス", 1), id(cs, "qty", 0, "4本"))], cs, t, ledger, [
+    { seg: 0, text: "バランスは大丈夫です。" },
+  ]);
+  const neg = r.confirmations.filter((c) => c.message.includes("モデルの挙げた否定の文"));
+  assert.equal(neg.length, 1, JSON.stringify(r.confirmations));
+  assert.equal(neg[0].lineIndex, 0);
+  // 末尾の「。」まで写した文は、次の文「4本。」へ広げない（数量だけの行は否定の文に入らない）
+  const t2 = seq("バランスは大丈夫です。脱着4本。");
+  const c2 = enumerateCandidates(t2, ledger);
+  const r2 = resolveInvoice([ref(id(c2, "item", 0, "脱着"), id(c2, "qty", 0, "4本"))], c2, t2, ledger, [
+    { seg: 0, text: "バランスは大丈夫です。" },
+  ]);
+  assert.ok(!has(r2.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r2.confirmations));
+  // その文は行に付かない確認事項になる（例外なく確認事項）
+  assert.ok(has(r2.confirmations, "line", "否定の文の品目の行が無い", -1), JSON.stringify(r2.confirmations));
+});
+
+test("条件 15・18（N2、0 件から 1 件に変更: 否定の文は例外なく確認事項にする）: 否定の文に挙げた品目は「行が無い」と重ねず、否定の 1 件だけ", () => {
+  const t = seq("バランスは大丈夫です。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([], cs, t, ledger, [{ seg: 0, text: "バランスは大丈夫です。" }]);
+  assert.deepEqual(r.confirmations.map((c) => [c.lineIndex, c.field, c.message]), [
+    [-1, "line", "「バランスは大丈夫です。」（モデルの挙げた否定の文の品目の行が無い）（否定）"],
+  ]);
+  // 一部だけ写しても文全体で見る
+  const r1 = resolveInvoice([], cs, t, ledger, [{ seg: 0, text: "大丈夫です" }]);
+  assert.equal(r1.confirmations.length, 1, JSON.stringify(r1.confirmations));
+  assert.ok(has(r1.confirmations, "line", "（否定）", -1));
+  // negations が無ければ今のまま「行が無い」
+  const r2 = resolveInvoice([], cs, t, ledger, []);
+  assert.ok(has(r2.confirmations, "item", "料金表の品目の語が出たのに行が無い", -1), JSON.stringify(r2.confirmations));
+  // 別の文の品目は除かない
+  const t3 = seq("バランスは大丈夫です。脱着も。");
+  const c3 = enumerateCandidates(t3, ledger);
+  const r3 = resolveInvoice([], c3, t3, ledger, [{ seg: 0, text: "バランスは大丈夫です。" }]);
+  assert.ok(has(r3.confirmations, "item", "（タイヤ脱着）と言った", -1), JSON.stringify(r3.confirmations));
+  assert.ok(!has(r3.confirmations, "item", "（ホイールバランス）と言った"), JSON.stringify(r3.confirmations));
+});
+
+test("条件 18: negations の文が発話に無い・seg が範囲外なら lineIndex -1 の「否定の文が発話に無い」", () => {
+  const t = seq("脱着4本。");
+  const cs = enumerateCandidates(t, ledger);
+  const lines = [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))];
+  for (const neg of [
+    { seg: 0, text: "脱着4本は替えない。" },
+    { seg: 1, text: "脱着4本。" },
+    { seg: -1, text: "脱着4本。" },
+    { seg: 0.5, text: "脱着4本。" },
+    { seg: 0, text: "" },
+  ]) {
+    const r = resolveInvoice(lines, cs, t, ledger, [neg]);
+    assert.ok(has(r.confirmations, "line", "否定の文が発話に無い", -1), `${JSON.stringify(neg)} ${JSON.stringify(r.confirmations)}`);
+  }
+});
+
+test("条件 18: 否定の文の候補を使った行が無ければ、その行には付けず、行に付かない確認事項にする", () => {
+  const t = seq("組替はしません。脱着4本。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], cs, t, ledger, [
+    { seg: 0, text: "組替はしません。" },
+  ]);
+  assert.ok(!r.confirmations.some((c) => c.lineIndex === 0 && c.message.includes("否定")), JSON.stringify(r.confirmations));
+  assert.ok(has(r.confirmations, "line", "否定の文の品目の行が無い", -1), JSON.stringify(r.confirmations));
+  // 漢数字・全角の書き方の違いは正規化して比べる
+  const t2 = seq("脱着四本は替えてない。");
+  const c2 = enumerateCandidates(t2, ledger);
+  const r2 = resolveInvoice([ref(id(c2, "item", 0, "脱着"), id(c2, "qty", 0, "4本"))], c2, t2, ledger, [
+    { seg: 0, text: "脱着四本は替えてない。" },
+  ]);
+  assert.ok(has(r2.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r2.confirmations));
+});
+
+// --- (8) 条件 19 ---
+
+test("条件 19: 「脱着4本。」「いや2本。」「バランスも。」で 2本 をバランスに付けると「言い直し」、corrected でも確認事項", () => {
+  assert.ok(["いや", "やっぱり", "じゃなくて", "違う"].every((w) => CORRECTION_CUES.includes(w)));
+  const t = rec([0, 2, "father", "脱着4本。"], [2, 4, "father", "いや2本。"], [4, 6, "father", "バランスも。"]);
+  const cs = enumerateCandidates(t, ledger);
+  const q4 = id(cs, "qty", 0, "4本");
+  const q2 = id(cs, "qty", 1, "2本");
+  const datsu = ref(id(cs, "item", 0, "脱着"), q4);
+  const bal = ref(id(cs, "item", 2, "バランス"), q2);
+  const r = resolveInvoice([datsu, bal], cs, t, ledger);
+  assert.ok(has(r.confirmations, "qty", "言い直し", 1), JSON.stringify(r.confirmations));
+  assert.deepEqual(r.unused, []);
+
+  const r2 = resolveInvoice([datsu, { ...bal, status: "corrected", evidence: [q4, q2], correctedFrom: q4, correctedTo: q2 }], cs, t, ledger);
+  assert.ok(has(r2.confirmations, "line", "言い直し", 1), JSON.stringify(r2.confirmations));
+  assert.ok(has(r2.confirmations, "qty", "言い直し", 1), JSON.stringify(r2.confirmations));
+});
+
+test("条件 19: 合図が無い・単位が違う・20 秒より遠いときは出ない", () => {
+  for (const segs of [
+    [[0, 2, "father", "脱着4本。"], [2, 4, "father", "それと2本。"], [4, 6, "father", "バランスも。"]],
+    [[0, 2, "father", "脱着4本。"], [2, 4, "father", "いや2個。"], [4, 6, "father", "バランスも。"]],
+    [[0, 2, "father", "脱着4本。"], [30, 32, "father", "いや2本。"], [32, 34, "father", "バランスも。"]],
+  ] as [number, number, string, string][][]) {
+    const t = rec(...segs);
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice([ref("i1", "q1"), ref("i2", "q2")], cs, t, ledger);
+    assert.ok(!r.confirmations.some((c) => c.message.includes("訂正の合図")), `${segs.map((s) => s[3]).join("/")} ${JSON.stringify(r.confirmations)}`);
+  }
+});
+
+// --- (9) 入力を書き換えない ---
+
+test("呼び出しの前後で参照・候補・文字起こし・料金表が変わらない", async () => {
+  const t = byId("tire-003");
+  const cs = enumerateCandidates(t, ledger);
+  const refs = goodRefs(t, cs);
+  rawContent = null;
+  reply = refs;
+  const before = structuredClone([refs, cs, t, ledger]);
+  const got = await extractInvoice(t, ledger);
+  assert.deepEqual([refs, cs, t, ledger], before);
+  const r = resolveInvoice(got.lines, got.candidates, t, ledger, got.negations);
+  assert.deepEqual([refs, cs, t, ledger], before);
+  assert.deepEqual(got.candidates, cs);
+  assert.ok(has(r.confirmations, "line", "確かでない", 1));
+});

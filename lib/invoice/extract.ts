@@ -1,33 +1,82 @@
+/**
+ * 抽出（設計 docs/design/invoice-verify.md の (b)）。モデルは数字を書かず、候補の ID を指す。
+ * 候補の ID はリクエストごとに zod の enum にするので、候補に無い ID は解釈の段で落ちる。
+ * 値に戻すのと確認事項は resolveInvoice が行う（旧 `verify.ts` は V4 で削除）。
+ */
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { z } from "zod";
 import { claude, MODEL_MAIN } from "../claude";
-import { transcriptToText } from "../stt/manual";
+import type { LedgerEntry } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
-import { InvoiceDraft } from "./schema";
-import { MAX_QUOTE_SEC } from "./verify";
+import { type Candidate, type CandidateKind, enumerateCandidates } from "./candidates";
+import { CORRECTION_KINDS } from "./resolve";
+import { type InvoiceRefs, NegatedSentence } from "./schema";
 
-const SYSTEM = `あなたは青森市の自動車整備工場で、父（整備士）の声から請求の明細を作る書記です。
+const SYSTEM = `あなたは青森市の自動車整備工場で、父（整備士）の声から請求の明細の参照を作る書記です。
+発話と、コードが発話から拾った候補（ID 付き）が渡されます。行ごとに候補の ID を指してください。
 守ること:
-- 言っていない作業・部品を明細にしない。録音に出た作業だけを 1 行ずつ書く。同じ作業を 2 行に分けない。
-- 単価と数量を推測で埋めない。発話で明示されていなければ null。
-- 数量（qty）は、発話で「数＋単位」（「4本」「2個」など）として言われた数をそのまま使う。足したり換算したりしない。
-- 単位（unit）は、その数量に付いた発話の単位（本・個・台・セットなど）をそのまま書く。料金表の単位に合わせて書き換えない。
-- 単価（unitPrice）は、発話に 1 単位あたりの金額（「1本330円」「単価330円」の形）があるときだけ入れる。合計額・総額・料金表の値は単価に入れない。それ以外は null（料金表の値は後で別に照らす）。
-- 品目名（item）は、料金表の品目名に合うものはその名前を使う。合うものが無ければ発話の言葉のまま。
-- 出所（provenance）の quote は発話をそのまま連続して写す（途中を省いたり、離れた発話をつないだりしない）。津軽弁・俗称を標準語に直さない。
-- quote には、その行の品目の言葉と、数量（数＋単位）を言った発話を含める。単価を入れた行は、1 単位あたりの金額を言った発話も含める。数量と金額は、それぞれ 1 つの発話の中で言われた形のまま写す。
-- startSec・endSec は、quote に写した発話の始まりと終わりの時刻にする。quote は ${MAX_QUOTE_SEC} 秒以内に収める。
-- speaker は、その発話の話者をそのまま書く。文字起こしで話者が「?」の発話（録音に話者情報が無い）は推測せず unknown にする。`;
+- 数字を書かない。数量・単価・金額は、候補の ID で指す。
+- 候補に無い数は指さない。その欄は null にする。推測で埋めない。
+- 品目は item 候補の ID で指す。料金表の語が候補に無い品目だけ、発話の添字と発話の語を { seg, text } で書く。
+- 津軽弁・俗称を標準語に直さない。{ seg, text } の text も、negations の text も、発話の原文のまま写す。
+- 言っていない作業を行にしない。作業でないと判断した発話は行にしない。同じ作業を 2 行に分けない。
+- 行ごとに status を付ける: done やった／negated 否定・取り消し・断り／corrected 言い直し／unsure 確かでない。
+- status が done 以外なら、evidence にその判定の根拠の候補 ID を入れる。done なら evidence は空でよい。
+- 言い直し（「4本、いや2本」の類）は status を corrected にし、correctedFrom に訂正前、correctedTo に訂正後の数の候補 ID を入れる。後の数を自分で選んで done にしない。言い直しでなければ correctedFrom・correctedTo は null。
+- 否定・取り消し・断りに当たる文（「替えてない」「しません」「大丈夫です」「いいです」の類）は、行にしたかどうかによらず negations に全部挙げる。seg は発話の添字、text はその文を原文のまま。`;
+
+/** 候補の ID の enum。0 件なら null だけ。 */
+const idEnum = (ids: string[]) => (ids.length ? z.enum(ids as [string, ...string[]]) : null);
+
+/** リクエストごとに、候補の ID だけを許すスキーマを作る。 */
+export function refSchema(candidates: Candidate[]) {
+  const ids = (kind: CandidateKind) => candidates.filter((c) => c.kind === kind).map((c) => c.id);
+  const ref = (kind: CandidateKind) => {
+    const e = idEnum(ids(kind));
+    return e ? e.nullable() : z.null();
+  };
+  const word = z.object({ seg: z.number(), text: z.string() });
+  const itemEnum = idEnum(ids("item"));
+  const all = idEnum(candidates.map((c) => c.id));
+  /** 言い直しの訂正前・訂正後は数の候補だけ（品目の ID を指させない）。 */
+  const nums = idEnum(candidates.filter((c) => CORRECTION_KINDS.has(c.kind)).map((c) => c.id));
+  const line = z.object({
+    item: (itemEnum ? z.union([itemEnum, word]) : word).describe(
+      "品目。item 候補の ID か、料金表に無い品目なら発話の添字とその語（原文のまま）",
+    ),
+    qty: ref("qty").describe("数量の候補の ID。言っていなければ null"),
+    unitPrice: ref("unitPrice").describe("単価の候補の ID。言っていなければ null"),
+    amount: ref("amount").describe("金額の候補の ID。言っていなければ null"),
+    status: z
+      .enum(["done", "negated", "corrected", "unsure"])
+      .describe("done やった／negated 否定・取り消し・断り／corrected 言い直し／unsure 確かでない"),
+    evidence: (all ? z.array(all) : z.array(z.string()).max(0)).describe("判定の根拠の候補 ID。done 以外のとき入れる"),
+    correctedFrom: (nums ? nums.nullable() : z.null()).describe("言い直しの訂正前の数の候補 ID。言い直しでなければ null"),
+    correctedTo: (nums ? nums.nullable() : z.null()).describe("言い直しの訂正後の数の候補 ID。言い直しでなければ null"),
+  });
+  return z.object({
+    lines: z.array(line).describe("発話で言った作業だけ。言っていない作業は入れない"),
+    negations: z.array(NegatedSentence).describe("否定・取り消し・断りに当たる文を全部"),
+  });
+}
+
+function candidateLine(c: Candidate): string {
+  const ledger = c.kind === "item" && c.ledgerItem !== undefined ? `（料金表: ${c.ledgerItem}）` : "";
+  return `${c.id} [#${c.seg}] ${c.text}${ledger}`;
+}
 
 export async function extractInvoice(
   t: Transcript,
-  opts: { itemNames?: string[] } = {},
-): Promise<InvoiceDraft> {
-  const itemNames = opts.itemNames ?? [];
+  ledger: LedgerEntry[],
+): Promise<{ candidates: Candidate[] } & InvoiceRefs> {
+  const candidates = enumerateCandidates(t, ledger);
+  const segs = t.segments.map((s, i) => `[#${i} ${s.startSec}-${s.endSec} ${s.speaker ?? "?"}] ${s.text}`);
   const text = [
     `録音 ID: ${t.recordingId}`,
-    itemNames.length ? `料金表の品目名:\n${itemNames.map((n) => `- ${n}`).join("\n")}` : "料金表の品目名: なし",
-    "文字起こし（[開始-終了秒] 話者: 発話）:",
-    transcriptToText(t),
+    `発話（[#添字 開始-終了秒 話者] 発話）:\n${segs.join("\n")}`,
+    candidates.length
+      ? `候補（ID [#発話の添字] 文字列）:\n${candidates.map(candidateLine).join("\n")}`
+      : "候補: なし",
   ].join("\n\n");
 
   const res = await claude().messages.parse({
@@ -35,8 +84,9 @@ export async function extractInvoice(
     max_tokens: 8000,
     system: SYSTEM,
     messages: [{ role: "user", content: [{ type: "text", text }] }],
-    output_config: { format: zodOutputFormat(InvoiceDraft) },
+    output_config: { format: zodOutputFormat(refSchema(candidates)) },
   });
-  if (!res.parsed_output) throw new Error(`明細の出力を解釈できない (stop_reason=${res.stop_reason})`);
-  return res.parsed_output;
+  if (!res.parsed_output) throw new Error(`参照の出力を解釈できない (stop_reason=${res.stop_reason})`);
+  const out = res.parsed_output;
+  return { candidates, lines: out.lines, negations: out.negations };
 }

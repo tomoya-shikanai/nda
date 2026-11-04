@@ -30,5 +30,25 @@ export const LineRef = z.object({
   qty: z.string().nullable().describe("数量の候補の ID。言っていなければ null"),
   unitPrice: z.string().nullable().describe("単価の候補の ID。言っていなければ null"),
   amount: z.string().nullable().describe("金額の候補の ID。言っていなければ null"),
+  status: z
+    .enum(["done", "negated", "corrected", "unsure"])
+    .describe("done やった／negated 否定・取り消し・断り／corrected 言い直し／unsure 確かでない"),
+  evidence: z.array(z.string()).describe("判定の根拠の候補 ID。done 以外のとき入れる"),
+  correctedFrom: z.string().nullable().describe("言い直しの訂正前の数の候補 ID。言い直しでなければ null"),
+  correctedTo: z.string().nullable().describe("言い直しの訂正後の数の候補 ID。言い直しでなければ null"),
 });
 export type LineRef = z.infer<typeof LineRef>;
+
+/** 否定・取り消し・断りに当たる文。発話の添字と、その文を原文のまま。 */
+export const NegatedSentence = z.object({
+  seg: z.number().describe("発話の添字"),
+  text: z.string().describe("否定・取り消し・断りに当たる文。原文のまま"),
+});
+export type NegatedSentence = z.infer<typeof NegatedSentence>;
+
+/** モデルが返す参照の全体（行と、否定の文）。 */
+export const InvoiceRefs = z.object({
+  lines: z.array(LineRef),
+  negations: z.array(NegatedSentence),
+});
+export type InvoiceRefs = z.infer<typeof InvoiceRefs>;
