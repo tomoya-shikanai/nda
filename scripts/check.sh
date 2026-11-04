@@ -28,6 +28,8 @@ for step in lint test build typecheck; do
   if [ "$step" = test ]; then
     # 事務所の記録（Python）。Windows 専用の部分は偽物に差し替えて試す。
     (cd office && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests) || { echo "NG: test (office)"; exit 1; }
+    # 現場の聞き役（Python）。音声を使わない部分だけ（標準ライブラリだけで動く）。
+    (cd device/listener && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests) || { echo "NG: test (listener)"; exit 1; }
   fi
 done
 echo "OK: check"

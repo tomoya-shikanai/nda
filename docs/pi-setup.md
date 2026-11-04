@@ -118,7 +118,12 @@ sudo tailscale up --ssh   # 表示された URL を鹿内さんが Mac のブラ
 6. **sudo を絞る**（`60-sudo-tighten.sh`）: §3-5 のとおり、パスワードなしは固定の 4 命令だけにする。
 7. **保守の skill**: `.claude/skills/pi/` に、状態・ログ・反映・再起動の命令を書く（AwesomeSea の `sensor` skill と同じ形）。
 
-起動語の検出（Picovoice Porcupine を予定）、文字起こし、Claude の呼び出しは、この土台ができてから別の作業で入れる。Porcupine は日本語の独自起動語に対応しているかと、無料枠をハッカソンの提出に使ってよいかを、入れる前に確かめる。
+起動語の検出、文字起こし、Claude の呼び出しは、この土台ができてから入れる。起動語は Picovoice Porcupine をやめて Vosk にした（`docs/decisions.md` 2026-11-04。§6-1）。
+
+### 6-1. 現場の聞き役（起動語と録音）
+
+起動語の検出と録音は `device/listener/listen.py`（Vosk、オフライン）が行い、`/api/session/voice` へ送る。Mac で先に一周させてある。
+Pi では `libportaudio2` を入れ、`--device Jabra --output-device Jabra` と Vosk のモデルの置き場を渡すだけで動く形にしてある。手順と変える所は `device/listener/README.md`。
 
 ## 7. 確かめ方
 
@@ -149,3 +154,4 @@ Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表
 ## 履歴
 - 2026-11-04 初版。Pi 5（Traskit 4GB キット）、Jabra Speak 510、工場のモニター、Tailscale。11/5 着。
 - 2026-11-04 本体を sudo の無い `nda-app` で動かし（置き場 `/opt/nda`・`/var/lib/nda`・`/etc/nda/nda.env`）、パスワードなしの sudo を固定の 4 命令に絞った（自動セキュリティレビューの指摘）。§7 に #9〜#11 を足した。
+- 2026-11-05 §6-1 に現場の聞き役（`device/listener`）への参照を足した。起動語は Porcupine でなく Vosk。
