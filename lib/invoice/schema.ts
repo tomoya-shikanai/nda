@@ -18,3 +18,17 @@ export const InvoiceDraft = z.object({
   lines: z.array(InvoiceLine).describe("発話で言った作業・部品だけ。言っていない作業は入れない"),
 });
 export type InvoiceDraft = z.infer<typeof InvoiceDraft>;
+
+/**
+ * モデルが書く明細 1 行の参照（設計 docs/design/invoice-verify.md の (b)・(c)）。数字は書かせず、候補の ID を指す。
+ * 値は resolveInvoice がコードで戻す。
+ */
+export const LineRef = z.object({
+  item: z
+    .union([z.string(), z.object({ seg: z.number(), text: z.string() })])
+    .describe("品目。item 候補の ID か、料金表に無い品目なら発話の添字とその語"),
+  qty: z.string().nullable().describe("数量の候補の ID。言っていなければ null"),
+  unitPrice: z.string().nullable().describe("単価の候補の ID。言っていなければ null"),
+  amount: z.string().nullable().describe("金額の候補の ID。言っていなければ null"),
+});
+export type LineRef = z.infer<typeof LineRef>;
