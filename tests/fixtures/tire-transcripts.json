@@ -1,0 +1,36 @@
+[
+  {
+    "recordingId": "tire-001",
+    "vendor": "fictional",
+    "language": "ja",
+    "glossaryHint": false,
+    "segments": [
+      { "startSec": 0, "endSec": 5, "speaker": "father", "text": "冬タイヤさ履き替えるはんで、脱着4本な。" },
+      { "startSec": 5, "endSec": 9, "speaker": "father", "text": "バランスも4本取っておぐ。" },
+      { "startSec": 9, "endSec": 12, "speaker": "father", "text": "終わったら呼ぶはんで、待ってでけ。" }
+    ]
+  },
+  {
+    "recordingId": "tire-002",
+    "vendor": "fictional",
+    "language": "ja",
+    "glossaryHint": false,
+    "segments": [
+      { "startSec": 0, "endSec": 6, "speaker": "father", "text": "持ち込みのタイヤだはんで、組替4本。" },
+      { "startSec": 6, "endSec": 10, "speaker": "father", "text": "バランス4本と、ゴムバルブも4本替える。" },
+      { "startSec": 10, "endSec": 13, "speaker": "father", "text": "ゴムバルブは1本330円。" },
+      { "startSec": 13, "endSec": 17, "speaker": "father", "text": "古いタイヤは処分するって。廃タイヤ4本。" }
+    ]
+  },
+  {
+    "recordingId": "tire-003",
+    "vendor": "fictional",
+    "language": "ja",
+    "glossaryHint": false,
+    "segments": [
+      { "startSec": 0, "endSec": 5, "speaker": null, "text": "スタッドレスさ履き替え、脱着4本。" },
+      { "startSec": 5, "endSec": 10, "speaker": null, "text": "ナットが2個なめでらはんで、ホイールナットも2個替える。" },
+      { "startSec": 10, "endSec": 13, "speaker": null, "text": "ナットの値段は後で調べる。" }
+    ]
+  }
+]
