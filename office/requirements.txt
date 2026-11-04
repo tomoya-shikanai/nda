@@ -1,0 +1,8 @@
+# Windows（Python 3.12 64bit）用。2026-11-04 に PyPI で版と Windows 用 wheel を確かめた。
+uiautomation==2.0.29
+pynput==1.8.2
+Pillow==13.0.0
+psutil==7.2.2
+# 上の 2 つが必要とするもの（版をそろえるため固定）
+comtypes==1.4.17
+six==1.17.0

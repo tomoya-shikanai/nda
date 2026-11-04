@@ -25,5 +25,9 @@ scan || exit 1
 for step in lint test build typecheck; do
   echo "== $step"
   pnpm -s "$step" || { echo "NG: $step"; exit 1; }
+  if [ "$step" = test ]; then
+    # 事務所の記録（Python）。Windows 専用の部分は偽物に差し替えて試す。
+    (cd office && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests) || { echo "NG: test (office)"; exit 1; }
+  fi
 done
 echo "OK: check"
