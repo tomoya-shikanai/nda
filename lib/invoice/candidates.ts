@@ -1,13 +1,23 @@
 /**
  * 発話から「言われた数」と「料金表の語」を候補として列挙する（設計 docs/design/invoice-verify.md の (a)）。
  * 純粋な関数。API を呼ばない、入力を書き換えない、同じ入力なら同じ出力。
- * 読めない円（unparsedYen）は捨てずに候補にする。数を推測で作らない。
+ * 数は「最大の数字の並び」（算用数字・漢数字・十百千万・間の「,」「.」）を 1 つの塊として読み、
+ * 塊全体が 1 つの数として読めたときだけ数にする。塊の途中や末尾だけを拾わない。
+ * 読めない塊は捨てずに候補にする（円が続けば unparsedYen、そうでなければ unparsedNumber）。数を推測で作らない。
  * `verify.ts` は V4 で消すため、ここからは import しない（必要なものは写した）。
  */
 import { type LedgerEntry, findEntry } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 
-export type CandidateKind = "qty" | "unitPrice" | "total" | "amount" | "unparsedYen" | "item";
+export type CandidateKind =
+  | "qty"
+  | "unitPrice"
+  | "total"
+  | "amount"
+  | "unparsedYen"
+  | "unparsedNumber"
+  | "bareNumber"
+  | "item";
 
 export type Candidate = {
   id: string;
@@ -19,7 +29,7 @@ export type Candidate = {
   end: number;
   /** その範囲の正規化後の文字列。 */
   text: string;
-  /** item と unparsedYen は null。 */
+  /** item・unparsedYen・unparsedNumber は null。 */
   value: number | null;
   unit: string | null;
   /** total だけ。 */
@@ -39,85 +49,102 @@ const KANJI_DIGIT: Record<string, number> = {
 };
 const KANJI_MULT: Record<string, number> = { 十: 10, 百: 100, 千: 1000 };
 const KANJI_CHARS = "〇一二三四五六七八九十百千万";
+const NUM_CHAR = `[0-9${KANJI_CHARS}]`;
+/** 最大の数字の並び。「,」「.」は数字に挟まれたときだけ並びに含める。 */
+const NUM_RUN = new RegExp(`${NUM_CHAR}+(?:[.,]${NUM_CHAR}+)*`, "g");
 
 function digitOf(c: string): number | undefined {
   if (c >= "0" && c <= "9") return Number(c);
   return KANJI_DIGIT[c];
 }
 
-/** 万より下の 1 区切り（「三百三十」「千百」「五」）。位取りとして崩れていれば null。 */
+/**
+ * 万より下の 1 区切り（「三百三十」「2千500」「千百」「2000」）。位取りとして崩れていれば null。
+ * 位の前は 1〜9 の 1 字、位の後ろの端数は漢数字 1 字か、直前の位より小さい算用数字の並び。
+ */
 function parseSection(s: string): number | null {
   if (s === "") return null;
+  const parts = s.split(/([十百千])/);
+  // parts は [係数, 位, 係数, 位, …, 端数]
   let total = 0;
-  let pending: number | null = null;
   let lastMult = Infinity;
-  for (const c of s) {
-    const m = KANJI_MULT[c];
-    if (m !== undefined) {
-      if (m >= lastMult) return null;
-      total += (pending ?? 1) * m;
-      pending = null;
-      lastMult = m;
-    } else {
-      const d = digitOf(c);
-      // 数字が 2 字続く（「二二十」）・位取りの中の〇は崩れとみなす
-      if (d === undefined || d === 0 || pending !== null) return null;
-      pending = d;
+  for (let i = 1; i < parts.length; i += 2) {
+    const m = KANJI_MULT[parts[i]];
+    if (m >= lastMult) return null;
+    const coef = parts[i - 1];
+    let k = 1;
+    if (coef !== "") {
+      const d = coef.length === 1 ? digitOf(coef) : undefined;
+      // 数字が 2 字続く（「二二十」）・位の前の〇は崩れとみなす
+      if (d === undefined || d === 0) return null;
+      k = d;
     }
+    total += k * m;
+    lastMult = m;
   }
-  return total + (pending ?? 0);
+  const tail = parts[parts.length - 1];
+  if (tail === "") return total;
+  if (/^[0-9]+$/.test(tail)) {
+    const v = Number(tail);
+    return v < lastMult ? total + v : null;
+  }
+  const d = tail.length === 1 ? digitOf(tail) : undefined;
+  if (d === undefined || d === 0) return null;
+  return total + d;
 }
 
 /**
- * 漢数字を含む並びを算用数字の文字列にする。読めなければ null（漢字のまま残す）。
- * 位の字が無ければ 1 字ずつの読み（「三三〇」→「330」）、あれば位取り（「三百三十」→「330」）。
+ * 1 つの数字の並びを数にする。読めなければ null。
+ * - 算用数字だけ: 「12000」「12,000」「33.0」（「,」は 3 桁ごとのときだけ）
+ * - 位の字（十百千万）が無い漢数字まじり: 1 字ずつの読み（「三三〇」→ 330）
+ * - 位の字がある: 位取り（「三百三十」→ 330、「1万2000」→ 12000、「2千500」→ 2500）
  */
-function readKanjiRun(run: string): string | null {
+function parseRun(run: string): number | null {
+  if (/^[0-9.,]+$/.test(run)) {
+    return /^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(run) ? Number(run.replace(/,/g, "")) : null;
+  }
+  if (/[.,]/.test(run)) return null;
   if (!/[十百千万]/.test(run)) {
     let out = "";
-    for (const c of run) {
-      const d = digitOf(c);
-      if (d === undefined) return null;
-      out += String(d);
-    }
-    return out;
+    for (const c of run) out += String(digitOf(c));
+    return Number(out);
   }
   const parts = run.split("万");
   if (parts.length > 2) return null;
   if (parts.length === 2) {
-    const hi = parseSection(parts[0]);
-    if (hi === null) return null;
+    // 「万」だけなら 1 万（「千」だけが 1000 なのと同じ）
+    const hi = parts[0] === "" ? 1 : parseSection(parts[0]);
+    if (hi === null || hi === 0) return null;
     const lo = parts[1] === "" ? 0 : parseSection(parts[1]);
-    if (lo === null) return null;
-    return String(hi * 10000 + lo);
+    if (lo === null || lo >= 10000) return null;
+    return hi * 10000 + lo;
   }
-  const v = parseSection(run);
-  return v === null ? null : String(v);
+  return parseSection(run);
 }
 
 /**
- * 候補の文法の正規化。NFKC、漢数字の並び→算用数字、空白の除去の 3 つだけ。
- * 小数点・句読点・カンマは消さない。位取りとして崩れた漢数字は漢字のまま残す。
+ * 候補の文法の正規化。NFKC、漢数字を含む数字の並び→算用数字、空白の除去の 3 つだけ。
+ * 小数点・句読点・カンマは消さない。読めない並び（「二二十」「3,1320」）はそのまま残す。
  */
 export function normalizeText(s: string): string {
   return s
     .normalize("NFKC")
-    .replace(new RegExp(`[0-9${KANJI_CHARS}]+`, "g"), (run) => {
+    .replace(/\s+/g, "")
+    .replace(NUM_RUN, (run) => {
       if (!new RegExp(`[${KANJI_CHARS}]`).test(run)) return run;
-      return readKanjiRun(run) ?? run;
-    })
-    .replace(/\s+/g, "");
+      const v = parseRun(run);
+      return v === null ? run : String(v);
+    });
 }
 
-type NumToken = { start: number; end: number; value: number };
+/** 正規化後の文字列の中の数字の並び。value は読めなければ null。 */
+type NumRun = { start: number; end: number; value: number | null };
 
-/** 正規化後の文字列の中の数。「1,000」は 1 つの数、「33.0」は小数のまま。 */
-function numberTokens(n: string): NumToken[] {
-  const re = /\d{1,3}(?:,\d{3})+(?:\.\d+)?(?!\d)|\d+(?:\.\d+)?/g;
-  return [...n.matchAll(re)].map((m) => ({
+function numberRuns(n: string): NumRun[] {
+  return [...n.matchAll(NUM_RUN)].map((m) => ({
     start: m.index,
     end: m.index + m[0].length,
-    value: Number(m[0].replace(/,/g, "")),
+    value: parseRun(m[0]),
   }));
 }
 
@@ -137,29 +164,35 @@ type Raw = Omit<Candidate, "id">;
 
 function numberCandidates(n: string, seg: number): Raw[] {
   const out: Raw[] = [];
-  const tokens = numberTokens(n);
-  const byEnd = new Map(tokens.map((t) => [t.end, t]));
-  /** unitPrice の「1＋単位」の「1」の位置。数量にしない。 */
-  const perUnitOnes = new Set<number>();
+  const runs = numberRuns(n);
+  /** 読めた数だけ。 */
+  const tokens = runs.filter((r): r is NumRun & { value: number } => r.value !== null);
+  const byEnd = new Map(runs.map((r) => [r.end, r]));
+  /** 円・数量・単価の「1」として使った並びの start。残りは bareNumber にする。 */
+  const consumed = new Set<number>();
   const mk = (kind: Raw["kind"], start: number, end: number, value: number | null, unit: string | null): Raw => ({
     kind, seg, start, end, text: n.slice(start, end), value, unit,
   });
 
   for (let i = n.indexOf("円"); i >= 0; i = n.indexOf("円", i + 1)) {
     const end = i + 1;
-    const num = byEnd.get(i);
-    if (!num) {
+    const run = byEnd.get(i);
+    if (!run || run.value === null) {
+      // 読めない並び（「二二十円」）か、円の直前が数字でない（「33.円」）
       let s = i;
       while (s > 0 && YEN_TRAIL.test(n[s - 1])) s--;
+      for (const r of runs) if (r.start >= s && r.end <= i) consumed.add(r.start);
       out.push(mk("unparsedYen", s, end, null, null));
       continue;
     }
+    const num = { ...run, value: run.value };
+    consumed.add(num.start);
     const prefix = n.slice(0, num.start);
 
     // 「1＋単位＋（あたり）（は・が）（、）＋数＋円」
     const one = tokens.find((t) => t.end <= num.start && n.slice(t.start, t.end) === "1" && UNIT_PRICE_LINK.test(n.slice(t.end, num.start)));
     if (one) {
-      perUnitOnes.add(one.start);
+      consumed.add(one.start);
       out.push(mk("unitPrice", one.start, end, num.value, unitAt(n, one.end)));
       continue;
     }
@@ -191,12 +224,18 @@ function numberCandidates(n: string, seg: number): Raw[] {
     }
   }
 
-  for (const t of tokens) {
-    const u = unitAt(n, t.end);
-    if (u === null || perUnitOnes.has(t.start)) continue;
-    const after = t.end + u.length;
-    if (RANGE_MARKS.has(n[t.start - 1]) || RANGE_MARKS.has(n[after])) continue;
-    out.push(mk("qty", t.start, after, t.value, u));
+  for (const r of runs) {
+    if (consumed.has(r.start)) continue;
+    const u = unitAt(n, r.end);
+    const after = u === null ? r.end : r.end + u.length;
+    if (r.value === null) {
+      // 読めない並び。単位が続いても数量にしない
+      out.push(mk("unparsedNumber", r.start, after, null, u));
+      continue;
+    }
+    const ranged = RANGE_MARKS.has(n[r.start - 1]) || RANGE_MARKS.has(n[after]);
+    if (u !== null && !ranged) out.push(mk("qty", r.start, after, r.value, u));
+    else out.push(mk("bareNumber", r.start, after, r.value, u));
   }
   return out;
 }
@@ -224,9 +263,9 @@ function itemCandidates(n: string, seg: number, ledger: LedgerEntry[], normLedge
 }
 
 const PREFIX: Record<CandidateKind, string> = {
-  qty: "q", unitPrice: "p", total: "t", amount: "a", unparsedYen: "u", item: "i",
+  qty: "q", unitPrice: "p", total: "t", amount: "a", unparsedYen: "u", unparsedNumber: "x", bareNumber: "n", item: "i",
 };
-const KIND_ORDER: CandidateKind[] = ["qty", "unitPrice", "total", "amount", "unparsedYen", "item"];
+const KIND_ORDER: CandidateKind[] = ["qty", "unitPrice", "total", "amount", "unparsedYen", "unparsedNumber", "bareNumber", "item"];
 
 /** 文字起こしの各発話から候補を列挙する。ID は kind ごとの頭文字＋1 からの連番で、(seg, start) の順。 */
 export function enumerateCandidates(t: Transcript, ledger: LedgerEntry[]): Candidate[] {

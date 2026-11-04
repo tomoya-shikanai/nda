@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { type Candidate, enumerateCandidates } from "../lib/invoice/candidates";
 import { priceInvoice } from "../lib/invoice/price";
-import { MAX_LINE_SEC, resolveInvoice } from "../lib/invoice/resolve";
+import { MAX_LINE_SEC, NEGATION_CUES, resolveInvoice } from "../lib/invoice/resolve";
 import type { LineRef } from "../lib/invoice/schema";
 import type { LedgerEntry } from "../lib/ledger/lookup";
 import type { Segment, Transcript } from "../lib/stt/types";
@@ -177,12 +177,17 @@ test("条件 5: 「脱着4本はしない。」を行にすると「否定」、
   assert.deepEqual(none.unused.map((c) => c.text), ["4本"]);
 });
 
-test("条件 5: 否定は節ごとに見る（別の節の否定は行に効かない）", () => {
-  const t = rec([0, 3, "father", "組替はしない、脱着4本。"]);
+test("条件 5: 否定は文ごとに見る（別の文の否定は行に効かない。「、」の先は同じ文）", () => {
+  const t = rec([0, 3, "father", "組替はしない。脱着4本。"]);
   const cs = enumerateCandidates(t, ledger);
   const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], cs, t, ledger);
   assert.deepEqual(r.confirmations, []);
-  for (const w of ["いらない", "要らない", "なし", "無し", "まいね", "やらない"]) {
+  // 規則 C（2026-11-04）: 「、」では切らない。以前は節単位で確認事項 0 件だった
+  const t1 = rec([0, 3, "father", "組替はしない、脱着4本。"]);
+  const c1 = enumerateCandidates(t1, ledger);
+  const r1 = resolveInvoice([ref(id(c1, "item", 0, "脱着"), id(c1, "qty", 0, "4本"))], c1, t1, ledger);
+  assert.ok(has(r1.confirmations, "line", "否定", 0), JSON.stringify(r1.confirmations));
+  for (const w of NEGATION_CUES) {
     const t2 = rec([0, 3, "father", `バランス4本${w}。`]);
     const c2 = enumerateCandidates(t2, ledger);
     const r2 = resolveInvoice([ref(id(c2, "item", 0, "バランス"), id(c2, "qty", 0, "4本"))], c2, t2, ledger);
@@ -436,6 +441,118 @@ test("指摘 9: tire-003 に「200円」の候補は無く、無い ID を指す
   const p = priceInvoice({ lines: r.lines }, ledger);
   assert.ok(p.confirmations.some((c) => c.field === "unitPrice"));
   assert.equal(p.total, null);
+});
+
+// --- 規則 A〜C（2026-11-04 の Codex の 7 例と追加の 4 例） ---
+
+/** 3 秒ずつの発話の架空の録音（話者は父）。 */
+const seq = (...texts: string[]) => rec(...texts.map((x, i): [number, number, string, string] => [i * 3, i * 3 + 3, "father", x]));
+
+test("規則 C: 「脱着4本は、やらない。」「脱着4本は不要。」は「否定」", () => {
+  for (const s of ["脱着4本は、やらない。", "脱着4本は不要。", "バランス4本、やらない"]) {
+    const t = seq(s);
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice([ref("i1", "q1")], cs, t, ledger);
+    assert.ok(has(r.confirmations, "line", "否定", 0), `${s} ${JSON.stringify(r.confirmations)}`);
+  }
+});
+
+test("規則 C: 否定の文の単価を指した行も「否定」（「バランスは1本550円だけどやらない。脱着4本。」）", () => {
+  const t = seq("バランスは1本550円だけどやらない。脱着4本。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"), id(cs, "unitPrice", 0, "1本550円"))], cs, t, ledger);
+  assert.equal(r.lines[0].unitPrice, 550);
+  assert.ok(has(r.confirmations, "line", "否定", 0), JSON.stringify(r.confirmations));
+  // 単価を指さなければ、別の文の否定は脱着の行に効かない（使われない単価は条件 2）
+  const r2 = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], cs, t, ledger);
+  assert.ok(!has(r2.confirmations, "line", "否定"), JSON.stringify(r2.confirmations));
+  assert.ok(has(r2.confirmations, "unitPrice", "言った金額がどの行にも使われていない", -1));
+});
+
+test("規則 C: 単価だけを指した否定の文の行も「否定」（「バランスは1本1100円、やらない」）", () => {
+  const t = seq("バランスは1本1100円、やらない");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "バランス"), null, id(cs, "unitPrice", 0, "1本1100円"))], cs, t, ledger);
+  assert.ok(has(r.confirmations, "line", "否定", 0), JSON.stringify(r.confirmations));
+});
+
+test("規則 C: 方言の否定（まいね・わがね・いらね・やらね・しね）も合図", () => {
+  for (const w of ["まいね", "わがね", "いらね", "やらね", "しね", "やめ", "見送り"]) {
+    assert.ok(NEGATION_CUES.includes(w), w);
+    const t = seq(`脱着4本は${w}。`);
+    const cs = enumerateCandidates(t, ledger);
+    assert.ok(has(resolveInvoice([ref("i1", "q1")], cs, t, ledger).confirmations, "line", "否定", 0), w);
+  }
+});
+
+test("規則 B: 「脱着4本、いや2。」の使われない 2 は確認事項", () => {
+  const t = seq("脱着4本、いや2。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref("i1", "q1")], cs, t, ledger);
+  assert.ok(has(r.confirmations, "qty", "言い直し", 0), JSON.stringify(r.confirmations));
+  assert.deepEqual(r.unused.map((c) => [c.kind, c.text]), [["bareNumber", "2"]]);
+});
+
+test("規則 B: 別の発話（3 秒後）の「いや2本」・別の単位の「いや2個」も確認事項", () => {
+  for (const texts of [["脱着4本。", "いや2本。"], ["バランス4本", "いや2本"], ["バランス4本、いや2個"]]) {
+    const t = seq(...texts);
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice([ref("i1", "q1")], cs, t, ledger);
+    assert.ok(has(r.confirmations, "qty", "言い直し", 0), `${texts.join("/")} ${JSON.stringify(r.confirmations)}`);
+  }
+});
+
+test("規則 B: 行から 20 秒より遠い使われない数量・数は確認事項にせず unused だけ", () => {
+  const t = rec([0, 2, "father", "脱着4本。"], [23, 25, "father", "車は2台ある。"], [40, 42, "father", "あと3"]);
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref("i1", "q1")], cs, t, ledger);
+  assert.deepEqual(r.confirmations, []);
+  assert.deepEqual(r.unused.map((c) => [c.kind, c.text]), [["qty", "2台"], ["bareNumber", "3"]]);
+  // ちょうど 20 秒の隔たり（2 秒→22 秒）は近い
+  const t20 = rec([0, 2, "father", "脱着4本。"], [22, 24, "father", "いや2本。"]);
+  const c20 = enumerateCandidates(t20, ledger);
+  assert.ok(has(resolveInvoice([ref("i1", "q1")], c20, t20, ledger).confirmations, "qty", "言い直し", 0));
+});
+
+test("規則 B: 遠くても言った金額は今のとおり確認事項（条件 2 を弱めない）", () => {
+  const t = rec([0, 2, "father", "脱着4本。"], [60, 62, "father", "1本550円。"]);
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref("i1", "q1")], cs, t, ledger);
+  assert.ok(has(r.confirmations, "unitPrice", "言った金額がどの行にも使われていない", -1), JSON.stringify(r.confirmations));
+});
+
+test("規則 A: 「脱着二二十4本。」は数量が無く、q1 を指すと「参照が不正」、読めない数は距離によらず確認事項", () => {
+  const t = seq("脱着二二十4本。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref("i1", "q1")], cs, t, ledger);
+  assert.equal(r.lines[0].qty, null);
+  assert.ok(has(r.confirmations, "line", "参照が不正", 0));
+  assert.ok(has(r.confirmations, "qty", "数が読めない", -1), JSON.stringify(r.confirmations));
+  const none = resolveInvoice([], cs, t, ledger);
+  assert.ok(has(none.confirmations, "qty", "数が読めない", -1));
+});
+
+test("規則 A: 「ゴムバルブ4本で3,1320円。」は金額が無く、読めない円は確認事項", () => {
+  const t = seq("ゴムバルブ4本で3,1320円。");
+  const cs = enumerateCandidates(t, ledger);
+  assert.ok(!cs.some((c) => c.value === 1320));
+  const r = resolveInvoice([ref("i1", "q1", null, "a1")], cs, t, ledger);
+  assert.ok(has(r.confirmations, "line", "参照が不正", 0));
+  assert.ok(has(r.confirmations, "unitPrice", "円の前の数が読めない", -1), JSON.stringify(r.confirmations));
+});
+
+test("条件 16: 数量と「1＋単位」の単価の単位が違えば「単位が数量と単価で違う」", () => {
+  const t = seq("ゴムバルブ4本、1セット330円。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "ゴムバルブ"), id(cs, "qty", 0, "4本"), id(cs, "unitPrice", 0, "1セット330円"))], cs, t, ledger);
+  assert.ok(has(r.confirmations, "unit", "単位が数量と単価で違う", 0), JSON.stringify(r.confirmations));
+  // 同じ単位・単価に単位が無いときは出ない
+  for (const s of ["ゴムバルブ4本、1本330円。", "ゴムバルブ4本、単価は330円。"]) {
+    const t2 = seq(s);
+    const c2 = enumerateCandidates(t2, ledger);
+    const r2 = resolveInvoice([ref("i1", "q1", "p1")], c2, t2, ledger);
+    assert.ok(!has(r2.confirmations, "unit", "単位が数量と単価で違う"), s);
+  }
 });
 
 // --- (6) 入力を書き換えない ---
