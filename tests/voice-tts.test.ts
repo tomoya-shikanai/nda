@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { newSession, writeSession } from "../lib/session/store";
 import { SAY } from "../lib/session/view";
-import { synthesize, voicevoxBaseUrl, ZUNDAMON_NORMAL } from "../lib/voice/tts";
+import { DEFAULT_TTS_SPEED, synthesize, ttsSpeed, voicevoxBaseUrl, ZUNDAMON_NORMAL } from "../lib/voice/tts";
 
 const FAKE_WAV = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x41, 0x56, 0x45, 0, 255]);
 const FAKE_QUERY = { accent_phrases: [{ moras: [] }], speedScale: 1, outputSamplingRate: 24000 };
@@ -81,7 +81,7 @@ test("既定: speaker は ZUNDAMON_NORMAL(3)、VOICEVOX_URL が無ければ 127.
   else process.env.VOICEVOX_URL = prev;
 });
 
-test("(1) audio_query に日本語の text と speaker 3、synthesis に応答 JSON がそのまま届き、WAV のバイト列が返る", async () => {
+test("(1) audio_query に日本語の text と speaker 3、synthesis に応答 JSON が speedScale だけ 1.5 に変わって届き、WAV のバイト列が返る", async () => {
   const { url, seen } = await fakeVoicevox();
   const text = "タイヤ脱着、4本で合ってるのだ？";
   const wav = await synthesize(text, { baseUrl: url });
@@ -96,8 +96,45 @@ test("(1) audio_query に日本語の text と speaker 3、synthesis に応答 J
   assert.equal(s.path, "/synthesis");
   assert.equal(s.params.get("speaker"), "3");
   assert.match(s.contentType ?? "", /^application\/json/);
-  assert.equal(s.body, JSON.stringify(FAKE_QUERY));
-  assert.deepEqual(JSON.parse(s.body), FAKE_QUERY);
+  assert.deepEqual(JSON.parse(s.body), { ...FAKE_QUERY, speedScale: 1.5 });
+});
+
+/** 試験の中だけ NDA_TTS_SPEED を変える。 */
+async function withSpeedEnv<T>(v: string | undefined, f: () => Promise<T> | T): Promise<T> {
+  const prev = process.env.NDA_TTS_SPEED;
+  if (v === undefined) delete process.env.NDA_TTS_SPEED;
+  else process.env.NDA_TTS_SPEED = v;
+  try {
+    return await f();
+  } finally {
+    if (prev === undefined) delete process.env.NDA_TTS_SPEED;
+    else process.env.NDA_TTS_SPEED = prev;
+  }
+}
+
+test("(1b) 話速: 既定 1.5、NDA_TTS_SPEED で上書き、opts.speed が最優先。数でない・範囲の外は呼ばずに throw", async () => {
+  assert.equal(DEFAULT_TTS_SPEED, 1.5);
+  await withSpeedEnv(undefined, () => assert.equal(ttsSpeed(), 1.5));
+  await withSpeedEnv("1.2", async () => {
+    assert.equal(ttsSpeed(), 1.2);
+    const { url, seen } = await fakeVoicevox();
+    await synthesize("聞いています", { baseUrl: url });
+    assert.equal(JSON.parse(seen[1].body).speedScale, 1.2);
+    await synthesize("聞いています", { baseUrl: url, speed: 1 });
+    assert.equal(JSON.parse(seen[3].body).speedScale, 1);
+  });
+  for (const bad of ["速く", "0", "3", "NaN"]) {
+    await withSpeedEnv(bad, async () => {
+      assert.throws(() => ttsSpeed(), /NDA_TTS_SPEED/, bad);
+      let called = 0;
+      const spy = (async () => {
+        called++;
+        return new Response(null, { status: 200 });
+      }) as typeof fetch;
+      await assert.rejects(synthesize("聞いています", { fetch: spy }), /NDA_TTS_SPEED/);
+      assert.equal(called, 0, bad);
+    });
+  }
 });
 
 test("(2) audio_query が 500 なら状態コードつきで throw し、synthesis を呼ばない", async () => {
