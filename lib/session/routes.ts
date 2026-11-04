@@ -4,7 +4,7 @@
  * ベンダーは呼ぶ側が選ぶ（2 社の照合・自動の切り替えは #31 で実録音の後に決める）。
  */
 import { randomUUID } from "node:crypto";
-import { loadLedger, type LedgerEntry } from "../ledger/lookup";
+import { type LedgerEntry, ledgerPath, loadLedger } from "../ledger/lookup";
 import { transcribeGemini } from "../stt/gemini";
 import { transcribeScribe } from "../stt/scribe";
 import { type Segment, SegmentSchema, type Transcript } from "../stt/types";
@@ -22,7 +22,7 @@ export type AudioForm = { vendor: Vendor; file: Blob };
 const NO_STORE = { "cache-control": "no-store" };
 
 export function ledger(): Promise<LedgerEntry[]> {
-  return loadLedger(process.env.NDA_LEDGER_PATH ?? "data/ledger.json");
+  return loadLedger(ledgerPath());
 }
 
 /** multipart の vendor と file を確かめる。不正なら 400 の Response。 */

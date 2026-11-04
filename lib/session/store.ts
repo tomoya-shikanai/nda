@@ -21,6 +21,8 @@ export type SessionStatus = (typeof SESSION_STATES)[number];
 export const AnswerAction = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("setQty"), value: z.number(), unit: z.string() }),
   z.object({ kind: z.literal("setUnitPrice"), value: z.number() }),
+  /** 言い換えの言葉の行に、父が選んだ料金表の品目（正式名）。 */
+  z.object({ kind: z.literal("setItem"), item: z.string() }),
   z.object({ kind: z.literal("confirm") }),
   z.object({ kind: z.literal("deny") }),
   z.object({ kind: z.literal("drop") }),

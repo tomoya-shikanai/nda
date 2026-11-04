@@ -6,6 +6,7 @@
  * 明細が 0 行の作業への返事は、作業の話の続きとして文字起こしに足して抽出し直す（continueSession）。
  */
 import { randomUUID } from "node:crypto";
+import { addAmbiguousLines } from "../invoice/ambiguous";
 import { assembleInvoice } from "../invoice/build";
 import type { Candidate } from "../invoice/candidates";
 import { extractInvoice } from "../invoice/extract";
@@ -52,10 +53,12 @@ async function extractWithCost(
 
 /** 抽出の結果から、明細・質問・参照を組む（startSession と continueSession で同じ）。 */
 function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[]) {
-  const { candidates, ...refs } = out;
-  const invoice = assembleInvoice(out, t, ledger);
+  const { candidates } = out;
+  // 言い換えの言葉の行を補う（足した参照も保存する。答えの後の組み直しが同じ行を作るため）
+  const refs = addAmbiguousLines(out, ledger);
+  const invoice = assembleInvoice({ candidates, ...refs }, t, ledger);
   const questions = toQuestions(invoice, candidates, t, ledger);
-  return { candidates, refs: { lines: refs.lines, negations: refs.negations }, invoice, questions };
+  return { candidates, refs, invoice, questions };
 }
 
 export async function startSession(x: {

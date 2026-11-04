@@ -4,7 +4,7 @@
  * 行（lineIndex 0 以上）は 1 行につき 1 問、行に付かない事項（lineIndex -1）は理由ごとに 1 問。
  * 同じ質問の確認事項は理由の種類にまとめ、優先度の最上位の理由で 1 文の質問を作る。数は候補の文字列だけを使う。
  */
-import { type LedgerEntry, findEntry, itemKey } from "../ledger/lookup";
+import { choicesOf, type LedgerEntry, findEntry, itemKey, shortName } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 import type { Candidate } from "./candidates";
 import type { Confirmation, PricedInvoice } from "./price";
@@ -12,6 +12,7 @@ import type { Confirmation, PricedInvoice } from "./price";
 /** 聞き返す理由の種類。並びは優先度の順（最後の other は、どれにも当たらないもの）。 */
 export const QUESTION_REASONS = [
   "negation", // 否定
+  "choice", // 言い換えの言葉で、料金表のどの品目か分からない（「タイヤ交換」→ 脱着か組替か）
   "correction", // 言い直し（使われない数を含む）
   "unparsed", // 読めない数
   "qty", // 数量
@@ -42,6 +43,7 @@ export type Question = {
 export function reasonOf(c: Confirmation): QuestionReason {
   if (c.message.includes("（否定）")) return "negation";
   if (c.message.includes("言い直し")) return "correction";
+  if (c.message.includes("（別名があいまい）")) return "choice";
   if (c.message.includes("読めない）")) return "unparsed";
   if (c.field === "total") return "total";
   if (c.field === "qty") return "qty";
@@ -139,6 +141,11 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         if (vals.length === 1) return `${name}は${vals[0]}で合っていますか`;
         if (vals.length === 2) return `${name}は${vals[0]}と${vals[1]}のどちらですか`;
         return listed(vals, (x) => `${name}は${x}のどれですか`);
+      }
+      case "choice": {
+        // 「タイヤ交換は、脱着ですか、組替ですか」。選択肢は料金表の順、短い名前（ほかの品目と共有しない別名）で呼ぶ
+        const names = choicesOf(ledger, line.item).map((e) => `${shortName(ledger, e)}ですか`);
+        return names.length >= 2 ? `${name}は、${names.join("、")}` : `${name}は料金表のどの品目ですか`;
       }
       case "unparsed":
         return `${name}の数が聞き取れません。いくつですか`;

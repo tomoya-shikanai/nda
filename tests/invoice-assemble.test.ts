@@ -13,11 +13,11 @@ import { type Candidate, enumerateCandidates } from "../lib/invoice/candidates";
 import { checkAmounts } from "../lib/invoice/check";
 import { priceInvoice } from "../lib/invoice/price";
 import type { InvoiceRefs, LineRef } from "../lib/invoice/schema";
-import { type LedgerEntry, findEntry, isAmbiguous, lookup } from "../lib/ledger/lookup";
+import { type LedgerEntry, findEntry, isAmbiguous, lookup, ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import type { Transcript } from "../lib/stt/types";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const ledger = JSON.parse(readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8")) as LedgerEntry[];
+const ledger = ledgerEntries(parseLedgerBook(JSON.parse(readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8"))));
 const transcripts = JSON.parse(
   readFileSync(join(ROOT, "tests/fixtures/tire-transcripts.json"), "utf8"),
 ) as Transcript[];

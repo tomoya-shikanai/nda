@@ -9,14 +9,14 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, test } from "node:test";
 import { enumerateCandidates } from "../lib/invoice/candidates";
-import type { LedgerEntry } from "../lib/ledger/lookup";
+import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { appendUtterance, type Extractor, isEmptyDraft, replySession, startSession } from "../lib/session/run";
 import { readSession, type Session } from "../lib/session/store";
 import { toMonitorView } from "../lib/session/view";
 import type { Segment, Transcript } from "../lib/stt/types";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const ledger = JSON.parse(readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8")) as LedgerEntry[];
+const ledger = ledgerEntries(parseLedgerBook(JSON.parse(readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8"))));
 
 const made: string[] = [];
 async function tmp(): Promise<string> {

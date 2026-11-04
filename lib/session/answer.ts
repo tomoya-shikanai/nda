@@ -19,7 +19,7 @@ import {
 } from "../invoice/questions";
 import { CORRECTION_CUES, COUNT_UNITS, NEGATION_CUES, resolveInvoice } from "../invoice/resolve";
 import type { InvoiceLine, InvoiceRefs } from "../invoice/schema";
-import { findEntry, type LedgerEntry } from "../ledger/lookup";
+import { choicesOf, findEntry, itemKey, type LedgerEntry } from "../ledger/lookup";
 import type { Segment, Transcript } from "../stt/types";
 import { bareAnswer, isApproval, isNo, isUnrelated, isYes, onlyValue } from "./approval";
 import { keptLines } from "./kept";
@@ -83,6 +83,35 @@ function readChoice(c: Candidate, choices: { value: number; unit: string | null 
 }
 
 /**
+ * 言い換えの言葉の質問（「タイヤ交換は、脱着ですか、組替ですか」）への答え。選択肢の正式名か別名（ほかの品目と共有しない語）が
+ * ちょうど 1 つ出て、その前後に許した語（前置き・付け足し）しか無いときだけ、その品目にする。
+ */
+function readItemChoice(text: string, line: PricedLine, ledger: LedgerEntry[]): Action {
+  const choices = choicesOf(ledger, line.item);
+  if (choices.length < 2) return unread("選択肢が分からない");
+  const n = normalizeText(text);
+  const shared = (w: string) => ledger.filter((e) => itemKey(e.item) === itemKey(w) || e.aliases.some((a) => itemKey(a) === itemKey(w))).length > 1;
+  const hits: { entry: LedgerEntry; start: number; end: number }[] = [];
+  for (const e of choices) {
+    const words = [e.item, ...e.aliases].map(normalizeText).filter((w) => w !== "" && !shared(w));
+    // 長い語を先に（「タイヤ脱着」の中の「脱着」を別に数えない）
+    const taken: { start: number; end: number }[] = [];
+    for (const w of [...new Set(words)].sort((a, b) => b.length - a.length)) {
+      for (let at = n.indexOf(w); at >= 0; at = n.indexOf(w, at + 1)) {
+        const r = { start: at, end: at + w.length };
+        if (taken.some((x) => r.start < x.end && x.start < r.end)) continue;
+        taken.push(r);
+      }
+    }
+    for (const r of taken) hits.push({ entry: e, ...r });
+  }
+  if (hits.length === 0) return unread("選択肢の品目の語が無い");
+  if (hits.length > 1) return unread("選択肢の品目の語が 2 つ以上ある");
+  if (!onlyValue(text, hits[0], [])) return unread("答えに余計な語がある");
+  return { kind: "setItem", item: hits[0].entry.item };
+}
+
+/**
  * 答えの 1 発話を、質問 q に対する 1 つの操作として読む。読めなければ unread。
  * candidates は作業の候補（言い直しの質問に出た値を引くのに使う。無ければ言い直しは行の数量だけを受ける）。
  */
@@ -134,6 +163,8 @@ export function readAnswer(
     }
     case "unitPrice":
       return single((c) => readPrice(c, unit));
+    case "choice":
+      return readItemChoice(utterance.text, line, ledger);
     case "negation":
       if (yes) return { kind: "drop" };
       if (no) return { kind: "deny" };
@@ -151,6 +182,8 @@ export function readAnswer(
 const CLEARS: Partial<Record<Action["kind"], Set<QuestionReason>>> = {
   setQty: QTY_REASONS,
   setUnitPrice: new Set(["unitPrice"]),
+  // 言い換えの確認事項は料金表の照らし直し（price.ts）で消える。resolve の確認事項は消さない
+  setItem: new Set(),
   confirm: new Set(["other"]),
   deny: new Set(["negation"]),
 };
@@ -182,6 +215,7 @@ export function applyAnswers(
     const act = a.action;
     if (act.kind === "setQty") lines[i] = { ...lines[i], qty: act.value, unit: act.unit };
     if (act.kind === "setUnitPrice") lines[i] = { ...lines[i], unitPrice: act.value };
+    if (act.kind === "setItem") lines[i] = { ...lines[i], item: act.item };
     confs = confs.filter((c) => !(c.lineIndex === i && clears(act, c)));
   }
 

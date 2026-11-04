@@ -5,6 +5,7 @@
 import type { LedgerEntry } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 import type { Candidate } from "./candidates";
+import { addAmbiguousLines } from "./ambiguous";
 import { checkAmounts } from "./check";
 import { extractInvoice } from "./extract";
 import { type Confirmation, type PricedInvoice, priceInvoice } from "./price";
@@ -51,5 +52,6 @@ export function assembleInvoice(
 
 /** 文字起こしから明細を作る（Claude を 1 回呼ぶ）。 */
 export async function buildInvoice(t: Transcript, ledger: LedgerEntry[]): Promise<AssembledInvoice> {
-  return assembleInvoice(await extractInvoice(t, ledger), t, ledger);
+  const out = await extractInvoice(t, ledger);
+  return assembleInvoice({ candidates: out.candidates, ...addAmbiguousLines(out, ledger) }, t, ledger);
 }

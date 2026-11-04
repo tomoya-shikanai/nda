@@ -7,6 +7,7 @@
 // 合計の行は明細の欄の下に固定する。
 
 import { useEffect, useRef, useState } from "react";
+import type { PublicLedger } from "../../lib/ledger/lookup";
 import { type MonitorLine, type MonitorView, toMonitorView, yenText } from "../../lib/session/view";
 import Companion from "./Companion";
 import styles from "./monitor.module.css";
@@ -31,6 +32,41 @@ function isView(v: unknown, labels: Record<FaceKey, string>): v is MonitorView {
   );
 }
 
+function isLedger(v: unknown): v is PublicLedger {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    Array.isArray(o.items) &&
+    o.items.every((e) => typeof e?.item === "string" && Array.isArray(e?.aliases)) &&
+    Array.isArray(o.ambiguous) &&
+    o.ambiguous.every((a) => typeof a?.word === "string" && Array.isArray(a?.choices))
+  );
+}
+
+/** 言える作業の一覧（明細がまだ無いときに出す）。料金表の品目名と別名、言い換えの言葉。 */
+function Sayable({ ledger }: { ledger: PublicLedger }) {
+  if (ledger.items.length === 0) return <p className={styles.none}>まだありません</p>;
+  return (
+    <div className={styles.sayable}>
+      <p className={styles.small}>言える作業</p>
+      <ul>
+        {ledger.items.map((e) => (
+          <li key={e.item}>
+            <b>{e.item}</b>
+            {e.aliases.length > 0 && <span>（{e.aliases.join("・")}）</span>}
+          </li>
+        ))}
+        {ledger.ambiguous.map((a) => (
+          <li key={a.word}>
+            <b>{a.word}</b>
+            <span>（{a.choices.join("か")}かを聞きます）</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function lineState(l: MonitorLine): string {
   const parts: string[] = [];
   if (l.status === "ask") parts.push("確認待ち");
@@ -51,6 +87,21 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<FaceKey, 
   const audioRef = useRef<HTMLAudioElement>(null);
   const spokenRef = useRef<string | null>(null);
   const linesRef = useRef<HTMLUListElement>(null);
+  const [ledger, setLedger] = useState<PublicLedger | null>(null);
+
+  // 言える作業の一覧は 1 回だけ読む（読めなければ「まだありません」のまま）
+  useEffect(() => {
+    let alive = true;
+    void fetch("/api/ledger", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: unknown) => {
+        if (alive && isLedger(j)) setLedger(j);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // 台詞の通し番号が変わったときだけ声を鳴らす（同じ台詞でも、答えが読めなかったときは言い直す）。
   // VOICEVOX が動いていない（503）・自動再生の制限で鳴らないときは、文字だけで続ける。
@@ -162,7 +213,11 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<FaceKey, 
               )}
             </h2>
             {view.lines.length === 0 ? (
-              <p className={styles.none}>まだありません</p>
+              ledger === null ? (
+                <p className={styles.none}>まだありません</p>
+              ) : (
+                <Sayable ledger={ledger} />
+              )
             ) : (
               <>
                 <ul ref={linesRef} className={`${styles.lines} ${dense ? styles.dense : ""}`}>

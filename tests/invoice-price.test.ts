@@ -11,12 +11,10 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { priceInvoice } from "../lib/invoice/price";
 import type { InvoiceDraft, InvoiceLine } from "../lib/invoice/schema";
-import { type LedgerEntry, lookup } from "../lib/ledger/lookup";
+import { type LedgerEntry, lookup, ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const ledger = JSON.parse(
-  readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8"),
-) as LedgerEntry[];
+const ledger = ledgerEntries(parseLedgerBook(JSON.parse(readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8"))));
 
 const line = (
   recordingId: string,

@@ -11,11 +11,11 @@ import { assembleInvoice } from "../lib/invoice/build";
 import { type Candidate, enumerateCandidates } from "../lib/invoice/candidates";
 import { type Question, QUESTION_REASONS, reasonOf, toQuestions } from "../lib/invoice/questions";
 import type { InvoiceRefs, LineRef } from "../lib/invoice/schema";
-import type { LedgerEntry } from "../lib/ledger/lookup";
+import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import type { Transcript } from "../lib/stt/types";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const ledger = JSON.parse(readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8")) as LedgerEntry[];
+const ledger = ledgerEntries(parseLedgerBook(JSON.parse(readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8"))));
 const transcripts = JSON.parse(
   readFileSync(join(ROOT, "tests/fixtures/tire-transcripts.json"), "utf8"),
 ) as Transcript[];
@@ -381,7 +381,7 @@ test("reasonOf: resolve・price・check の確認事項の文言を、その他�
     [{ lineIndex: 0, item: "x", field: "qty", message: "「x」の数量 0.4本 が整数でない（数量が整数でない）" }, "qty"],
     [{ lineIndex: 0, item: "x", field: "unitPrice", message: "「x」の単価が料金表に無い" }, "unitPrice"],
     [{ lineIndex: 0, item: "x", field: "unit", message: "「x」の単位が発話（台）と料金表（本）で違う" }, "unit"],
-    [{ lineIndex: 0, item: "x", field: "item", message: "「x」は料金表の 2 つ以上の項目に当たる（別名があいまい）" }, "ledger"],
+    [{ lineIndex: 0, item: "x", field: "item", message: "「x」は料金表の 2 つ以上の項目に当たる（別名があいまい）" }, "choice"],
     [{ lineIndex: 0, item: "x", field: "item", message: "「x」の行が 2 つある（同じ作業を二重に請求していないか）" }, "ledger"],
     [{ lineIndex: -1, item: "x", field: "total", message: "「合計7000円」（言った合計と計算が違う: 計算は 6600 円）" }, "total"],
     [{ lineIndex: 0, item: "x", field: "line", message: "「x」の行が前の行と同じ発話の箇所を指している（同じ根拠）" }, "other"],

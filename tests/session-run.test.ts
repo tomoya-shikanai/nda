@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { after, before, test } from "node:test";
 import { type Candidate, enumerateCandidates } from "../lib/invoice/candidates";
 import type { InvoiceRefs, LineRef } from "../lib/invoice/schema";
-import type { LedgerEntry } from "../lib/ledger/lookup";
+import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { type Extractor, startSession } from "../lib/session/run";
 import { type Answer, latestSession, newSession, readSession, type Session, SESSION_STATES, transition } from "../lib/session/store";
 import { SAY, toMonitorView, VOICE_CREDIT } from "../lib/session/view";
@@ -19,7 +19,7 @@ import type { Transcript } from "../lib/stt/types";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const LEDGER_PATH = join(ROOT, "tests/fixtures/tire-ledger.json");
-const ledger = JSON.parse(readFileSync(LEDGER_PATH, "utf8")) as LedgerEntry[];
+const ledger = ledgerEntries(parseLedgerBook(JSON.parse(readFileSync(LEDGER_PATH, "utf8"))));
 const transcripts = JSON.parse(
   readFileSync(join(ROOT, "tests/fixtures/tire-transcripts.json"), "utf8"),
 ) as Transcript[];

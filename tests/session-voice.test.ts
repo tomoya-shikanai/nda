@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, test } from "node:test";
 import { enumerateCandidates } from "../lib/invoice/candidates";
-import type { LedgerEntry } from "../lib/ledger/lookup";
+import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { type Extractor, startSession } from "../lib/session/run";
 import { newSession, readSession, type Session, transition, writeSession } from "../lib/session/store";
 import { answerUtterance, routeVoice } from "../lib/session/voice";
@@ -19,7 +19,7 @@ import type { Transcript } from "../lib/stt/types";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const LEDGER_PATH = join(ROOT, "tests/fixtures/tire-ledger.json");
-const ledger = JSON.parse(readFileSync(LEDGER_PATH, "utf8")) as LedgerEntry[];
+const ledger = ledgerEntries(parseLedgerBook(JSON.parse(readFileSync(LEDGER_PATH, "utf8"))));
 const KEY = "sk-fake-key-値-voice";
 
 const made: string[] = [];
