@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 他のエージェントの作業コピー（ビルド成果物を含む）
+    ".claude/worktrees/**",
   ]),
 ]);
 
