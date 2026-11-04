@@ -53,5 +53,5 @@ export function assembleInvoice(
 /** 文字起こしから明細を作る（Claude を 1 回呼ぶ）。 */
 export async function buildInvoice(t: Transcript, ledger: LedgerEntry[]): Promise<AssembledInvoice> {
   const out = await extractInvoice(t, ledger);
-  return assembleInvoice({ candidates: out.candidates, ...addAmbiguousLines(out, ledger) }, t, ledger);
+  return assembleInvoice({ candidates: out.candidates, ...addAmbiguousLines(out, t, ledger) }, t, ledger);
 }

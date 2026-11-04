@@ -79,7 +79,7 @@ export type ResolvedInvoice = {
  * 正規化後の発話 n の [start, end) を含む文の範囲（「。」「！」「？」「!」「?」と発話の端で区切る）。
  * 範囲の末尾が区切りの字なら、そこで文を閉じる（次の文へ広げない）。
  */
-function sentenceAt(n: string, start: number, end: number): { start: number; end: number } {
+export function sentenceAt(n: string, start: number, end: number): { start: number; end: number } {
   let s = start;
   while (s > 0 && !SENTENCE_BREAK.test(n[s - 1])) s--;
   let e = end;

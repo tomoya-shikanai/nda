@@ -57,7 +57,7 @@ async function extractWithCost(
 function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[], c: { customerRequired: boolean; customerId: string | null }) {
   const { candidates } = out;
   // 言い換えの言葉の行を補う（足した参照も保存する。答えの後の組み直しが同じ行を作るため）
-  const refs = addAmbiguousLines(out, ledger);
+  const refs = addAmbiguousLines(out, t, ledger);
   const invoice = assembleInvoice({ candidates, ...refs }, t, ledger);
   const questions = withCustomerQuestion(toQuestions(invoice, candidates, t, ledger), c);
   return { candidates, refs, invoice, questions };

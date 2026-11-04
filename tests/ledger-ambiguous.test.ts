@@ -135,7 +135,7 @@ test("addAmbiguousLines: モデルが行にしなかった言い換えの言葉�
   assert.equal(item.ledgerItem, undefined);
   const refs = { candidates: cs, lines: [] as LineRef[], negations: [] };
   const before = structuredClone(refs);
-  const out = addAmbiguousLines(refs, ledger);
+  const out = addAmbiguousLines(refs, t, ledger);
   assert.deepEqual(refs, before);
   assert.equal(out.lines.length, 1);
   assert.equal(out.lines[0].item, item.id);
@@ -154,22 +154,23 @@ test("addAmbiguousLines: モデルが行にしなかった言い換えの言葉�
     ...over,
   });
   // モデルが行にした（ID でも、発話の語でも）
-  assert.equal(addAmbiguousLines({ candidates: cs, lines: [ref({ qty: qty.id })], negations: [] }, ledger).lines.length, 1);
-  assert.equal(addAmbiguousLines({ candidates: cs, lines: [ref({ item: { seg: 0, text: "タイヤ交換" } })], negations: [] }, ledger).lines.length, 1);
+  assert.equal(addAmbiguousLines({ candidates: cs, lines: [ref({ qty: qty.id })], negations: [] }, t, ledger).lines.length, 1);
+  assert.equal(addAmbiguousLines({ candidates: cs, lines: [ref({ item: { seg: 0, text: "タイヤ交換" } })], negations: [] }, t, ledger).lines.length, 1);
   // 否定の文
-  assert.equal(addAmbiguousLines({ candidates: cs, lines: [], negations: [{ seg: 0, text: "タイヤ交換4本。" }] }, ledger).lines.length, 0);
+  assert.equal(addAmbiguousLines({ candidates: cs, lines: [], negations: [{ seg: 0, text: "タイヤ交換4本。" }] }, t, ledger).lines.length, 0);
   // 同じ発話に選択肢の品目の行（「タイヤ交換、脱着4本」）
   const t2 = fict(["タイヤ交換、脱着4本。"]);
   const cs2 = enumerateCandidates(t2, ledger);
   const d = cs2.find((c) => c.kind === "item" && c.ledgerItem === "タイヤ脱着");
   assert.ok(d);
-  assert.equal(addAmbiguousLines({ candidates: cs2, lines: [ref({ item: d.id })], negations: [] }, ledger).lines.length, 1);
+  assert.equal(addAmbiguousLines({ candidates: cs2, lines: [ref({ item: d.id })], negations: [] }, t2, ledger).lines.length, 1);
   // ほかの行が使った数量は使わない
-  const cs3 = enumerateCandidates(fict(["タイヤ交換4本、バランスも。"]), ledger);
+  const t3 = fict(["タイヤ交換4本、バランスも。"]);
+  const cs3 = enumerateCandidates(t3, ledger);
   const b = cs3.find((c) => c.kind === "item" && c.ledgerItem === "ホイールバランス");
   const q3 = cs3.find((c) => c.kind === "qty");
   assert.ok(b && q3);
-  const r3 = addAmbiguousLines({ candidates: cs3, lines: [ref({ item: b.id, qty: q3.id })], negations: [] }, ledger);
+  const r3 = addAmbiguousLines({ candidates: cs3, lines: [ref({ item: b.id, qty: q3.id })], negations: [] }, t3, ledger);
   assert.equal(r3.lines.length, 2);
   assert.equal(r3.lines[1].qty, null);
 });
@@ -255,4 +256,26 @@ test("モデルが言い換えの言葉を行にした場合も同じ質問。�
   const plain = await startIn(["脱着4本。"]);
   assert.equal(plain.invoice?.lines.length, 0, "料金表の言葉はモデルが行にしなければ補わない（条件 15 の質問のまま）");
   assert.ok(plain.questions.every((q) => q.reason !== "choice"));
+});
+
+test("Codex 指摘 3: 言い換えの行の数量は同じ文の中だけ。「タイヤ交換した。倉庫にはタイヤ4本ある。」は本数を聞き、「脱着」だけで承認待ちにならない", async () => {
+  const t = fict(["タイヤ交換した。倉庫にはタイヤ4本ある。"]);
+  const cs = enumerateCandidates(t, ledger);
+  const out = addAmbiguousLines({ candidates: cs, lines: [], negations: [] }, t, ledger);
+  assert.equal(out.lines.length, 1);
+  assert.equal(out.lines[0].qty, null);
+  // 同じ文なら読点をまたいでも取る
+  const t2 = fict(["タイヤ交換、4本。"]);
+  const cs2 = enumerateCandidates(t2, ledger);
+  assert.equal(addAmbiguousLines({ candidates: cs2, lines: [], negations: [] }, t2, ledger).lines[0].qty, cs2.find((c) => c.kind === "qty")?.id);
+
+  const s0 = await startIn(["タイヤ交換した。倉庫にはタイヤ4本ある。"]);
+  assert.equal(s0.invoice?.lines[0].qty, null);
+  const s1 = answer(s0, "脱着");
+  assert.equal(s1.invoice?.lines[0].item, "タイヤ脱着");
+  assert.equal(toMonitorView(s1).awaitingApproval, false);
+  // 別の文の 4本 は使われない数として確かめる（数量は父の答えで入れる）
+  assert.equal(s1.invoice?.lines[0].qty, null);
+  assert.ok(["qty", "correction"].includes(s1.questions[0].reason), s1.questions[0].text);
+  assert.equal(answer(s1, "請求書頼む").status, "asking");
 });
