@@ -27,6 +27,12 @@ export const CORRECTION_CUES = ["いや", "やっぱり", "じゃなくて", "�
 /** 条件 18・19 で見る、行が使った候補の種類。 */
 const NEGATION_SPAN_KINDS = new Set<CandidateKind>(["item", "qty", "unitPrice", "amount", "bareNumber"]);
 
+/** 言い直しの訂正前・訂正後に指せる候補の種類（数だけ）。extract.ts の refSchema と同じ。 */
+export const CORRECTION_KINDS = new Set<CandidateKind>(["qty", "bareNumber", "unitPrice", "amount"]);
+
+/** 1 つずつ数える単位。この単位の数量が整数でなければ確認事項にする（「0.4本」）。セット・式などは見ない。 */
+const COUNT_UNITS = new Set(["本", "個", "台", "輪", "枚", "つ", "箇所", "か所", "ヶ所", "回"]);
+
 /** 文の区切り。発話の終わりも文の終わり。「、」では切らない。 */
 const SENTENCE_BREAK = /[。！？!?]/;
 
@@ -43,13 +49,17 @@ export type ResolvedInvoice = {
   unused: Candidate[];
 };
 
-/** 正規化後の発話 n の [start, end) を含む文（「。」「！」「？」「!」「?」と発話の端で区切った範囲）。 */
-function sentenceAt(n: string, start: number, end: number): string {
+/**
+ * 正規化後の発話 n の [start, end) を含む文の範囲（「。」「！」「？」「!」「?」と発話の端で区切る）。
+ * 範囲の末尾が区切りの字なら、そこで文を閉じる（次の文へ広げない）。
+ */
+function sentenceAt(n: string, start: number, end: number): { start: number; end: number } {
   let s = start;
   while (s > 0 && !SENTENCE_BREAK.test(n[s - 1])) s--;
   let e = end;
+  if (e > start && SENTENCE_BREAK.test(n[e - 1])) e--;
   while (e < n.length && !SENTENCE_BREAK.test(n[e])) e++;
-  return n.slice(s, e);
+  return { start: s, end: e };
 }
 
 export function resolveInvoice(
@@ -64,7 +74,8 @@ export function resolveInvoice(
   const negated = (sp: Span) => {
     const n = normSegs[sp.seg];
     if (n === undefined) return false;
-    const sentence = sentenceAt(n, sp.start, sp.end);
+    const r = sentenceAt(n, sp.start, sp.end);
+    const sentence = n.slice(r.start, r.end);
     return NEGATION_CUES.some((w) => sentence.includes(w));
   };
   /** 発話 a と b の時刻の隔たり（秒）。重なれば 0。 */
@@ -129,16 +140,19 @@ export function resolveInvoice(
     const qty = pick(ref.qty, "qty");
     const unitPrice = pick(ref.unitPrice, "unitPrice");
     const amount = pick(ref.amount, "amount");
-    /** 判定の根拠の ID。値には使わないので、候補にあるかだけを見る。 */
-    const known = (id: string | null): Candidate | null => {
+    /** 判定の根拠の ID。値には使わないので、候補にあるか（言い直しは数の種類か）だけを見る。 */
+    const known = (id: string | null, kinds?: Set<CandidateKind>): Candidate | null => {
       if (id === null) return null;
       const c = byId.get(id);
-      if (!c) invalid = true;
-      return c ?? null;
+      if (!c || (kinds && !kinds.has(c.kind))) {
+        invalid = true;
+        return null;
+      }
+      return c;
     };
     for (const e of ref.evidence) known(e);
-    const correctedFrom = known(ref.correctedFrom);
-    const correctedTo = known(ref.correctedTo);
+    const correctedFrom = known(ref.correctedFrom, CORRECTION_KINDS);
+    const correctedTo = known(ref.correctedTo, CORRECTION_KINDS);
     lineCands.push(
       [itemCand, qty, unitPrice, amount, correctedFrom, correctedTo].filter((c): c is Candidate => c !== null),
     );
@@ -171,6 +185,9 @@ export function resolveInvoice(
       confirmations.push({ lineIndex, item, field, message });
     if (invalid) add("line", `「${item}」の行に候補に無い・種類の違う参照がある（参照が不正）`);
     if (qty === null) add("qty", `「${item}」の数量が分からない`);
+    if (qty !== null && qty.value !== null && qty.unit !== null && COUNT_UNITS.has(qty.unit) && !Number.isInteger(qty.value)) {
+      add("qty", `「${item}」の数量 ${qty.text} が整数でない（数量が整数でない）`);
+    }
     if (itemWordMissing) add("item", `「${item}」は指した発話に無い（品目の語が発話に無い）`);
     if ([itemSpan, qty, unitPrice, amount].some((sp) => sp !== null && negated(sp))) {
       add("line", `「${item}」の行の文に否定の合図がある（否定）`);
@@ -186,10 +203,12 @@ export function resolveInvoice(
     if (shared) add("line", `「${item}」の行が前の行と同じ発話の箇所を指している（同じ根拠）`);
     // 条件 17: モデルが done 以外と判定した行
     if (ref.status === "negated") add("line", `「${item}」の行をモデルが否定・取り消し・断りと判定した（否定）`);
-    if (ref.status === "corrected") {
+    // 言い直しの訂正前・訂正後を書いたら、status によらず確かめる（モデルが言い直しに気づいたのに done にした場合）
+    if (ref.status === "corrected" || ref.correctedFrom !== null || ref.correctedTo !== null) {
       const from = correctedFrom?.text ?? "不明";
       const to = correctedTo?.text ?? "不明";
-      add("line", `「${item}」の行をモデルが言い直しと判定した（言い直し: ${from} → ${to}）`);
+      const judged = ref.status === "corrected" ? "行をモデルが言い直しと判定した" : "行にモデルが言い直しの訂正前・訂正後を書いた";
+      add("line", `「${item}」の${judged}（言い直し: ${from} → ${to}）`);
     }
     // unsure と、型の外の値（status が無い等）は安全側に倒して確かめる
     if (ref.status !== "done" && ref.status !== "negated" && ref.status !== "corrected") add("line", `「${item}」の行をモデルが確かでないと判定した（確かでない）`);
@@ -232,35 +251,46 @@ export function resolveInvoice(
     if (c.kind === "unparsedNumber") global(c.text, "qty", `「${c.text}」（数が読めない）`);
   }
 
-  // 条件 15: 料金表の語が出たのに、その正式名の行が無い（否定の文の語は除く）
+  const inside = (sp: Span, r: Span) => sp.seg === r.seg && sp.start >= r.start && sp.end <= r.end;
+  const lineAdd = (lineIndex: number, field: Confirmation["field"], message: string) =>
+    confirmations.push({ lineIndex, item: lines[lineIndex].item, field, message });
+
+  // モデルが挙げた否定・取り消し・断りの文の範囲。指した発話の中の一致を全部探し、それぞれを文全体に広げる
+  // （モデルが文の一部だけ写した「替えてない」も、同じ文が 2 回ある 2 回目も拾う）
+  const negRanges: { neg: NegatedSentence; range: Span }[] = [];
+  for (const neg of negations) {
+    const needle = normalizeText(neg.text);
+    const inRange = Number.isInteger(neg.seg) && neg.seg >= 0 && neg.seg < normSegs.length;
+    const n = inRange ? normSegs[neg.seg] : "";
+    let found = false;
+    for (let at = needle === "" ? -1 : n.indexOf(needle); at >= 0; at = n.indexOf(needle, at + 1)) {
+      found = true;
+      negRanges.push({ neg, range: { seg: neg.seg, ...sentenceAt(n, at, at + needle.length) } });
+    }
+    if (!found) global(neg.text, "line", `「${neg.text}」（否定の文が発話に無い）`);
+  }
+
+  // 条件 15: 料金表の語が出たのに、その正式名の行が無い（否定の合図の文の語と、モデルが挙げた否定の文の語は除く）
   const lineNames = new Set(lines.map((l) => findEntry(ledger, l.item)?.item ?? l.item));
   const reported = new Set<string>();
   for (const c of candidates) {
     if (c.kind !== "item" || c.ledgerItem === undefined || negated(c)) continue;
+    if (negRanges.some(({ range }) => inside(c, range))) continue;
     if (lineNames.has(c.ledgerItem) || reported.has(c.ledgerItem)) continue;
     reported.add(c.ledgerItem);
     global(c.ledgerItem, "item", `「${c.text}」（${c.ledgerItem}）と言った（料金表の品目の語が出たのに行が無い）`);
   }
 
-  const inside = (sp: Span, r: Span) => sp.seg === r.seg && sp.start >= r.start && sp.end <= r.end;
-  const lineAdd = (lineIndex: number, field: Confirmation["field"], message: string) =>
-    confirmations.push({ lineIndex, item: lines[lineIndex].item, field, message });
-
-  // 条件 18: モデルが挙げた否定・取り消し・断りの文に、行が使った候補・品目の語が入る
+  // 条件 18: モデルが挙げた否定・取り消し・断りの文に、行が使った候補・品目の語が入る（1 つの文につき 1 件）
   for (const neg of negations) {
-    const needle = normalizeText(neg.text);
-    const inRange = Number.isInteger(neg.seg) && neg.seg >= 0 && neg.seg < normSegs.length;
-    const at = inRange && needle !== "" ? normSegs[neg.seg].indexOf(needle) : -1;
-    if (at < 0) {
-      global(neg.text, "line", `「${neg.text}」（否定の文が発話に無い）`);
-      continue;
-    }
-    const range: Span = { seg: neg.seg, start: at, end: at + needle.length };
+    const ranges = negRanges.filter((x) => x.neg === neg).map((x) => x.range);
     for (let li = 0; li < lines.length; li++) {
       const word = lineWords[li];
-      const hit =
-        lineCands[li].some((c) => NEGATION_SPAN_KINDS.has(c.kind) && inside(c, range)) ||
-        (word !== null && inside(word, range));
+      const hit = ranges.some(
+        (range) =>
+          lineCands[li].some((c) => NEGATION_SPAN_KINDS.has(c.kind) && inside(c, range)) ||
+          (word !== null && inside(word, range)),
+      );
       if (hit) lineAdd(li, "line", `「${lines[li].item}」の行がモデルの挙げた否定の文「${neg.text}」に入る（否定）`);
     }
   }

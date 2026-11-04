@@ -140,12 +140,27 @@ export function normalizeText(s: string): string {
 /** 正規化後の文字列の中の数字の並び。value は読めなければ null。 */
 type NumRun = { start: number; end: number; value: number | null };
 
+const DIGIT_AT = new RegExp(NUM_CHAR);
+
+/**
+ * 数字の並びを列挙する。並びの直前が「.」（「.4本」）、または直後が「.」で次が数字でない（「4.本」）なら、
+ * 小数点の片側が欠けた読めない並びとして、その「.」を範囲に含め value を null にする（「0.4」「4」と推測しない）。
+ */
 function numberRuns(n: string): NumRun[] {
-  return [...n.matchAll(NUM_RUN)].map((m) => ({
-    start: m.index,
-    end: m.index + m[0].length,
-    value: parseRun(m[0]),
-  }));
+  return [...n.matchAll(NUM_RUN)].map((m) => {
+    let start = m.index;
+    let end = m.index + m[0].length;
+    let value = parseRun(m[0]);
+    if (n[start - 1] === ".") {
+      start--;
+      value = null;
+    }
+    if (n[end] === "." && !DIGIT_AT.test(n[end + 1] ?? "")) {
+      end++;
+      value = null;
+    }
+    return { start, end, value };
+  });
 }
 
 /** 位置 i から始まる単位（長いものを先に）。無ければ null。 */

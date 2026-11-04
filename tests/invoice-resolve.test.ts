@@ -562,6 +562,35 @@ test("条件 16: 数量と「1＋単位」の単価の単位が違えば「単�
 
 // --- (6) 入力を書き換えない ---
 
+test("D4: 「脱着.4本。」は数量を出さず、読めない数として確認事項（4本 と推測しない）", () => {
+  const t = rec([0, 2, "father", "脱着.4本。"]);
+  const cs = enumerateCandidates(t, ledger);
+  assert.ok(!cs.some((c) => c.kind === "qty"), JSON.stringify(cs));
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), null)], cs, t, ledger);
+  assert.ok(has(r.confirmations, "qty", "数が読めない", -1), JSON.stringify(r.confirmations));
+  assert.ok(has(r.confirmations, "qty", "数量が分からない", 0));
+});
+
+test("数量の小数: 本・個・台・輪・枚・つ・箇所・回 の数量が整数でなければ確認事項、セット・式は今のまま", () => {
+  for (const u of ["本", "個", "台", "輪", "枚", "つ", "箇所", "回"]) {
+    const t = rec([0, 2, "father", `脱着0.4${u}。`]);
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, `0.4${u}`))], cs, t, ledger);
+    assert.ok(has(r.confirmations, "qty", "整数でない", 0), `${u} ${JSON.stringify(r.confirmations)}`);
+  }
+  for (const u of ["セット", "式"]) {
+    const t = rec([0, 2, "father", `脱着0.5${u}。`]);
+    const cs = enumerateCandidates(t, ledger);
+    const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, `0.5${u}`))], cs, t, ledger);
+    assert.ok(!has(r.confirmations, "qty", "整数でない"), `${u} ${JSON.stringify(r.confirmations)}`);
+  }
+  // 対照: 「4.0本」は整数として読む
+  const t = rec([0, 2, "father", "脱着4.0本。"]);
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4.0本"))], cs, t, ledger);
+  assert.deepEqual(r.confirmations, []);
+});
+
 test("呼び出しの前後で参照・候補・文字起こし・料金表が変わらない", () => {
   const t = byId("tire-002");
   const cs = enumerateCandidates(t, ledger);

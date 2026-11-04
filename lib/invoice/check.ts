@@ -33,7 +33,9 @@ export function checkAmounts(priced: PricedInvoice, refs: LineRef[], candidates:
     }
   });
 
-  // 条件 14: 言った合計 ≠ 計算した合計。他の確認事項があれば照らさない（その確認事項で合計は出ない）
+  // 条件 14: 言った合計 ≠ 計算した合計。行の確認事項（前の段のものと条件 13）があれば照らさない（その確認事項で合計は出ない）。
+  // 税込みの合計の確認事項はここで数えない: 行の金額は確かなので、税込みと一緒に言った税抜きの合計は照らす
+  // （「合計6600円、税込みで7260円」は税込みの 1 件だけ、「合計6000円、税込みで…」は 2 件）。
   const others = priced.confirmations.length + out.length;
   const amounts = priced.lines.map((l) => l.amount);
   const computed =
@@ -44,7 +46,7 @@ export function checkAmounts(priced: PricedInvoice, refs: LineRef[], candidates:
       out.push({
         lineIndex: -1,
         item: c.text,
-        field: "unitPrice",
+        field: "total",
         message: `「${c.text}」（税率が決まっていないので、税込みの合計は照らせない）`,
       });
       continue;
@@ -53,7 +55,7 @@ export function checkAmounts(priced: PricedInvoice, refs: LineRef[], candidates:
       out.push({
         lineIndex: -1,
         item: c.text,
-        field: "unitPrice",
+        field: "total",
         message: `「${c.text}」（言った合計と計算が違う: 計算は ${computed} 円）`,
       });
     }

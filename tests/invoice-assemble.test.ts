@@ -174,13 +174,13 @@ test("(3) 条件 14: 合計6600円は確認事項 0 件で total 6600、6000円�
   assert.equal(ok.total, 6600);
 
   const ng = totalCase("合計6000円。");
-  assert.ok(has(ng.confirmations, "unitPrice", "言った合計と計算が違う", -1), JSON.stringify(ng.confirmations));
+  assert.ok(has(ng.confirmations, "total", "言った合計と計算が違う", -1), JSON.stringify(ng.confirmations));
   assert.equal(ng.total, null);
   // 行の金額は消さない（確認事項は行に付かない）
   assert.deepEqual(ng.lines.map((l) => l.amount), [2200, 4400]);
 
   const tax = totalCase("税込みで7260円。");
-  assert.ok(has(tax.confirmations, "unitPrice", "税込みの合計は照らせない", -1), JSON.stringify(tax.confirmations));
+  assert.ok(has(tax.confirmations, "total", "税込みの合計は照らせない", -1), JSON.stringify(tax.confirmations));
   assert.equal(tax.total, null);
 });
 
@@ -203,7 +203,20 @@ test("条件 14: 他の確認事項があれば合計は照らさない、税込
     t2,
     ledger,
   );
-  assert.ok(has(r2.confirmations, "unitPrice", "税込みの合計は照らせない", -1));
+  assert.ok(has(r2.confirmations, "total", "税込みの合計は照らせない", -1));
+});
+
+test("条件 14: 税込みと税抜きの合計を両方言えば、税込みの確認事項は数えずに税抜きの合計を照らす（今の振る舞いを固定）", () => {
+  const ok = totalCase("合計6600円、税込みで7260円。");
+  assert.deepEqual(
+    ok.confirmations.map((c) => [c.lineIndex, c.field, c.item]),
+    [[-1, "total", "税込みで7260円"]],
+    JSON.stringify(ok.confirmations),
+  );
+  const ng = totalCase("合計6000円、税込みで7260円。");
+  assert.ok(has(ng.confirmations, "total", "税込みの合計は照らせない", -1), JSON.stringify(ng.confirmations));
+  assert.ok(has(ng.confirmations, "total", "言った合計と計算が違う: 計算は 6600 円", -1), JSON.stringify(ng.confirmations));
+  assert.equal(ng.total, null);
 });
 
 test("通し: 確認事項は lineIndex 順、確認事項の付いた行は amount null", () => {

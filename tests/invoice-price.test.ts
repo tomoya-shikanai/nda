@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { priceInvoice } from "../lib/invoice/price";
 import type { InvoiceDraft, InvoiceLine } from "../lib/invoice/schema";
-import type { LedgerEntry } from "../lib/ledger/lookup";
+import { type LedgerEntry, lookup } from "../lib/ledger/lookup";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const ledger = JSON.parse(
@@ -144,4 +144,30 @@ test("呼び出しの前後で入力の明細と料金表が変わらない", ()
     assert.deepEqual(d, before);
     assert.deepEqual(ledger, ledgerBefore);
   }
+});
+
+// --- 料金表の引き方（旧 tests/invoice-build.test.ts の指摘 7 から移した回帰試験） ---
+
+test("指摘 7: 先頭の項目の別名「タイヤ脱着」より、後ろの項目の正式名「タイヤ脱着」を優先する", () => {
+  const collided: LedgerEntry[] = [
+    { item: "タイヤ組替", aliases: ["タイヤ脱着"], price: 1650, unit: "本", source: "a" },
+    ...ledger,
+  ];
+  const r = priceInvoice(
+    { lines: [line("adv", "タイヤ脱着", 4, "本", null, 0, 2, "タイヤ脱着4本。")] },
+    collided,
+  );
+  assert.equal(r.lines[0].ledger.price, 550);
+  assert.deepEqual(r.confirmations, []);
+  assert.equal(r.total, 2200);
+});
+
+test("指摘 7: 同じ正式名が 2 項目にあれば推測で選ばず found:false、正式名で 1 つに決まる語はその値段", () => {
+  const ambiguous: LedgerEntry[] = [
+    ...ledger,
+    { item: "バランスウェイト", aliases: ["バランス"], price: 220, unit: "個", source: "a" },
+  ];
+  assert.equal(lookup(ambiguous, "ホイールバランス").price, 1100);
+  const twins: LedgerEntry[] = [...ledger, { ...ledger[1], price: 600 }];
+  assert.deepEqual(lookup(twins, "タイヤ脱着"), { item: "タイヤ脱着", found: false, price: null, unit: null, source: null });
 });

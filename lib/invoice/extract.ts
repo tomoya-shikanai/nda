@@ -9,6 +9,7 @@ import { claude, MODEL_MAIN } from "../claude";
 import type { LedgerEntry } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 import { type Candidate, type CandidateKind, enumerateCandidates } from "./candidates";
+import { CORRECTION_KINDS } from "./resolve";
 import { type InvoiceRefs, NegatedSentence } from "./schema";
 
 const SYSTEM = `あなたは青森市の自動車整備工場で、父（整備士）の声から請求の明細の参照を作る書記です。
@@ -37,6 +38,8 @@ export function refSchema(candidates: Candidate[]) {
   const word = z.object({ seg: z.number(), text: z.string() });
   const itemEnum = idEnum(ids("item"));
   const all = idEnum(candidates.map((c) => c.id));
+  /** 言い直しの訂正前・訂正後は数の候補だけ（品目の ID を指させない）。 */
+  const nums = idEnum(candidates.filter((c) => CORRECTION_KINDS.has(c.kind)).map((c) => c.id));
   const line = z.object({
     item: (itemEnum ? z.union([itemEnum, word]) : word).describe(
       "品目。item 候補の ID か、料金表に無い品目なら発話の添字とその語（原文のまま）",
@@ -48,8 +51,8 @@ export function refSchema(candidates: Candidate[]) {
       .enum(["done", "negated", "corrected", "unsure"])
       .describe("done やった／negated 否定・取り消し・断り／corrected 言い直し／unsure 確かでない"),
     evidence: (all ? z.array(all) : z.array(z.string()).max(0)).describe("判定の根拠の候補 ID。done 以外のとき入れる"),
-    correctedFrom: (all ? all.nullable() : z.null()).describe("言い直しの訂正前の数の候補 ID。言い直しでなければ null"),
-    correctedTo: (all ? all.nullable() : z.null()).describe("言い直しの訂正後の数の候補 ID。言い直しでなければ null"),
+    correctedFrom: (nums ? nums.nullable() : z.null()).describe("言い直しの訂正前の数の候補 ID。言い直しでなければ null"),
+    correctedTo: (nums ? nums.nullable() : z.null()).describe("言い直しの訂正後の数の候補 ID。言い直しでなければ null"),
   });
   return z.object({
     lines: z.array(line).describe("発話で言った作業だけ。言っていない作業は入れない"),

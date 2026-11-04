@@ -180,16 +180,28 @@ test("抽出: 存在しない ID・種類の違う ID を返すと throw、parse
   const cs = enumerateCandidates(t, ledger);
   const good = goodRefs(t, cs);
   rawContent = null;
-  for (const bad of [
-    { ...good, lines: [ref("i1", "q99")] },
-    { ...good, lines: [ref("i99", "q1")] },
-    { ...good, lines: [ref("i1", "i1")] }, // qty 欄に item の ID
-    { ...good, lines: [ref("i1", "q1", { evidence: ["q99"] })] },
-    { ...good, lines: [ref("i1", "q1", { correctedTo: "q99" })] },
-    { ...good, lines: [ref("i1", "q1", { status: "maybe" as LineRef["status"] })] },
-  ]) {
+  // [出力, zod が落とした欄]。SDK は「Failed to parse structured output: <zod のエラー>」で throw する
+  const cases: [InvoiceRefs, string][] = [
+    [{ ...good, lines: [ref("i1", "q99")] }, "qty"],
+    [{ ...good, lines: [ref("i99", "q1")] }, "item"],
+    [{ ...good, lines: [ref("i1", "i1")] }, "qty"], // qty 欄に item の ID
+    [{ ...good, lines: [ref("i1", "q1", { evidence: ["q99"] })] }, "evidence"],
+    [{ ...good, lines: [ref("i1", "q1", { correctedTo: "q99" })] }, "correctedTo"],
+    [{ ...good, lines: [ref("i1", "q1", { correctedFrom: "i1" })] }, "correctedFrom"], // 言い直しの欄に品目の ID
+    [{ ...good, lines: [ref("i1", "q1", { status: "maybe" as LineRef["status"] })] }, "status"],
+  ];
+  for (const [bad, field] of cases) {
     reply = bad;
-    await assert.rejects(extractInvoice(t, ledger), JSON.stringify(bad.lines));
+    await assert.rejects(
+      extractInvoice(t, ledger),
+      (e: unknown) => {
+        assert.ok(e instanceof Error, String(e));
+        assert.match(e.message, /^Failed to parse structured output: /, JSON.stringify(bad.lines));
+        assert.ok(e.message.includes(`"${field}"`), `${field}: ${e.message}`);
+        return true;
+      },
+      JSON.stringify(bad.lines),
+    );
   }
   rawContent = [];
   await assert.rejects(extractInvoice(t, ledger), /解釈できない/);
@@ -292,6 +304,48 @@ test("条件 17: evidence・correctedFrom・correctedTo の ID が候補に無�
   }
 });
 
+test("言い直し（D3）: status が done でも correctedFrom・correctedTo を書いた行は「言い直し」（訂正前・訂正後の値つき）", () => {
+  const t = seq("脱着4本。", "訂正、2本。", "バランスも。");
+  const cs = enumerateCandidates(t, ledger);
+  const q4 = id(cs, "qty", 0, "4本");
+  const q2 = id(cs, "qty", 1, "2本");
+  const lines = [
+    ref(id(cs, "item", 0, "脱着"), q4, { evidence: [q4, q2], correctedFrom: q4, correctedTo: q2 }),
+    ref(id(cs, "item", 2, "バランス"), q2),
+  ];
+  const r = resolveInvoice(lines, cs, t, ledger);
+  assert.ok(has(r.confirmations, "line", "言い直し: 4本 → 2本", 0), JSON.stringify(r.confirmations));
+  // 片方だけでも確認事項
+  for (const over of [{ correctedFrom: q4 }, { correctedTo: q2 }]) {
+    const r1 = resolveInvoice([{ ...lines[0], ...over, evidence: [] }, lines[1]], cs, t, ledger);
+    assert.ok(has(r1.confirmations, "line", "言い直し", 0), JSON.stringify(over));
+  }
+  // 両方 null の done の行は言い直しにならない（対照）
+  const r2 = resolveInvoice([ref(id(cs, "item", 0, "脱着"), q4), lines[1]], cs, t, ledger);
+  assert.ok(!r2.confirmations.some((c) => c.lineIndex === 0 && c.message.includes("言い直し:")), JSON.stringify(r2.confirmations));
+});
+
+test("言い直し（D3b）: correctedFrom・correctedTo に品目の ID は「参照が不正」、refSchema も数の種類の ID だけ", () => {
+  const t = seq("脱着4本、1本550円。", "脱着4本で2200円、いや2。");
+  const cs = enumerateCandidates(t, ledger);
+  const i1 = id(cs, "item", 0, "脱着");
+  const q1 = id(cs, "qty", 0, "4本");
+  for (const over of [{ correctedFrom: i1, correctedTo: q1 }, { correctedFrom: q1, correctedTo: i1 }]) {
+    const r = resolveInvoice([ref(i1, q1, { status: "corrected", ...over })], cs, t, ledger);
+    assert.ok(has(r.confirmations, "line", "参照が不正", 0), JSON.stringify(over));
+  }
+  const s = refSchema(cs);
+  const ok = (over: Partial<LineRef>) => s.safeParse({ lines: [ref(i1, q1, over)], negations: [] }).success;
+  for (const c of cs) {
+    const num = ["qty", "bareNumber", "unitPrice", "amount"].includes(c.kind);
+    assert.equal(ok({ correctedFrom: c.id }), num, `correctedFrom ${c.id} ${c.kind}`);
+    assert.equal(ok({ correctedTo: c.id }), num, `correctedTo ${c.id} ${c.kind}`);
+    // evidence は全種類のまま
+    assert.ok(ok({ evidence: [c.id] }), `evidence ${c.id}`);
+  }
+  assert.ok(cs.some((c) => c.kind === "bareNumber") && cs.some((c) => c.kind === "amount") && cs.some((c) => c.kind === "unitPrice"));
+});
+
 // --- (7) 条件 18 ---
 
 /** Codex の 2 回目のレビューの例（架空）と、その文で作る行の品目。 */
@@ -323,8 +377,8 @@ test("条件 18: Codex の 2 回目の例は、行を negated にしても、don
   }
 });
 
-test("条件 18: 否定の文の一部（文の中の語句）を挙げても、範囲に入る行は「否定」", () => {
-  const t = seq("今日は脱着4本は替えてない、バランスだけ。");
+test("条件 18: 否定の文の一部（文の中の語句）を挙げても、文全体に広げて、その文に入る行は「否定」、別の文の行は出ない", () => {
+  const t = seq("今日は脱着4本は替えてない。バランスだけ。");
   const cs = enumerateCandidates(t, ledger);
   const r = resolveInvoice(
     [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本")), ref(id(cs, "item", 0, "バランス"), null)],
@@ -335,6 +389,66 @@ test("条件 18: 否定の文の一部（文の中の語句）を挙げても、
   );
   assert.ok(has(r.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r.confirmations));
   assert.ok(!has(r.confirmations, "line", "モデルの挙げた否定の文", 1), JSON.stringify(r.confirmations));
+});
+
+test("条件 18（D1）: 「脱着4本は替えてない。」で negations が「替えてない」だけでも、文全体に広げて「否定」", () => {
+  const t = seq("脱着4本は替えてない。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], cs, t, ledger, [
+    { seg: 0, text: "替えてない" },
+  ]);
+  assert.ok(has(r.confirmations, "line", "モデルの挙げた否定の文「替えてない」", 0), JSON.stringify(r.confirmations));
+});
+
+test("条件 18（D1）: 「、」では切らないので、同じ文の「、」の後の品目の行も「否定」", () => {
+  const t = seq("今日は脱着4本は替えてない、バランスだけ。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice(
+    [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本")), ref(id(cs, "item", 0, "バランス"), null)],
+    cs,
+    t,
+    ledger,
+    [{ seg: 0, text: "替えてない" }],
+  );
+  assert.ok(has(r.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r.confirmations));
+  assert.ok(has(r.confirmations, "line", "モデルの挙げた否定の文", 1), JSON.stringify(r.confirmations));
+});
+
+test("条件 18（D2）: 同じ否定の文が 2 回あれば、2 回目の文の品目を使う行も「否定」（1 つの文につき 1 件）", () => {
+  const t = seq("バランスは大丈夫です。バランスは大丈夫です。4本。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([ref(id(cs, "item", 0, "バランス", 1), id(cs, "qty", 0, "4本"))], cs, t, ledger, [
+    { seg: 0, text: "バランスは大丈夫です。" },
+  ]);
+  const neg = r.confirmations.filter((c) => c.message.includes("モデルの挙げた否定の文"));
+  assert.equal(neg.length, 1, JSON.stringify(r.confirmations));
+  assert.equal(neg[0].lineIndex, 0);
+  // 末尾の「。」まで写した文は、次の文「4本。」へ広げない（数量だけの行は否定の文に入らない）
+  const t2 = seq("バランスは大丈夫です。脱着4本。");
+  const c2 = enumerateCandidates(t2, ledger);
+  const r2 = resolveInvoice([ref(id(c2, "item", 0, "脱着"), id(c2, "qty", 0, "4本"))], c2, t2, ledger, [
+    { seg: 0, text: "バランスは大丈夫です。" },
+  ]);
+  assert.ok(!has(r2.confirmations, "line", "モデルの挙げた否定の文"), JSON.stringify(r2.confirmations));
+});
+
+test("条件 15: モデルが行にせず否定の文に挙げた品目は「行が無い」にしない、否定の文の外の品目は今のまま", () => {
+  const t = seq("バランスは大丈夫です。");
+  const cs = enumerateCandidates(t, ledger);
+  const r = resolveInvoice([], cs, t, ledger, [{ seg: 0, text: "バランスは大丈夫です。" }]);
+  assert.deepEqual(r.confirmations, []);
+  // 一部だけ写しても文全体で除く
+  const r1 = resolveInvoice([], cs, t, ledger, [{ seg: 0, text: "大丈夫です" }]);
+  assert.deepEqual(r1.confirmations, []);
+  // negations が無ければ今のまま「行が無い」
+  const r2 = resolveInvoice([], cs, t, ledger, []);
+  assert.ok(has(r2.confirmations, "item", "料金表の品目の語が出たのに行が無い", -1), JSON.stringify(r2.confirmations));
+  // 別の文の品目は除かない
+  const t3 = seq("バランスは大丈夫です。脱着も。");
+  const c3 = enumerateCandidates(t3, ledger);
+  const r3 = resolveInvoice([], c3, t3, ledger, [{ seg: 0, text: "バランスは大丈夫です。" }]);
+  assert.ok(has(r3.confirmations, "item", "（タイヤ脱着）と言った", -1), JSON.stringify(r3.confirmations));
+  assert.ok(!has(r3.confirmations, "item", "（ホイールバランス）と言った"), JSON.stringify(r3.confirmations));
 });
 
 test("条件 18: negations の文が発話に無い・seg が範囲外なら lineIndex -1 の「否定の文が発話に無い」", () => {

@@ -12,8 +12,11 @@ export type PricedLine = InvoiceLine & {
 export type Confirmation = {
   lineIndex: number;
   item: string;
-  /** line は、行そのものが発話で確かめられない（resolveInvoice の確認事項）。lineIndex -1 は行に付かない事項。 */
-  field: "unitPrice" | "qty" | "unit" | "item" | "line";
+  /**
+   * line は、行そのものが発話で確かめられない（resolveInvoice の確認事項）。total は言った合計の照合（checkAmounts、lineIndex -1）。
+   * lineIndex -1 は行に付かない事項。
+   */
+  field: "unitPrice" | "qty" | "unit" | "item" | "line" | "total";
   message: string;
 };
 
