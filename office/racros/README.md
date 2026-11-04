@@ -1,7 +1,7 @@
 # RacroS III の履歴から、タイヤの伝票の傾向を集める
 
 事務所の Windows PC で動かす PowerShell（5.1）のスクリプトです。業務ソフト RacroS III の SQL Server を **読むだけ** で、過去のタイヤ交換の伝票から、請求書を作るときに使える傾向（よく使う作業と品番、サイズ、工賃、数量、季節、金額の幅、車種ごとの違い）を集めます。
-DB の構造は `docs/racros-schema.md` にあります。
+DB の構造は `docs/racros-schema.md` にあります。請求書づくりでの使い方は `docs/invoice-references.md` にあります。
 
 ## 守っていること
 

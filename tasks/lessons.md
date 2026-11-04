@@ -18,3 +18,8 @@
 - 2026-11-04 | pnpm 経由の起動では PATH に ~/.volta/bin が無く、`command -v node` が ~/.nvm の node を返して sandbox で読めず点検が落ちた。手で起動した点検は通っていた | pnpm 経由の起動では PATH が変わる。本番と同じ起動経路（`pnpm night`）で点検を試す
 - 2026-11-04 | 点検を 2 つ同時に流すと ../nda-probe の作業コピーがぶつかった | 点検は同時に動かすと作業コピーがぶつかる。ロック（mkdir）で防ぐ
 - 2026-11-04 | `git merge ... | tail -1 && pnpm check && git push` と繋ぎ、merge の失敗が tail で隠れて check と push まで進んだ（push する物が無く実害なし）。夜間ブランチと main の両方が progress.md に追記するので、merge のたびに衝突する（2 回目） | merge は単独で流し、終了コードを見てから次へ進む。progress.md の衝突は両方の行を残して解く
+- 2026-11-04 | Windows PowerShell 5.1 で BOM の無い `.ps1`・`.psm1` の日本語が化け、文字列の比較とエラーの文言が壊れた | 事務所の PC の PowerShell のスクリプトは UTF-8（BOM 付き）で保存する
+- 2026-11-04 | 正規表現を `.ToUpperInvariant()` で大文字にし、`\d` が `\D` に変わって銘柄の判定が全部外れた | 大文字小文字を無視するときは文字列を変えず、`(?i)` を付ける
+- 2026-11-04 | PowerShell で `SqlConnectionStringBuilder` の `.InitialCatalog` に代入すると "Keyword not supported" で落ちた（辞書として扱われる） | `$b['Initial Catalog']` のように空白入りのキー名で読み書きする
+- 2026-11-04 | 件数の集計で `sys.partitions` と `sys.columns` を同じ段で結合し、行数が列の数だけ掛け算になった | 件数と列は別の部分問い合わせで数えてから結合する
+- 2026-11-04 | 店の件数・割合を含む `docs/research.md` の追記が、コミットの自動の判定で止められた | 公開リポジトリには構造の事実だけを書き、店の数字は `data/private/` に置く
