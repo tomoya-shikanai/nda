@@ -39,7 +39,11 @@ export async function transcribeGemini(
     throw new Error(redact(`gemini-transcribe ${r.status} ${text.slice(0, 200)}`, opts.apiKey));
   }
   const j = (await r.json()) as { steps?: { type: string; content?: { type: string; text?: unknown }[] }[] };
-  const blocks = (j.steps ?? []).filter((s) => s.type === "model_output").flatMap((s) => s.content ?? []);
+  const outputs = (j.steps ?? []).filter((s) => s.type === "model_output");
+  if (outputs.some((s) => !Array.isArray(s.content))) {
+    throw new Error("gemini-transcribe の応答に content の無い model_output がある");
+  }
+  const blocks = outputs.flatMap((s) => s.content as { type: string; text?: unknown }[]);
   if (blocks.some((c) => typeof c.text !== "string")) {
     throw new Error("gemini-transcribe の応答に text の無いブロックがある");
   }

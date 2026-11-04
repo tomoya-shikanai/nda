@@ -247,8 +247,8 @@ export function answerSession(s: Session, utterance: Segment, ledger: LedgerEntr
   const kept = keptLines(s.refs.lines.length, s.answers);
   const line = q.lineIndex >= 0 ? s.invoice.lines[q.lineIndex] : undefined;
   let action = readAnswer(q, line, utterance, ledger, s.candidates);
-  // 客の声で行を取り消さない
-  if (action.kind === "drop" && speaker === "customer") action = unread("客の声");
+  // 客の声の はい・いいえ で、否定の行を取り消しも残しもしない
+  if ((action.kind === "drop" || action.kind === "deny") && speaker === "customer") action = unread("客の声");
   const lineIndex = q.lineIndex >= 0 ? (kept[q.lineIndex] ?? -1) : -1;
   if (action.kind === "unread") return keep(0, lineIndex, action);
 

@@ -61,7 +61,7 @@ test("許す遷移を通ると history が 8 件で at が now", () => {
   steps.forEach((to, i) => {
     s = transition(s, to, at(i + 1));
   });
-  s = { ...s, approved: true, approvedAt: at(7).toISOString() };
+  s = { ...s, approved: true, approvedAt: at(7).toISOString(), invoice: { lines: [], confirmations: [], total: 0, unused: [] } };
   s = transition(s, "done", at(7));
   assert.equal(s.status, "done");
   assert.equal(s.history.length, 8);
@@ -85,7 +85,14 @@ test("許さない遷移は throw", () => {
   s = transition(s, "drafting", at(3));
   s = transition(s, "asking", at(4));
   assert.throws(() => transition(s, "done", at(5)), /承認/);
-  const done = transition({ ...s, approved: true }, "done", at(5));
+  // 承認されていても、確認事項が残っている・明細が無いなら done にしない
+  const conf = { lineIndex: 0, item: "x", field: "qty" as const, message: "「x」の数量が分からない" };
+  assert.throws(
+    () => transition({ ...s, approved: true, invoice: { lines: [], confirmations: [conf], total: null, unused: [] } }, "done", at(5)),
+    /確認事項/,
+  );
+  assert.throws(() => transition({ ...s, approved: true, invoice: null }, "done", at(5)), /確認事項/);
+  const done = transition({ ...s, approved: true, invoice: { lines: [], confirmations: [], total: 0, unused: [] } }, "done", at(5));
   assert.throws(() => transition(done, "idle", at(6)));
 });
 
@@ -153,13 +160,18 @@ test("読み込みで壊れたファイルを受け入れない: ファイル名
   const dir2 = await tmp();
   await writeSession(dir2, done({}));
   assert.equal((await readSession(dir2, "d"))?.status, "done");
-  await writeSession(dir2, done({ approved: false }));
-  await assert.rejects(readSession(dir2, "d"), /承認/);
+  // 壊れた done は writeSession が書かない。ファイルを直接書いて、読み込みでも受け入れないことを見る
   const conf = { lineIndex: 0, item: "x", field: "qty" as const, message: "「x」の数量が分からない" };
-  await writeSession(dir2, done({ invoice: { lines: [], confirmations: [conf], total: null, unused: [] } }));
-  await assert.rejects(readSession(dir2, "d"), /確認事項/);
-  await writeSession(dir2, done({ invoice: null }));
-  await assert.rejects(readSession(dir2, "d"), /確認事項/);
+  const broken = [
+    done({ approved: false }),
+    done({ invoice: { lines: [], confirmations: [conf], total: null, unused: [] } }),
+    done({ invoice: null }),
+  ];
+  for (const b of broken) {
+    await assert.rejects(writeSession(dir2, b), /done なのに/);
+    await writeFile(join(dir2, "d.json"), JSON.stringify(b));
+    await assert.rejects(readSession(dir2, "d"), /done なのに/);
+  }
 });
 
 test("前の版のファイル（extraction が無い）は extraction null として読む", async () => {

@@ -367,6 +367,9 @@ test("(10) route: 400・404・409・200", async () => {
   assert.equal((await route.POST(req("{"), ctx(s.id))).status, 400);
   assert.equal((await route.POST(req(JSON.stringify({})), ctx(s.id))).status, 400);
   assert.equal((await route.POST(req(JSON.stringify({ utterance: { text: "4本" } })), ctx(s.id))).status, 400);
+  // 開始が終了より後の発話は 400
+  const backwards = { startSec: 5, endSec: 2, speaker: "father", text: "4本" };
+  assert.equal((await route.POST(req(JSON.stringify({ utterance: backwards })), ctx(s.id))).status, 400);
   assert.equal((await route.POST(req(ok), ctx("none"))).status, 404);
   assert.equal((await route.POST(req(ok), ctx("../x"))).status, 404);
 
@@ -479,6 +482,11 @@ test("話者: 客の声では承認も行の取り消しもしない。話者が
   assert.deepEqual(last(c).action, { kind: "unread", reason: "客の声" });
   assert.deepEqual(c.invoice, n0.invoice);
   assert.deepEqual(last(answerSession(n0, say("はい", null), ledger, now())).action, { kind: "drop" });
+  // いいえ（行を残す）も客の声では読まない
+  const cn = answerSession(n0, say("いいえ", "customer"), ledger, now());
+  assert.deepEqual(last(cn).action, { kind: "unread", reason: "客の声" });
+  assert.deepEqual(cn.invoice, n0.invoice);
+  assert.deepEqual(last(answerSession(n0, say("いいえ", "father"), ledger, now())).action, { kind: "deny" });
   // 客の声の数量の答えは通す（承認と取り消しだけを止める）
   const v0 = await start(VALVE);
   assert.equal(last(answerSession(v0, say("4本", "customer"), ledger, now())).action.kind, "setQty");

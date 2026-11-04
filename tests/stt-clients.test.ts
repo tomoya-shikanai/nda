@@ -145,6 +145,25 @@ test("(2') Scribe: 語に type・text・start・end が欠ければ throw（黙�
   }
 });
 
+test("(2'') Scribe: 語の開始が終了より後、語の順で開始が逆転したら throw", async () => {
+  const w = { text: "脱着", start: 0, end: 1, type: "word", speaker_id: "s0" };
+  for (const words of [
+    [{ ...w, start: 2, end: 1 }],
+    [{ ...w, start: 3, end: 4 }, { ...w, text: "4本。", start: 1, end: 2 }],
+    [{ ...w, start: 3, end: 4 }, { text: " ", start: 1, end: 1.5, type: "spacing" }, { ...w, text: "4本。", start: 4, end: 5 }],
+  ]) {
+    const { fetch } = fakeFetch(() => json({ words }));
+    await assert.rejects(transcribeScribe(audio, { apiKey: KEY, fetch }), /開始が終了より後|逆転/, JSON.stringify(words));
+  }
+});
+
+test("(3'') Gemini: model_output に content が無ければ throw", async () => {
+  for (const steps of [[{ type: "model_output" }], [{ type: "model_output", content: [{ type: "text", text: "脱着4本" }] }, { type: "model_output" }]]) {
+    const { fetch } = fakeFetch(() => json({ steps }));
+    await assert.rejects(transcribeGemini(audio, { apiKey: KEY, fetch }), /content の無い/, JSON.stringify(steps));
+  }
+});
+
 test("(3') Gemini: model_output の content に text の無いブロックがあれば throw", async () => {
   for (const content of [[{ type: "text", text: "脱着4本" }, { type: "text" }], [{ type: "audio" }]]) {
     const { fetch } = fakeFetch(() => json({ steps: [{ type: "model_output", content }] }));

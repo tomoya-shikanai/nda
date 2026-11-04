@@ -664,3 +664,28 @@ test("条件 6: 単価・金額の共有と、同じ品目の語を 2 回指し�
   const r3 = resolveInvoice([ref(id(cs3, "item", 0, "組替"), q3), ref({ seg: 0, text: "組替" }, q3)], cs3, t3, ledger);
   assert.ok(has(r3.confirmations, "line", "同じ根拠", 1));
 });
+
+test("条件 6: 共有の数量の文に、つなぎと決まった語のほかが残れば、共有した行すべてを確認事項（数量）にする", () => {
+  const cases: [string, string, string][] = [
+    ["組替4本、バランスは前だけ。", "組替", "バランス"],
+    ["組替4本、バランスは片側だけだ。", "組替", "バランス"],
+    ["タイヤ4本、組替とバランスは後ろだけ。", "組替", "バランス"],
+  ];
+  for (const [text, a, b] of cases) {
+    const t = rec([0, 4, "father", text]);
+    const cs = enumerateCandidates(t, ledger);
+    const q = id(cs, "qty", 0, "4本");
+    const r = resolveInvoice([ref(id(cs, "item", 0, a), q), ref(id(cs, "item", 0, b), q)], cs, t, ledger);
+    assert.ok(has(r.confirmations, "qty", "同じ根拠", 0), `${text} ${JSON.stringify(r.confirmations)}`);
+    assert.ok(has(r.confirmations, "qty", "同じ根拠", 1), `${text} ${JSON.stringify(r.confirmations)}`);
+    assert.equal(priceInvoice({ lines: r.lines }, ledger).confirmations.length, 0, "料金表では止まらない形");
+  }
+  // つなぎと決まった語だけなら今のまま通る
+  for (const text of ["タイヤ4本、組替とバランスだ。", "タイヤ4本、組替とバランスも替えた。", "4本、組替とバランスやった。"]) {
+    const t = rec([0, 4, "father", text]);
+    const cs = enumerateCandidates(t, ledger);
+    const q = id(cs, "qty", 0, "4本");
+    const r = resolveInvoice([ref(id(cs, "item", 0, "組替"), q), ref(id(cs, "item", 0, "バランス"), q)], cs, t, ledger);
+    assert.deepEqual(r.confirmations, [], text);
+  }
+});

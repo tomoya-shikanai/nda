@@ -33,6 +33,26 @@ export const CORRECTION_KINDS = new Set<CandidateKind>(["qty", "bareNumber", "un
 /** 1 つずつ数える単位。この単位の数量が整数でなければ確認事項にする（「0.4本」）。セット・式などは見ない。 */
 export const COUNT_UNITS = new Set(["本", "個", "台", "輪", "枚", "つ", "箇所", "か所", "ヶ所", "回"]);
 
+/**
+ * 条件 6 の例外（1 つの数量を複数の行が使う）で、文に残ってよい語。数量・使う行の品目の語を除いた残りが、
+ * つなぎとこの語だけでできているときだけ共有を許す（「組替4本、バランスは前だけ。」の「前だけ」が残れば許さない）。
+ * 語彙を足して閉じるのでなく、ここに無い語が 1 つでも残れば確認事項にする。語彙はここだけに置く。
+ */
+export const SHARED_QTY_LINKS = ["、", ",", "と", "や", "も", "は", "を", "の"];
+export const SHARED_QTY_WORDS = ["タイヤ", "だ", "です", "じゃ", "な", "ね", "よ", "した", "やった", "替えた", "交換"];
+const SHARED_QTY_TOKENS = [...SHARED_QTY_LINKS, ...SHARED_QTY_WORDS].sort((a, b) => b.length - a.length);
+
+/** 文字列が、許した語（長いものから前へ順に取る）だけでできているか。 */
+function onlySharedTokens(rest: string): boolean {
+  let i = 0;
+  while (i < rest.length) {
+    const t = SHARED_QTY_TOKENS.find((w) => rest.startsWith(w, i));
+    if (t === undefined) return false;
+    i += t.length;
+  }
+  return true;
+}
+
 /** 文の区切り。発話の終わりも文の終わり。「、」では切らない。 */
 const SENTENCE_BREAK = /[。！？!?]/;
 
@@ -112,8 +132,9 @@ export function resolveInvoice(
    * 条件 6 の例外: 1 つの数量の候補を複数の行が使ってよいのは、その数量と、使う行すべての品目の語が同じ文にあり、
    * その文にほかの数量の候補（qty・bareNumber）が無いときだけ（「タイヤ4本、組替とバランスだ。」）。
    * 品目の語は行ごとに別の箇所であること（同じ語を候補と `{seg,text}` で 2 回指したものは許さない）。
+   * 形が合わなければ（別の文・語の重なり・ほかの数量）後の行を「同じ根拠」にする。
    */
-  const qtyShareOk = (qty: Candidate, users: number[]): boolean => {
+  const qtyShareShape = (qty: Candidate, users: number[]): boolean => {
     const n = normSegs[qty.seg];
     if (n === undefined) return false;
     const r: Span = { seg: qty.seg, ...sentenceAt(n, qty.start, qty.end) };
@@ -122,6 +143,28 @@ export function resolveInvoice(
     const overlap = (a: Span, b: Span) => a.seg === b.seg && a.start < b.end && b.start < a.end;
     if (spans.some((a, i) => spans.some((b, j) => i < j && overlap(a, b)))) return false;
     return !candidates.some((c) => (c.kind === "qty" || c.kind === "bareNumber") && c.id !== qty.id && within(c, r));
+  };
+  /**
+   * 形が合ったうえで、その文から数量の候補と使う行の品目の語を除いた残りが、つなぎと決まった語だけか
+   * （SHARED_QTY_LINKS・SHARED_QTY_WORDS）。何か残れば、数量がどの行にどこまで掛かるか分からない。
+   */
+  const qtyShareOk = (qty: Candidate, users: number[]): boolean => {
+    if (!qtyShareShape(qty, users)) return false;
+    const n = normSegs[qty.seg];
+    const r = sentenceAt(n, qty.start, qty.end);
+    const cut = [qty, ...users.map((li) => lineItemSpans[li] as Span)];
+    // 除いた箇所で切った残りの断片を、それぞれ許した語だけで読めるか
+    let piece = "";
+    for (let i = r.start; i <= r.end; i++) {
+      const removed = i < r.end && cut.some((sp) => i >= sp.start && i < sp.end);
+      if (i < r.end && !removed) {
+        piece += n[i];
+        continue;
+      }
+      if (!onlySharedTokens(piece)) return false;
+      piece = "";
+    }
+    return true;
   };
   /** 行ごとの、品目の正式名（料金表で 1 つに決まる語はその正式名、無ければ語そのもの）と、指した品目の語（正規化後）。 */
   const lineKeys: string[] = [];
@@ -260,7 +303,7 @@ export function resolveInvoice(
     const qtyOnly = qty !== null && sharedIds.length > 0 && sharedIds.every((id) => id === qty.id);
     const shared =
       sharedWord ||
-      (sharedIds.length > 0 && !(qtyOnly && qtyShareOk(qty, [...(qtyUsers.get(qty.id) ?? []), lineIndex])));
+      (sharedIds.length > 0 && !(qtyOnly && qtyShareShape(qty, [...(qtyUsers.get(qty.id) ?? []), lineIndex])));
     if (shared) add("line", `「${item}」の行が前の行と同じ発話の箇所を指している（同じ根拠）`);
     // 条件 17: モデルが done 以外と判定した行
     if (ref.status === "negated") add("line", `「${item}」の行をモデルが否定・取り消し・断りと判定した（否定）`, [qty]);
@@ -277,6 +320,21 @@ export function resolveInvoice(
     if (qty !== null) qtyUsers.set(qty.id, [...(qtyUsers.get(qty.id) ?? []), lineIndex]);
     if (itemWordKey !== null && !itemWordBy.has(itemWordKey)) itemWordBy.set(itemWordKey, lineIndex);
   });
+
+  // 条件 6 の例外の続き: 1 つの数量を複数の行が使い、文に許した語のほかが残れば、使った行すべてを確認事項（数量）にする
+  for (const [id, users] of qtyUsers) {
+    const qty = byId.get(id) as Candidate;
+    if (users.length < 2 || qtyShareOk(qty, users)) continue;
+    for (const li of users) {
+      confirmations.push({
+        lineIndex: li,
+        item: lines[li].item,
+        field: "qty",
+        message: `「${lines[li].item}」の数量 ${qty.text} をほかの行と分けて使っていて、どの行にどこまで掛かるか分からない（同じ根拠）`,
+        candidates: [qty.id],
+      });
+    }
+  }
 
   const unused = candidates
     .filter((c) => (NEAR_KINDS.has(c.kind) || c.kind === "unitPrice" || c.kind === "amount") && !usedBy.has(c.id))

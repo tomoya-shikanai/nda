@@ -15,13 +15,15 @@ import { type Segment, type Transcript, TranscriptSchema } from "./types";
 
 export type SttAudio = { data: Uint8Array; mimeType: string; recordingId: string };
 
-const ScribeWord = z.object({
-  text: z.string(),
-  start: z.number(),
-  end: z.number(),
-  type: z.string(),
-  speaker_id: z.string().nullish(),
-});
+const ScribeWord = z
+  .object({
+    text: z.string(),
+    start: z.number(),
+    end: z.number(),
+    type: z.string(),
+    speaker_id: z.string().nullish(),
+  })
+  .refine((w) => w.start <= w.end, "語の開始が終了より後");
 type ScribeWord = z.infer<typeof ScribeWord>;
 
 const URL_SCRIBE = "https://api.elevenlabs.io/v1/speech-to-text";
@@ -82,9 +84,12 @@ export async function transcribeScribe(
   }
   const words = j.words.map((w, i) => {
     const p = ScribeWord.safeParse(w);
-    if (!p.success) throw new Error(`scribe の応答の語 ${i} に type・text・start・end が揃っていない`);
+    if (!p.success) throw new Error(`scribe の応答の語 ${i} に type・text・start・end が揃っていないか、開始が終了より後`);
     return p.data;
   });
+  for (let i = 1; i < words.length; i++) {
+    if (words[i].start < words[i - 1].start) throw new Error(`scribe の応答の語 ${i} で時刻が逆転している`);
+  }
   const segments = wordsToSegments(words);
   if (segments.length === 0) throw new Error("scribe の応答に語が無い（時刻を推測しない）");
   return TranscriptSchema.parse({

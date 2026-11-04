@@ -143,8 +143,11 @@ export function transition(s: Session, to: SessionStatus, now: Date): Session {
   if (!ALLOWED[s.status].includes(to)) {
     throw new Error(`許されない遷移: ${s.status} → ${to}`);
   }
-  if (s.status === "asking" && to === "done" && s.approved !== true) {
-    throw new Error("承認されていないので done にできない");
+  if (s.status === "asking" && to === "done") {
+    if (s.approved !== true) throw new Error("承認されていないので done にできない");
+    if (s.invoice === null || s.invoice.confirmations.length !== 0) {
+      throw new Error("確認事項が残っているので done にできない");
+    }
   }
   const at = now.toISOString();
   return { ...s, status: to, updatedAt: at, history: [...s.history, { status: to, at }] };
@@ -155,8 +158,18 @@ function fileOf(dir: string, id: string): string {
   return join(dir, `${id}.json`);
 }
 
+/** done の作業は、承認されていて確認事項が 0 件であること。違えば throw（読み書きで壊れた done を通さない）。 */
+function assertDone(s: Session): void {
+  if (s.status !== "done") return;
+  const confs: unknown = s.invoice?.confirmations;
+  if (s.approved !== true || !Array.isArray(confs) || confs.length !== 0) {
+    throw new Error(`done なのに承認されていないか確認事項が残っている: ${s.id}`);
+  }
+}
+
 export async function writeSession(dir: string, s: Session): Promise<void> {
   const target = fileOf(dir, s.id);
+  assertDone(s);
   await mkdir(dir, { recursive: true });
   const tmp = join(dir, `${s.id}.json.${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
   try {
@@ -180,10 +193,7 @@ export async function readSession(dir: string, id: string): Promise<Session | nu
   const s = parseSession(JSON.parse(text));
   // 読み込みで壊れたファイルを受け入れない
   if (s.id !== id) throw new Error(`session のファイル名と中の id が違う: ${id}`);
-  const confs: unknown = s.invoice?.confirmations;
-  if (s.status === "done" && (s.approved !== true || !Array.isArray(confs) || confs.length !== 0)) {
-    throw new Error(`done なのに承認されていないか確認事項が残っている: ${id}`);
-  }
+  assertDone(s);
   return s;
 }
 

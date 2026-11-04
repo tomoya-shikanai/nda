@@ -7,16 +7,9 @@ import { loadLedger } from "../../../../../lib/ledger/lookup";
 import { answerSession } from "../../../../../lib/session/answer";
 import { readSession, sessionDir, writeSession } from "../../../../../lib/session/store";
 import { toMonitorView } from "../../../../../lib/session/view";
-import type { Segment } from "../../../../../lib/stt/types";
+import { SegmentSchema } from "../../../../../lib/stt/types";
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
-const SegmentSchema = z.object({
-  startSec: z.number(),
-  endSec: z.number(),
-  speaker: z.string().nullable(),
-  text: z.string(),
-}) satisfies z.ZodType<Segment>;
 
 const Body = z.object({ utterance: SegmentSchema });
 
