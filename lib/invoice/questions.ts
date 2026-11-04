@@ -147,6 +147,7 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return `${(names.length ? names : items).slice(0, 3).join("・")}もやりましたか`;
       }
       case "total": {
+        if (cs.some((c) => c.message.includes("作業が 1 つもない"))) return "請求する作業はありませんか";
         const said = rel.find((c) => c.kind === "total" && c.taxIncluded !== true);
         if (said && said.value !== null) {
           const amounts = result.lines.map((l) => l.amount);

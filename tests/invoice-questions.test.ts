@@ -228,6 +228,17 @@ test("行に付かない事項は理由ごとに 1 問: 使われない金額・
   assert.equal(qs.find((q) => q.reason === "unparsed")!.confirmations.length, 2);
 });
 
+test("行が 0 件: 「請求する作業はありませんか」の 1 問（否定の文に挙げた形・lines だけ空の形）", () => {
+  for (const [t, negations] of [
+    [seq("バランスは大丈夫です。"), [{ seg: 0, text: "バランスは大丈夫です。" }]],
+    [seq("こんにちは。"), []],
+  ] as const) {
+    const { r, qs } = run(t, () => ({ lines: [], negations: [...negations] }));
+    assertShape(r, qs);
+    assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [[-1, "total", "請求する作業はありませんか"]]);
+  }
+});
+
 test("税込みの合計は、税抜きを聞く 1 問", () => {
   const { r, qs } = run(seq("脱着4本、バランス4本。", "税込みで7260円。"), (cs) => ({
     lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本")), ref(id(cs, "item", 0, "バランス"), id(cs, "qty", 0, "4本", 1))],
