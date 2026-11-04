@@ -38,19 +38,35 @@ def _rect(r) -> tuple[int, int, int, int] | None:
         return None
 
 
+def _read_value(c) -> tuple[str | None, str | None]:
+    """値と、どちらから読んだか（"value" | "legacy"）。ValuePattern が無いか値が取れないときだけ legacy を読む。"""
+    try:
+        # GetValuePattern() は Edit・ComboBox など一部の部品クラスにしか無い。
+        # GetPattern が返すパターンをそのまま使えば、Custom・Pane などの部品でも値が取れる。
+        vp = c.GetPattern(auto.PatternId.ValuePattern)
+        if vp is not None:
+            v = vp.Value
+            if v is not None:
+                return v, "value"
+    except Exception:
+        pass
+    try:
+        # VB6 の部品は ValuePattern を持たず、MSAA（LegacyIAccessiblePattern）だけを持つことがある。
+        lp = c.GetPattern(auto.PatternId.LegacyIAccessiblePattern)
+        if lp is not None:
+            v = lp.Value
+            if v is not None:
+                return v, "legacy"
+    except Exception:
+        pass
+    return None, None
+
+
 def element_of(c) -> Element | None:
     if c is None:
         return None
     try:
-        value = None
-        try:
-            # GetValuePattern() は Edit・ComboBox など一部の部品クラスにしか無い。
-            # GetPattern が返すパターンをそのまま使えば、Custom・Pane などの部品でも値が取れる。
-            vp = c.GetPattern(auto.PatternId.ValuePattern)
-            if vp is not None:
-                value = vp.Value
-        except Exception:
-            value = None
+        value, value_source = _read_value(c)
         is_password = False
         try:
             is_password = bool(c.IsPassword)
@@ -62,6 +78,7 @@ def element_of(c) -> Element | None:
             control_type=c.ControlTypeName or "",
             class_name=c.ClassName or "",
             value=value,
+            value_source=value_source,
             is_password=is_password,
             rect=_rect(c.BoundingRectangle),
         )
@@ -186,6 +203,8 @@ def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
                     continue
                 have = [n for n, pid in patterns if _has(c, pid)]
                 v = "" if e.value is None else (" value=" + ("***" if e.is_password else repr(e.value[:80])))
+                if e.value is not None and e.value_source == "legacy":
+                    v += " (legacy)"
                 f.write(
                     f"{'  ' * depth}{e.control_type} class={e.class_name!r} name={e.name[:80]!r} "
                     f"id={e.automation_id!r} rect={e.rect} patterns={have}{v}\n"

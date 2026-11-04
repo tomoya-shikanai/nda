@@ -102,6 +102,8 @@ Windows には、普通の権限のプログラムが管理者権限のプログ
 4. `python -m recorder run` を動かし、右下に赤い表示が出るのを確かめます。RacroS III で 1 件だけ操作します（画面を開く・欄に入れる・ボタンを押す）。終わったら Ctrl+C で止めます。
 5. `%LOCALAPPDATA%\nda-recorder\<今日の日付>\session-…\events.jsonl` をメモ帳で開き、1 行目の `session_start` の `exe`・`path` が RacroS III のものかを見ます。続いて、操作した順に `window`・`click`・`focus`・`value_changed` が並んでいるかを見ます。`error` の行があれば、その中身を控えます。`screenshots` の JPEG が RacroS III の窓だけを写しているか（他のアプリが写り込んでいないか）を見ます。
 6. 記録を動かしたまま普段どおり数分操作し、PC が重くならないか、RacroS III の動きが遅くならないかを見ます。タスクマネージャーで `python.exe` の CPU とメモリも見ます。
+7. RacroS III は VB6 で作られている可能性が高いです。dump でウィンドウのクラス名（`ThunderRT6…` なら VB6）と、明細の表の中身が読めるかを見ます。値が `(legacy)` と付いて出ていれば、LegacyIAccessiblePattern（MSAA）から読めています。記録では `value_source: "legacy"` になります。
+8. 同じ伝票を重ねて開くと排他警告（8001）が出るので、記録中も重ねて開かないでください。
 
 `start-recorder.bat`（`pythonw`）で動かすと、うまく動かないときにエラーが画面に出ません。その場合はコマンドプロンプトで `python -m recorder run` を動かすと、エラーが表示されます。
 

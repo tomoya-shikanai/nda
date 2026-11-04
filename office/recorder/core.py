@@ -29,6 +29,7 @@ class Element:
     class_name: str = ""
     value: str | None = None
     is_password: bool = False
+    value_source: str | None = None  # "value"（ValuePattern）か "legacy"（LegacyIAccessiblePattern）
     rect: tuple[int, int, int, int] | None = None
 
     def key(self) -> tuple[str, str, str, str]:
@@ -44,6 +45,8 @@ class Element:
         }
         if self.value is not None:
             d["value"] = MASK if self.is_password else self.value[:MAX_VALUE]
+            if self.value_source is not None:
+                d["value_source"] = self.value_source
         if self.rect is not None:
             d["rect"] = list(self.rect)
         return d

@@ -32,7 +32,7 @@ class _ValuePattern:
 class _Control:
     """uiautomation の Control の偽物。GetValuePattern は持たない（Custom・Pane などと同じ）。"""
 
-    def __init__(self, control_type="CustomControl", value=None, is_password=False):
+    def __init__(self, control_type="CustomControl", value=None, is_password=False, legacy_value=None):
         self.Name = "単価"
         self.AutomationId = "edtPrice"
         self.ControlTypeName = control_type
@@ -40,10 +40,13 @@ class _Control:
         self.IsPassword = is_password
         self.BoundingRectangle = _Rect(1, 2, 3, 4)
         self._value = value
+        self._legacy_value = legacy_value
 
     def GetPattern(self, pattern_id):
         if pattern_id == _PatternId.ValuePattern and self._value is not None:
             return _ValuePattern(self._value)
+        if pattern_id == _PatternId.LegacyIAccessiblePattern and self._legacy_value is not None:
+            return _ValuePattern(self._legacy_value)  # Value だけ使うので同じ形でよい
         return None
 
 
@@ -107,6 +110,45 @@ class ElementOfTest(unittest.TestCase):
 
     def test_パスワード欄の印が付く(self):
         self.assertTrue(self.win.element_of(_Control(value="secret", is_password=True)).is_password)
+
+
+class LegacyValueTest(unittest.TestCase):
+    def setUp(self):
+        self.win = _import_win(self)
+
+    def test_ValuePattern_がある部品は_value_から読む(self):
+        e = self.win.element_of(_Control(value="2200", legacy_value="9999"))
+        self.assertEqual((e.value, e.value_source), ("2200", "value"))
+        self.assertEqual(e.to_dict()["value_source"], "value")
+
+    def test_ValuePattern_が無い部品は_legacy_から読む(self):
+        e = self.win.element_of(_Control(legacy_value="3300"))
+        self.assertEqual((e.value, e.value_source), ("3300", "legacy"))
+        self.assertEqual(e.to_dict()["value"], "3300")
+        self.assertEqual(e.to_dict()["value_source"], "legacy")
+
+    def test_ValuePattern_の値が取れないときも_legacy_から読む(self):
+        c = _Control(value="x", legacy_value="3300")
+        orig = c.GetPattern
+
+        def get(pid):
+            if pid == _PatternId.ValuePattern:
+                raise RuntimeError("取れない")
+            return orig(pid)
+
+        c.GetPattern = get
+        self.assertEqual(self.win.element_of(c).value_source, "legacy")
+
+    def test_どちらも無ければ値なし(self):
+        e = self.win.element_of(_Control())
+        self.assertEqual((e.value, e.value_source), (None, None))
+        self.assertNotIn("value_source", e.to_dict())
+
+    def test_パスワード欄は_legacy_でも伏せる(self):
+        e = self.win.element_of(_Control(legacy_value="secret", is_password=True))
+        d = e.to_dict()
+        self.assertEqual(d["value"], "***")
+        self.assertNotIn("secret", str(d))
 
 
 class FindTargetTest(unittest.TestCase):
