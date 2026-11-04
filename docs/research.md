@@ -19,8 +19,25 @@
 
 | 日付 | 分かったこと | 確度 | 影響 | 出典 |
 |---|---|---|---|---|
-| 2026-11-04 | Picovoice Porcupine は独自の起動語を作れ、Pi で動く。日本語に対応している、とされる | 未確認（記憶。今回は調べていない） | 使う前に、日本語の独自起動語と、無料枠をハッカソンの提出に使ってよいかを確かめる | — |
-| 2026-11-04 | ESP32-S3 の端末側の検出（Espressif WakeNet）は、独自の起動語に Espressif 側での学習が要る | 未確認（記憶） | 11/8 には間に合わないので、検出は Pi で行う | — |
+| 2026-11-04 | Picovoice（Porcupine）の無料枠は 2026-06-30 で終わり、無料枠の AccessKey は無効になった。個人・非商用の枠は予定が無い。今の公式ドキュメントは企業向けの試用（1 回限り）だけを案内している | 確認済（複数の情報源と公式ドキュメントの文面が一致） | 公開リポジトリと家業での実利用には使えない。候補から外した | [Home Assistant Community](https://community.home-assistant.io/t/fyi-picovoice-confirmed-free-tier-accesskeys-will-stop-working-after-june-30-2026/1012744)、[Picovoice docs](https://picovoice.ai/docs/) |
+| 2026-11-04 | Porcupine 自体は日本語と Raspberry Pi 5 に対応し、独自の起動語を作れる | 確認済（公式 FAQ） | 参考。使わない | [Porcupine FAQ](https://picovoice.ai/docs/faq/porcupine/) |
+| 2026-11-04 | Vosk には日本語の小型モデル `vosk-model-small-ja-0.22`（約 48MB、Apache 2.0）がある。小型モデルは実行中に認識する語を絞れる | 確認済（公式のモデル一覧） | 起動語の第一候補。キー不要で、完全にオフラインで動く | [Vosk models](https://alphacephei.com/vosk/models) |
+| 2026-11-04 | 日本語のモデルで、認識する語を「んだ」「クロード」だけに絞る使い方が効くか | 未確認（資料が見つからない） | Pi が届いたら最初に実機で試す。駄目ならボタンを押して話す方式に切り替える | — |
+| 2026-11-04 | openWakeWord は英語だけに対応（学習用の音声を英語の TTS で作るため）。学習済みモデルは商用不可（CC BY-NC-SA 4.0） | 確認済（公式リポジトリ） | 使わない | [openWakeWord](https://github.com/dscripka/openWakeWord) |
+| 2026-11-04 | microWakeWord はマイコン向けで、学習は上級者向け。日本語への対応は読み取れない | 未確認 | 11/8 には間に合わないので使わない | [microWakeWord](https://github.com/kahrendt/microWakeWord) |
+| 2026-11-04 | ESP32-S3 の端末側の検出（Espressif WakeNet）は、独自の起動語に Espressif 側での学習が要る | 未確認（記憶） | 検出は Pi で行う | — |
+
+## データの扱い（Claude API）
+
+| 日付 | 分かったこと | 確度 | 影響 | 出典 |
+|---|---|---|---|---|
+| 2026-11-04 | API に送ったデータは、既定ではモデルの学習に使われない。例外は、利用者がフィードバックを送った場合（最大 5 年保存）と、利用を許可した場合 | 確認済（プライバシーセンター、2026-08-18 付） | フィードバック機能を使わない | [privacy.claude.com](https://privacy.claude.com/en/articles/7996868-is-my-data-used-for-model-training) |
+| 2026-11-04 | API の入出力は、原則 30 日以内に削除される。利用規約違反の疑いで自動検知されると、入出力は最大 2 年、分類スコアは最大 7 年保存される | 確認済（プライバシーセンター、2026-07-01 付）。「2025-09 から 7 日に短縮」とする第三者の記事があり、食い違う | README には公式の 30 日を書き、出典の日付を添える | [privacy.claude.com](https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data)、[API and data retention](https://platform.claude.com/docs/en/manage-claude/api-and-data-retention) |
+| 2026-11-04 | ゼロデータ保存（ZDR）は営業窓口に申し込み、組織ごとに有効にする。個人・小規模で使えるかは書かれていない | 有無は確認済。個人で使えるかは未確認 | 申し込まない。既定の扱いで進める | 同上 |
+| 2026-11-04 | Batch（29 日保存）、Files API（削除するまで保存）、コード実行（最大 30 日）は保存のされ方が違う | 確認済 | 使わない。データは毎回リクエストに直接入れる | 同上 |
+| 2026-11-04 | 個人情報保護法では、外国の第三者に個人データを渡すときは、委託でも原則として本人の同意が要る。同意の前に、移転先の国名・その国の制度・移転先の保護措置を伝える。Web ページの URL で示してもよい | 確認済（個人情報保護委員会 Q&A、令和 8 年 10 月 30 日版） | 客の情報を送るなら、客に説明して同意をもらう | [個人情報保護委員会 Q&A](https://www.ppc.go.jp/personalinfo/faq/APPI_QA/) |
+| 2026-11-04 | 事業者が個人データを取り扱わない契約・体制なら「提供」に当たらない、という例外がある。Claude API がこれに当たるかは分からない | 未確認（調査役の推論。専門家の確認が要る） | 安全側に倒し、同意をもらう前提で設計する | 同上 |
+| 2026-11-04 | 文字起こしを外部ベンダに送るなら、そのベンダの規約も別に調べる必要がある | 確認済（当然の事実） | ベンダを決めたら調べる | — |
 
 ## Claude と開発の道具
 
