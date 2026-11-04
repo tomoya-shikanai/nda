@@ -130,8 +130,8 @@ export default function Companion({ state }: { state: StateKey }) {
         <rect x={104} y={352} width={192} height={14} fill={SUIT_DARK} />
         <rect x={130} y={300} width={46} height={34} rx={4} fill="none" stroke="#c9d3e3" strokeWidth={3} />
         <line x1={146} y1={292} x2={146} y2={314} stroke="#f2c230" strokeWidth={5} strokeLinecap="round" />
-        <rect x={218} y={296} width={64} height={30} rx={6} fill="#fff" />
-        <text x={250} y={318} textAnchor="middle" fontSize={20} fontWeight={800} fill={SUIT}>nDa</text>
+        <rect x={210} y={296} width={76} height={30} rx={6} fill="#fff" />
+        <text x={248} y={317} textAnchor="middle" fontSize={14} fontWeight={800} fill={SUIT}>んだびょん</text>
 
         {/* 持ち物（腕より奥） */}
         {(state === "drafting" || state === "thinking") && (
