@@ -103,6 +103,26 @@ export function resolveInvoice(
   const lineCands: Candidate[][] = [];
   /** 行ごとの、`{seg,text}` の品目の語の位置。 */
   const lineWords: (Span | null)[] = [];
+  /** 行ごとの、品目の語の位置（item 候補か `{seg,text}`。無ければ null）。条件 6 の共有の数量で見る。 */
+  const lineItemSpans: (Span | null)[] = [];
+  /** qty 候補 ID → それを使った行（順に）。 */
+  const qtyUsers = new Map<string, number[]>();
+  const within = (sp: Span, r: Span) => sp.seg === r.seg && sp.start >= r.start && sp.end <= r.end;
+  /**
+   * 条件 6 の例外: 1 つの数量の候補を複数の行が使ってよいのは、その数量と、使う行すべての品目の語が同じ文にあり、
+   * その文にほかの数量の候補（qty・bareNumber）が無いときだけ（「タイヤ4本、組替とバランスだ。」）。
+   * 品目の語は行ごとに別の箇所であること（同じ語を候補と `{seg,text}` で 2 回指したものは許さない）。
+   */
+  const qtyShareOk = (qty: Candidate, users: number[]): boolean => {
+    const n = normSegs[qty.seg];
+    if (n === undefined) return false;
+    const r: Span = { seg: qty.seg, ...sentenceAt(n, qty.start, qty.end) };
+    const spans = users.map((li) => lineItemSpans[li]);
+    if (!spans.every((sp): sp is Span => sp != null && within(sp, r))) return false;
+    const overlap = (a: Span, b: Span) => a.seg === b.seg && a.start < b.end && b.start < a.end;
+    if (spans.some((a, i) => spans.some((b, j) => i < j && overlap(a, b)))) return false;
+    return !candidates.some((c) => (c.kind === "qty" || c.kind === "bareNumber") && c.id !== qty.id && within(c, r));
+  };
   /** 行ごとの、品目の正式名（料金表で 1 つに決まる語はその正式名、無ければ語そのもの）と、指した品目の語（正規化後）。 */
   const lineKeys: string[] = [];
   const lineNeedles: string[] = [];
@@ -183,6 +203,7 @@ export function resolveInvoice(
       [itemCand, qty, unitPrice, amount, correctedFrom, correctedTo].filter((c): c is Candidate => c !== null),
     );
     lineWords.push(typeof ref.item === "string" ? null : itemSpan);
+    lineItemSpans.push(itemSpan);
     const key = itemCand ? (itemCand.ledgerItem ?? itemCand.text) : (findEntry(ledger, item)?.item ?? item);
     const needle = itemCand ? "" : normalizeText(item);
     lineKeys.push(key);
@@ -234,8 +255,12 @@ export function resolveInvoice(
     if (used.length && endSec - startSec > MAX_LINE_SEC) {
       add("line", `「${item}」の根拠が ${MAX_LINE_SEC} 秒に収まらない（20 秒）`);
     }
+    const sharedIds = ids.filter((id) => usedBy.has(id));
+    const sharedWord = itemWordKey !== null && itemWordBy.has(itemWordKey);
+    const qtyOnly = qty !== null && sharedIds.length > 0 && sharedIds.every((id) => id === qty.id);
     const shared =
-      ids.some((id) => usedBy.has(id)) || (itemWordKey !== null && itemWordBy.has(itemWordKey));
+      sharedWord ||
+      (sharedIds.length > 0 && !(qtyOnly && qtyShareOk(qty, [...(qtyUsers.get(qty.id) ?? []), lineIndex])));
     if (shared) add("line", `「${item}」の行が前の行と同じ発話の箇所を指している（同じ根拠）`);
     // 条件 17: モデルが done 以外と判定した行
     if (ref.status === "negated") add("line", `「${item}」の行をモデルが否定・取り消し・断りと判定した（否定）`, [qty]);
@@ -249,6 +274,7 @@ export function resolveInvoice(
     // unsure と、型の外の値（status が無い等）は安全側に倒して確かめる
     if (ref.status !== "done" && ref.status !== "negated" && ref.status !== "corrected") add("line", `「${item}」の行をモデルが確かでないと判定した（確かでない）`);
     for (const id of ids) if (!usedBy.has(id)) usedBy.set(id, lineIndex);
+    if (qty !== null) qtyUsers.set(qty.id, [...(qtyUsers.get(qty.id) ?? []), lineIndex]);
     if (itemWordKey !== null && !itemWordBy.has(itemWordKey)) itemWordBy.set(itemWordKey, lineIndex);
   });
 
@@ -288,7 +314,6 @@ export function resolveInvoice(
     if (c.kind === "unparsedNumber") global(c.text, "qty", `「${c.text}」（数が読めない）`, [c]);
   }
 
-  const inside = (sp: Span, r: Span) => sp.seg === r.seg && sp.start >= r.start && sp.end <= r.end;
   const lineAdd = (lineIndex: number, field: Confirmation["field"], message: string, related: Candidate[] = []) =>
     confirmations.push(withCandidates({ lineIndex, item: lines[lineIndex].item, field, message }, related));
 
@@ -312,7 +337,7 @@ export function resolveInvoice(
   const reported = new Set<string>();
   for (const c of candidates) {
     if (c.kind !== "item" || c.ledgerItem === undefined || negated(c)) continue;
-    if (negRanges.some(({ range }) => inside(c, range))) continue;
+    if (negRanges.some(({ range }) => within(c, range))) continue;
     if (lineNames.has(c.ledgerItem) || reported.has(c.ledgerItem)) continue;
     reported.add(c.ledgerItem);
     global(c.ledgerItem, "item", `「${c.text}」（${c.ledgerItem}）と言った（料金表の品目の語が出たのに行が無い）`, [c]);
@@ -330,8 +355,8 @@ export function resolveInvoice(
       const word = lineWords[li];
       const hit = ranges.some(
         (range) =>
-          lineCands[li].some((c) => NEGATION_SPAN_KINDS.has(c.kind) && inside(c, range)) ||
-          (word !== null && inside(word, range)) ||
+          lineCands[li].some((c) => NEGATION_SPAN_KINDS.has(c.kind) && within(c, range)) ||
+          (word !== null && within(word, range)) ||
           sameItemIn(lineKeys[li], lineNeedles[li], range),
       );
       if (hit) {
@@ -353,7 +378,7 @@ export function resolveInvoice(
         const qty = lineCands[near].filter((c) => c.kind === "qty");
         lineAdd(near, "line", `「${lines[near].item}」の行の近くにモデルの挙げた否定の文「${neg.text}」がある（否定）`, qty);
       } else {
-        const words = candidates.filter((c) => c.kind === "item" && ranges.some((range) => inside(c, range)));
+        const words = candidates.filter((c) => c.kind === "item" && ranges.some((range) => within(c, range)));
         const why = words.length ? "モデルの挙げた否定の文の品目の行が無い" : "モデルの挙げた否定の文に品目が無く、どの行のことか分からない";
         global(neg.text, "line", `「${neg.text}」（${why}）（否定）`, words);
       }

@@ -2,6 +2,7 @@
  * モニター用の 1 つの JSON（W2）。純粋な関数。入力を書き換えない。
  * 金額を推測で出さない。null は null のまま返し、「値段？」の表示は画面がする。
  */
+import { keptLines } from "./kept";
 import type { Session, SessionStatus } from "./store";
 
 export const VOICE_CREDIT = "VOICEVOX:ずんだもん";
@@ -68,6 +69,9 @@ const NOT_ANSWERS =new Set(["unread", "approve"]);
 export function toMonitorView(s: Session | null): MonitorView {
   const segs = s?.transcript?.segments ?? [];
   const confirmations = s?.invoice?.confirmations ?? [];
+  const answers = s?.answers ?? [];
+  // 答えの lineIndex は行を除く前の添字。明細の i 行目の元の添字で引く
+  const kept = s?.refs ? keptLines(s.refs.lines.length, answers) : [];
   const lines: MonitorLine[] = (s?.invoice?.lines ?? []).map((l, i) => ({
     item: l.item,
     qty: l.qty,
@@ -75,8 +79,8 @@ export function toMonitorView(s: Session | null): MonitorView {
     unitPrice: l.unitPrice,
     amount: l.amount,
     status: confirmations.some((c) => c.lineIndex === i) ? "ask" : "ok",
-    answered: (s?.answers ?? [])
-      .filter((a) => a.lineIndex === i && !NOT_ANSWERS.has(a.action.kind))
+    answered: answers
+      .filter((a) => kept[i] !== undefined && a.lineIndex === kept[i] && !NOT_ANSWERS.has(a.action.kind))
       .map((a) => a.provenance.quote),
   }));
   return {

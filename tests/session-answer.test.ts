@@ -75,6 +75,10 @@ const fict = (id: string, texts: string[]): Transcript => ({
 const VALVE = fict("valve-1", ["ゴムバルブも替えた。"]);
 const NEG = fict("neg-1", ["脱着4本。", "バランス4本はしない。"]);
 const TOTAL = fict("total-1", ["脱着4本、合計8000円。"]);
+const CORR = fict("corr-1", ["脱着4本、いや2本。"]);
+const UNUSED = fict("unused-1", ["脱着4本。", "2は傷がある。"]);
+const NUT = fict("nut-1", ["ホイールナットも替えた。"]);
+const THREE = fict("three-1", ["脱着4本。", "バランス4本はしない。", "ゴムバルブも替えた。"]);
 
 function refsOf(t: Transcript, cs: Candidate[]): InvoiceRefs {
   switch (t.recordingId) {
@@ -97,6 +101,23 @@ function refsOf(t: Transcript, cs: Candidate[]): InvoiceRefs {
       };
     case "total-1":
       return { lines: [ref(cid(cs, "item", 0, "脱着"), cid(cs, "qty", 0, "4本"))], negations: [] };
+    case "corr-1": {
+      const [q4, q2] = [cid(cs, "qty", 0, "4本"), cid(cs, "qty", 0, "2本")];
+      return { lines: [ref(cid(cs, "item", 0, "脱着"), q4, { status: "corrected", correctedFrom: q4, correctedTo: q2 })], negations: [] };
+    }
+    case "unused-1":
+      return { lines: [ref(cid(cs, "item", 0, "脱着"), cid(cs, "qty", 0, "4本"))], negations: [] };
+    case "nut-1":
+      return { lines: [ref({ seg: 0, text: "ホイールナット" }, null)], negations: [] };
+    case "three-1":
+      return {
+        lines: [
+          ref(cid(cs, "item", 0, "脱着"), cid(cs, "qty", 0, "4本")),
+          ref(cid(cs, "item", 1, "バランス"), cid(cs, "qty", 1, "4本")),
+          ref(cid(cs, "item", 2, "ゴムバルブ"), null),
+        ],
+        negations: [],
+      };
   }
   throw new Error(`参照が無い: ${t.recordingId}`);
 }
@@ -105,6 +126,15 @@ const fakeExtract: Extractor = async (t, l) => {
   const candidates = enumerateCandidates(t, l);
   return { candidates, ...refsOf(t, candidates) };
 };
+
+const mkAnswer = (lineIndex: number, a: Answer["action"]): Answer => ({
+  at: "x",
+  questionIndex: 0,
+  lineIndex,
+  provenance: { recordingId: "x", startSec: 0, endSec: 1, speaker: "father", quote: "x" },
+  source: "answer",
+  action: a,
+});
 
 let clock = 0;
 const now = () => new Date(Date.UTC(2026, 10, 4, 12, 0, clock++));
@@ -118,15 +148,16 @@ const say = (text: string, speaker: string | null = "father"): Segment => ({ sta
 const answer = (s: Session, text: string) => answerSession(s, say(text), ledger, now());
 const last = (s: Session) => s.answers[s.answers.length - 1];
 
-test("(1) tire-003: 脱着の言い直しに「4本」、ホイールナットの単価に「1個200円」、「請求書頼む」で done", async () => {
+test("(1) tire-003: 「2個は何の数ですか」に「関係ない」、ホイールナットの単価に「1個200円」、「請求書頼む」で done", async () => {
   let s = await start(byId("tire-003"));
   assert.deepEqual(
     s.questions.map((q) => q.text),
     ["脱着は4本ですか。2個は何の数ですか", "ホイールナットの単価はいくらですか"],
   );
-  s = answer(s, "4本");
-  assert.deepEqual(last(s).action, { kind: "setQty", value: 4, unit: "本" });
+  s = answer(s, "関係ない");
+  assert.deepEqual(last(s).action, { kind: "unrelated" });
   assert.equal(last(s).lineIndex, 0);
+  assert.equal(s.invoice?.lines[0].qty, 4);
   assert.equal(s.status, "asking");
   assert.deepEqual(s.history.slice(-2).map((h) => h.status), ["drafting", "asking"]);
   assert.ok(!s.invoice?.confirmations.some((c) => c.lineIndex === 0));
@@ -212,7 +243,7 @@ test("(4) 数量の質問に言い直し・読めない数・円は unread", asy
 
 test("(5) 単価の質問に「4個で800円」は割り算しない。料金表と違う単価は、また確認事項", async () => {
   let s = await start(byId("tire-003"));
-  s = answer(s, "4本");
+  s = answer(s, "関係ない");
   assert.equal(s.questions[0].reason, "unitPrice");
   for (const t of ["4個で800円", "1本200円", "200円か300円"]) {
     const u = answer(s, t);
@@ -300,13 +331,13 @@ test("(8) 行に付かない質問（言った合計と計算が違う）は unr
 test("(9) answerSession と applyAnswers は入力を書き換えない", async () => {
   const s0 = await start(byId("tire-003"));
   const before = structuredClone(s0);
-  const u = say("4本", "someone");
+  const u = say("関係ない", "someone");
   const uBefore = structuredClone(u);
   const s1 = answerSession(s0, u, ledger, now());
   assert.deepEqual(s0, before);
   assert.deepEqual(u, uBefore);
   assert.equal(last(s1).provenance.speaker, "unknown");
-  assert.equal(last(s1).provenance.quote, "4本");
+  assert.equal(last(s1).provenance.quote, "関係ない");
   assert.equal(last(s1).provenance.recordingId, `${s0.id}#answer-1`);
   const b1 = structuredClone(s1);
   const s2 = answer(s1, "1個200円");
@@ -330,7 +361,7 @@ test("(10) route: 400・404・409・200", async () => {
   const req = (body: string) =>
     new Request("http://localhost/api/session/x/answer", { method: "POST", headers: { "content-type": "application/json" }, body });
   const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
-  const ok = JSON.stringify({ utterance: say("4本") });
+  const ok = JSON.stringify({ utterance: say("関係ない") });
 
   const s = await start(byId("tire-003"), dir);
   assert.equal((await route.POST(req("{"), ctx(s.id))).status, 400);
@@ -359,4 +390,116 @@ test("(10) route: 400・404・409・200", async () => {
   assert.equal(dv.view.approved, true);
   assert.equal(dv.view.total, 2600);
   assert.equal((await route.POST(req(ok), ctx(s.id))).status, 409);
+});
+
+// --- 答えの形（質問の種類ごとに受け取れる形を決め、余計な語が残れば unread） ---
+
+test("数量の質問: 知らない単位・別の品目の語・数が 2 つは unread。前置き・付け足し・質問の品目の語は取り除く", async () => {
+  const s0 = await start(VALVE);
+  assert.equal(s0.invoice?.confirmations.length, 1, "「数量が分からない」は 1 件（resolve と price で重ねない）");
+  for (const t of ["4人", "脱着4本", "4本4本", "4本と2", "組替4本", "4本くらい", "たぶん4本", "4本だった", "ゴムバルブ4本と脱着"]) {
+    const s = answer(s0, t);
+    assert.equal(last(s).action.kind, "unread", t);
+    assert.deepEqual(s.invoice, s0.invoice, t);
+  }
+  for (const t of ["んだ、4本だ", "はい、4本です。", "4本じゃ", "ゴムバルブは4本", "エアバルブ交換4本", "バルブ交換も4本だよ", "4だ"]) {
+    assert.deepEqual(last(answer(s0, t)).action, { kind: "setQty", value: 4, unit: "本" }, t);
+  }
+});
+
+test("単価の質問: 円の金額 1 つだけ。単位が行と違う・別の品目・余計な語は unread。数量の確認事項は解かない", async () => {
+  let s = await start(byId("tire-003"));
+  s = answer(s, "関係ない");
+  assert.equal(s.questions[0].reason, "unitPrice");
+  for (const t of ["1本200円", "脱着1個200円", "200円くらい", "200円と300円", "1個200円で4個"]) {
+    assert.equal(last(answer(s, t)).action.kind, "unread", t);
+  }
+  for (const t of ["ホイールナットは1個200円です", "んだ、200円だ", "単価は200円"]) {
+    assert.deepEqual(last(answer(s, t)).action, { kind: "setUnitPrice", value: 200 }, t);
+  }
+  // 数量も単価も無い行に単価の答えを当てても、数量の確認事項は残る
+  const n = await start(NUT);
+  const q: Question = { lineIndex: 0, item: "ホイールナット", reason: "unitPrice", reasons: ["unitPrice"], text: "", confirmations: [] };
+  // 行に単位が無いので「1個200円」は読まない。単位の無い「200円」だけ
+  assert.equal(readAnswer(q, n.invoice?.lines[0], say("1個200円"), ledger, n.candidates).kind, "unread");
+  const act = readAnswer(q, n.invoice?.lines[0], say("200円"), ledger, n.candidates);
+  assert.deepEqual(act, { kind: "setUnitPrice", value: 200 });
+  const r = applyAnswers({ candidates: n.candidates, refs: n.refs as InvoiceRefs }, NUT, ledger, [mkAnswer(0, act)]);
+  assert.deepEqual(r.confirmations.map((c) => c.field), ["qty"]);
+  assert.equal(r.lines[0].unitPrice, 200);
+});
+
+test("言い直しの質問: 質問に出た値のどちらか 1 つだけ。単価などは unread。単価の答えは言い直しを消さない", async () => {
+  const s0 = await start(CORR);
+  assert.deepEqual(s0.questions.map((q) => q.text), ["脱着は4本と2本のどちらですか"]);
+  for (const t of ["1本550円", "550円", "3本", "3", "2個", "4本か2本", "脱着2本と4本"]) {
+    const s = answer(s0, t);
+    assert.equal(last(s).action.kind, "unread", t);
+    assert.deepEqual(s.invoice, s0.invoice, t);
+  }
+  for (const [t, v] of [["2本", 2], ["2", 2], ["んだ、2本だ", 2], ["脱着は4本", 4]] as const) {
+    const s = answer(s0, t);
+    assert.deepEqual(last(s).action, { kind: "setQty", value: v, unit: "本" }, t);
+    assert.equal(s.invoice?.confirmations.length, 0, t);
+    assert.equal(s.invoice?.total, v * 550, t);
+  }
+  const r = applyAnswers({ candidates: s0.candidates, refs: s0.refs as InvoiceRefs }, CORR, ledger, [
+    mkAnswer(0, { kind: "setUnitPrice", value: 550 }),
+  ]);
+  assert.ok(r.confirmations.some((c) => c.message.includes("言い直し")), JSON.stringify(r.confirmations));
+  assert.equal(r.total, null);
+});
+
+test("「X は何の数ですか」: 数では解かない。「関係ない」の全体一致だけで、その数を関係なしとして解く", async () => {
+  const s0 = await start(UNUSED);
+  assert.deepEqual(s0.questions.map((q) => q.text), ["脱着は4本ですか。2は何の数ですか"]);
+  for (const t of ["2は傷の数", "2本", "4本", "はい", "いいえ", "違う", "関係ないかも", "2は関係ない"]) {
+    const s = answer(s0, t);
+    assert.equal(last(s).action.kind, "unread", t);
+    assert.deepEqual(s.invoice, s0.invoice, t);
+  }
+  for (const t of ["関係ない", "関係ねえ。", "関係ないです"]) {
+    const s = answer(s0, t);
+    assert.deepEqual(last(s).action, { kind: "unrelated" }, t);
+    assert.equal(s.invoice?.lines[0].qty, 4, t);
+    assert.equal(s.invoice?.confirmations.length, 0, t);
+    assert.equal(s.invoice?.total, 2200, t);
+  }
+});
+
+test("否定の質問: 「まいね」は読まない（だめ・いけないの意味でどちらとも取れる）。「んだ」は はい", async () => {
+  const s0 = await start(NEG);
+  assert.equal(last(answer(s0, "まいね")).action.kind, "unread");
+  assert.deepEqual(last(answer(s0, "んだ")).action, { kind: "drop" });
+});
+
+test("話者: 客の声では承認も行の取り消しもしない。話者が分からない声と父は通す", async () => {
+  const n0 = await start(NEG);
+  const c = answerSession(n0, say("はい", "customer"), ledger, now());
+  assert.deepEqual(last(c).action, { kind: "unread", reason: "客の声" });
+  assert.deepEqual(c.invoice, n0.invoice);
+  assert.deepEqual(last(answerSession(n0, say("はい", null), ledger, now())).action, { kind: "drop" });
+  // 客の声の数量の答えは通す（承認と取り消しだけを止める）
+  const v0 = await start(VALVE);
+  assert.equal(last(answerSession(v0, say("4本", "customer"), ledger, now())).action.kind, "setQty");
+
+  const s0 = await start(byId("tire-001"));
+  const cs = answerSession(s0, say("請求書頼む", "customer"), ledger, now());
+  assert.equal(cs.status, "asking");
+  assert.equal(cs.approved, false);
+  assert.deepEqual(last(cs).action, { kind: "unread", reason: "客の声" });
+  assert.equal(answerSession(s0, say("請求書頼む", null), ledger, now()).status, "done");
+  assert.equal(answerSession(s0, say("請求書頼む", "father"), ledger, now()).status, "done");
+});
+
+test("表示の出所: 行を除いた後も、答えは元の行の添字で引く（3 行で真ん中を除く）", async () => {
+  let s = await start(THREE);
+  assert.equal(s.questions[0].lineIndex, 1);
+  s = answer(s, "はい");
+  assert.deepEqual(s.invoice?.lines.map((l) => l.item), ["タイヤ脱着", "エアバルブ交換"]);
+  assert.deepEqual(toMonitorView(s).lines.map((l) => l.answered), [[], []]);
+  s = answer(s, "4本");
+  assert.equal(last(s).lineIndex, 2);
+  assert.deepEqual(toMonitorView(s).lines.map((l) => [l.item, l.answered]), [["タイヤ脱着", []], ["エアバルブ交換", ["4本"]]]);
+  assert.equal(s.invoice?.total, 2200 + 1320);
 });

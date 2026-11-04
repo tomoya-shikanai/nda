@@ -66,18 +66,37 @@ function listed(vals: string[], build: (s: string) => string): string {
 type Result = Pick<PricedInvoice, "lines" | "confirmations">;
 type Line = Result["lines"][number];
 
+/** 確認事項たちが指す候補（発話の順、重複なし）。 */
+export function relatedCandidates(cs: Confirmation[], candidates: Candidate[]): Candidate[] {
+  const byId = new Map(candidates.map((c) => [c.id, c]));
+  const order = new Map(candidates.map((c, i) => [c.id, i]));
+  return [...new Set(cs.flatMap((c) => c.candidates ?? []))]
+    .filter((id) => byId.has(id))
+    .sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+    .map((id) => byId.get(id) as Candidate);
+}
+
+const distinctTexts = (cs: Candidate[]) => [...new Set(cs.map((c) => c.text))];
+const qtyText = (line: Pick<Line, "qty" | "unit">) => (line.qty === null ? null : `${line.qty}${line.unit ?? ""}`);
+
+/** 使われない数の確認事項か（resolve.ts の条件 3 の文言の印）。 */
+export const isUnusedNumber = (c: Confirmation) => c.message.includes("使われない数");
+
+/**
+ * 言い直しの質問が「脱着は4本ですか。2個は何の数ですか」の形（使われない数だけで、行に数量がある）なら、
+ * 「何の数」と聞く数の文字列。その形でなければ空。cs は質問に入る言い直しの確認事項。答えの読み取り（answer.ts）も使う。
+ */
+export function unusedNumberTexts(line: Pick<Line, "qty" | "unit">, cs: Confirmation[], candidates: Candidate[]): string[] {
+  const q = qtyText(line);
+  if (q === null || cs.some((c) => !isUnusedNumber(c))) return [];
+  return distinctTexts(relatedCandidates(cs, candidates)).filter((x) => x !== q);
+}
+
 export function toQuestions(result: Result, candidates: Candidate[], t: Transcript, ledger: LedgerEntry[]): Question[] {
   /** 品目の比べ方。price.ts の二重の行と同じく、料金表の正式名にそろえる。 */
   const itemName = (item: string) => itemKey(findEntry(ledger, item)?.item ?? item);
   const byId = new Map(candidates.map((c) => [c.id, c]));
-  const order = new Map(candidates.map((c, i) => [c.id, i]));
-  /** 確認事項たちが指す候補（発話の順、重複なし）。 */
-  const related = (cs: Confirmation[]): Candidate[] =>
-    [...new Set(cs.flatMap((c) => c.candidates ?? []))]
-      .filter((id) => byId.has(id))
-      .sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
-      .map((id) => byId.get(id) as Candidate);
-  const distinctTexts = (cs: Candidate[]) => [...new Set(cs.map((c) => c.text))];
+  const related = (cs: Confirmation[]): Candidate[] => relatedCandidates(cs, candidates);
 
   /**
    * 行の品目を、父が言った語で呼ぶ（行の根拠の時間にある、その品目の候補）。無ければ行の品目名。
@@ -100,7 +119,6 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
     const best = hits.reduce<Candidate | null>((b, c) => (b === null || distance(c) < distance(b) ? c : b), null);
     return best?.text ?? line.item;
   };
-  const qtyText = (line: Line) => (line.qty === null ? null : `${line.qty}${line.unit ?? ""}`);
 
   const lineText = (line: Line, reason: QuestionReason, cs: Confirmation[]): string => {
     const name = spoken(line);
@@ -112,12 +130,9 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return `${name}${v ? `の${v}` : ""}は${verb}のですか`;
       }
       case "correction": {
-        const explicit = mine.filter((c) => !c.message.includes("使われない数"));
         const q = qtyText(line);
-        if (explicit.length === 0 && q !== null) {
-          const others = distinctTexts(related(mine)).filter((x) => x !== q);
-          if (others.length) return listed(others, (x) => `${name}は${q}ですか。${x}は何の数ですか`);
-        }
+        const others = unusedNumberTexts(line, mine, candidates);
+        if (others.length) return listed(others, (x) => `${name}は${q}ですか。${x}は何の数ですか`);
         const vals = distinctTexts(related(mine));
         if (vals.length === 0 && q !== null) vals.push(q);
         if (vals.length === 0) return `${name}の数はいくつですか`;

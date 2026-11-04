@@ -1,18 +1,28 @@
 /**
  * 父の答えで確認事項を解く（W4）。純粋な関数。API を呼ばない（答えの読み取りに Claude を使わない）、入力を書き換えない。
- * 推測で埋めない: 読めない答え・単位の違う答え・金額から割り出す必要のある答えは unread にして、質問を残す。
+ * 推測で埋めない: 質問の種類ごとに受け取れる答えの形を決め、その形を取り除いた後に余計な語が残れば unread にして、質問を残す。
+ * 取り除いてよいのは、句読点・空白、決まった前置き・付け足し（approval.ts）、質問が名指しした品目の語（父が言った語・正式名・別名）だけ。
  * price・check の確認事項は答えで消さず、必ず計算し直す（料金表と違う単価の答えは、また確認事項になる）。
  */
-import type { AssembledInvoice } from "../invoice/build";
-import { type Candidate, type CandidateKind, enumerateCandidates } from "../invoice/candidates";
+import { type AssembledInvoice, mergeConfirmations } from "../invoice/build";
+import { type Candidate, type CandidateKind, enumerateCandidates, normalizeText } from "../invoice/candidates";
 import { checkAmounts } from "../invoice/check";
 import { type Confirmation, type PricedLine, priceInvoice } from "../invoice/price";
-import { type Question, type QuestionReason, reasonOf, toQuestions } from "../invoice/questions";
+import {
+  isUnusedNumber,
+  type Question,
+  type QuestionReason,
+  reasonOf,
+  relatedCandidates,
+  toQuestions,
+  unusedNumberTexts,
+} from "../invoice/questions";
 import { CORRECTION_CUES, COUNT_UNITS, NEGATION_CUES, resolveInvoice } from "../invoice/resolve";
 import type { InvoiceLine, InvoiceRefs } from "../invoice/schema";
-import type { LedgerEntry } from "../ledger/lookup";
+import { findEntry, type LedgerEntry } from "../ledger/lookup";
 import type { Segment, Transcript } from "../stt/types";
-import { bareAnswer, isApproval, isNo, isYes } from "./approval";
+import { bareAnswer, isApproval, isNo, isUnrelated, isYes, onlyValue } from "./approval";
+import { keptLines } from "./kept";
 import { type Answer, type Session, transition } from "./store";
 
 type Action = Answer["action"];
@@ -26,11 +36,20 @@ const unread = (reason: string): Action => ({ kind: "unread", reason });
 /** 「数＋円」の候補（単価か、数量の付かない金額）。 */
 const isYen = (c: Candidate) => c.kind === "unitPrice" || (c.kind === "amount" && c.impliedQty === undefined);
 
+/** 単位の無い数（「4」「4つ」）。質問の単位で読む。 */
+const unitless = (c: Candidate) => (c.kind === "bareNumber" && c.unit === null) || (c.kind === "qty" && c.unit === "つ");
+
+/** 質問が名指しした品目の語（行の品目、料金表の正式名と別名）。正規化後。 */
+function itemWords(line: PricedLine, ledger: LedgerEntry[]): string[] {
+  const e = findEntry(ledger, line.item);
+  return [...new Set([line.item, ...(e ? [e.item, ...e.aliases] : [])].map(normalizeText))];
+}
+
 function readQty(c: Candidate, unit: string | null): Action {
   if (c.value === null) return unread("数が読めない");
   let u: string;
   if (c.kind === "qty" && c.unit === unit && unit !== null) u = unit;
-  else if ((c.kind === "bareNumber" && c.unit === null) || (c.kind === "qty" && c.unit === "つ")) {
+  else if (unitless(c)) {
     if (unit === null) return unread("質問の単位が分からない");
     u = unit;
   } else {
@@ -46,15 +65,42 @@ function readPrice(c: Candidate, unit: string | null): Action {
   return { kind: "setUnitPrice", value: c.value };
 }
 
-/** 答えの 1 発話を、質問 q に対する 1 つの操作として読む。読めなければ unread。 */
-export function readAnswer(q: Question, line: PricedLine | undefined, utterance: Segment, ledger: LedgerEntry[]): Action {
+/**
+ * 言い直しの質問（「4本と2本のどちらですか」「4本で合っていますか」）への答え。
+ * 質問に出た数量の値のどちらか 1 つ（数＋単位か数だけ）だけを受け取る。単価・金額や、質問に出ない値は unread。
+ */
+function readChoice(c: Candidate, choices: { value: number; unit: string | null }[], unit: string | null): Action {
+  if (c.value === null) return unread("数が読めない");
+  if (c.kind !== "qty" && c.kind !== "bareNumber") return unread("言い直しの質問に数量で答えていない");
+  const unitOf = (x: { unit: string | null }) => (x.unit === null || x.unit === "つ" ? unit : x.unit);
+  const hits = choices.filter((x) => x.value === c.value && (unitless(c) || unitOf(x) === c.unit));
+  const units = [...new Set(hits.map(unitOf))];
+  if (hits.length === 0) return unread("質問に出た値でない");
+  if (units.length !== 1 || units[0] === null) return unread("どの単位の数か分からない");
+  const u = units[0];
+  if (COUNT_UNITS.has(u) && !Number.isInteger(c.value)) return unread("数量が整数でない");
+  return { kind: "setQty", value: c.value, unit: u };
+}
+
+/**
+ * 答えの 1 発話を、質問 q に対する 1 つの操作として読む。読めなければ unread。
+ * candidates は作業の候補（言い直しの質問に出た値を引くのに使う。無ければ言い直しは行の数量だけを受ける）。
+ */
+export function readAnswer(
+  q: Question,
+  line: PricedLine | undefined,
+  utterance: Segment,
+  ledger: LedgerEntry[],
+  candidates: Candidate[] = [],
+): Action {
   const t: Transcript = { recordingId: "answer", vendor: "answer", language: "ja", glossaryHint: false, segments: [{ ...utterance }] };
   const cs = enumerateCandidates(t, ledger);
   if (cs.some((c) => c.kind === "unparsedYen" || c.kind === "unparsedNumber")) return unread("数が読めない");
   const yes = isYes(utterance.text);
   const no = isNo(utterance.text);
+  const unrelated = isUnrelated(utterance.text);
   const bare = bareAnswer(utterance.text);
-  if (!yes && !no && [...NEGATION_CUES, ...CORRECTION_CUES].some((w) => bare.includes(w))) {
+  if (!yes && !no && !unrelated && [...NEGATION_CUES, ...CORRECTION_CUES].some((w) => bare.includes(w))) {
     return unread("否定か言い直しの合図がある");
   }
   if (q.lineIndex < 0) return unread("行に付かない質問は画面で直す");
@@ -62,19 +108,32 @@ export function readAnswer(q: Question, line: PricedLine | undefined, utterance:
 
   const nums = cs.filter((c) => NUMBER_KINDS.has(c.kind));
   const unit = line.ledger.unit ?? line.unit;
+  /** 数がちょうど 1 つで、その数の前後に許した語しか無いときだけ、その数を read に渡す。 */
+  const single = (read: (c: Candidate) => Action): Action => {
+    if (nums.length !== 1) return unread(nums.length === 0 ? "数が無い" : "数が 2 つ以上ある");
+    if (!onlyValue(utterance.text, nums[0], itemWords(line, ledger))) return unread("答えに余計な語がある");
+    return read(nums[0]);
+  };
+
   switch (q.reason) {
     case "qty":
     case "unit":
     case "unparsed":
+      return single((c) => readQty(c, unit));
     case "correction": {
-      if (nums.length !== 1) return unread(nums.length === 0 ? "数が無い" : "数が 2 つ以上ある");
-      const c = nums[0];
-      if (q.reason === "correction" && isYen(c)) return readPrice(c, unit);
-      return readQty(c, unit);
+      const mine = q.confirmations.filter((c) => reasonOf(c) === "correction");
+      if (unusedNumberTexts(line, mine, candidates).length > 0) {
+        // 「脱着は4本ですか。2個は何の数ですか」: 数では解かない。決まった語で、その数を関係なしとして解く
+        return unrelated ? { kind: "unrelated" } : unread("「関係ない」で読めない");
+      }
+      const choices = relatedCandidates(mine, candidates)
+        .filter((x): x is Candidate & { value: number } => (x.kind === "qty" || x.kind === "bareNumber") && x.value !== null)
+        .map((x) => ({ value: x.value, unit: x.unit }));
+      if (choices.length === 0 && line.qty !== null) choices.push({ value: line.qty, unit: line.unit });
+      return single((c) => readChoice(c, choices, unit));
     }
     case "unitPrice":
-      if (nums.length !== 1) return unread(nums.length === 0 ? "数が無い" : "数が 2 つ以上ある");
-      return readPrice(nums[0], unit);
+      return single((c) => readPrice(c, unit));
     case "negation":
       if (yes) return { kind: "drop" };
       if (no) return { kind: "deny" };
@@ -88,13 +147,19 @@ export function readAnswer(q: Question, line: PricedLine | undefined, utterance:
   }
 }
 
-/** 答えが消す、resolve の確認事項の理由。 */
+/** 答えが消す、resolve の確認事項の理由。単価の答えは数量・言い直しを消さない。 */
 const CLEARS: Partial<Record<Action["kind"], Set<QuestionReason>>> = {
   setQty: QTY_REASONS,
-  setUnitPrice: new Set(["unitPrice", "correction"]),
+  setUnitPrice: new Set(["unitPrice"]),
   confirm: new Set(["other"]),
   deny: new Set(["negation"]),
 };
+
+/** 答えが消す確認事項か。unrelated は使われない数の確認事項だけを消す。 */
+function clears(act: Action, c: Confirmation): boolean {
+  if (act.kind === "unrelated") return reasonOf(c) === "correction" && isUnusedNumber(c);
+  return CLEARS[act.kind]?.has(reasonOf(c)) ?? false;
+}
 
 /**
  * resolveInvoice の行と確認事項に答えを順に当て、assembleInvoice と同じ順で料金表と金額の照合をやり直す。
@@ -108,35 +173,32 @@ export function applyAnswers(
 ): AssembledInvoice & { kept: number[] } {
   const resolved = resolveInvoice(x.refs.lines, x.candidates, t, ledger, x.refs.negations);
   const lines: InvoiceLine[] = resolved.lines.map((l) => ({ ...l }));
-  const dropped = new Set<number>();
+  const kept = keptLines(lines.length, answers);
+  const live = new Set(kept);
   let confs: Confirmation[] = resolved.confirmations;
   for (const a of answers) {
     const i = a.lineIndex;
-    if (i < 0 || i >= lines.length || dropped.has(i)) continue;
+    if (!live.has(i) || a.action.kind === "drop") continue;
     const act = a.action;
     if (act.kind === "setQty") lines[i] = { ...lines[i], qty: act.value, unit: act.unit };
     if (act.kind === "setUnitPrice") lines[i] = { ...lines[i], unitPrice: act.value };
-    if (act.kind === "drop") dropped.add(i);
-    const clears = CLEARS[act.kind];
-    if (clears) confs = confs.filter((c) => !(c.lineIndex === i && clears.has(reasonOf(c))));
+    confs = confs.filter((c) => !(c.lineIndex === i && clears(act, c)));
   }
 
-  const kept = lines.map((_, i) => i).filter((i) => !dropped.has(i));
   const newIndex = new Map(kept.map((orig, j) => [orig, j]));
-  const keptLines = kept.map((i) => lines[i]);
+  const keptLinesOut = kept.map((i) => lines[i]);
   const keptRefs = kept.map((i) => x.refs.lines[i]);
   const resolvedConfs = confs
     .filter((c) => c.lineIndex < 0 || newIndex.has(c.lineIndex))
     .map((c) => (c.lineIndex < 0 ? c : { ...c, lineIndex: newIndex.get(c.lineIndex) as number }));
 
   // ここから下は build.ts の assembleInvoice と同じ順
-  const priced = priceInvoice({ lines: keptLines }, ledger);
-  const byLine = (a: { lineIndex: number }, b: { lineIndex: number }) => a.lineIndex - b.lineIndex;
-  const before = [...resolvedConfs, ...priced.confirmations].sort(byLine);
+  const priced = priceInvoice({ lines: keptLinesOut }, ledger);
+  const before = mergeConfirmations(resolvedConfs, priced.confirmations);
   const flagged = (cf: { lineIndex: number }[], i: number) => cf.some((c) => c.lineIndex === i);
   const pl = priced.lines.map((l, i) => (flagged(before, i) ? { ...l, amount: null } : l));
   const checked = checkAmounts({ lines: pl, confirmations: before, total: before.length ? null : priced.total }, keptRefs, x.candidates);
-  const confirmations = [...before, ...checked].sort(byLine);
+  const confirmations = mergeConfirmations(before, checked);
   const final = pl.map((l, i) => (l.amount !== null && flagged(checked, i) ? { ...l, amount: null } : l));
   const total = confirmations.length === 0 ? final.reduce((s, l) => s + (l.amount ?? 0), 0) : null;
   return { lines: final, confirmations, total, unused: resolved.unused, kept };
@@ -163,32 +225,34 @@ export function answerSession(s: Session, utterance: Segment, ledger: LedgerEntr
     },
     source: "answer",
   };
+  const keep = (questionIndex: number, lineIndex: number, action: Action): Session => ({
+    ...s,
+    answers: [...s.answers, { ...base, questionIndex, lineIndex, action }],
+    updatedAt: at,
+  });
 
   if (isApproval(utterance.text)) {
+    // 客の声では承認しない（話者が分からない声は通す。最後は父が画面で見る）
+    if (speaker === "customer") return keep(-1, -1, unread("客の声"));
     if (s.invoice.confirmations.length === 0) {
       const answers: Answer[] = [...s.answers, { ...base, questionIndex: -1, lineIndex: -1, action: { kind: "approve" } }];
       return transition({ ...s, answers, approved: true, approvedAt: at }, "done", now);
     }
-    const answers: Answer[] = [
-      ...s.answers,
-      { ...base, questionIndex: -1, lineIndex: -1, action: unread("確認事項が残っている") },
-    ];
-    return { ...s, answers, updatedAt: at };
+    return keep(-1, -1, unread("確認事項が残っている"));
   }
 
   const x = { candidates: s.candidates, refs: s.refs };
   const q = s.questions[0];
-  if (q === undefined) {
-    const answers: Answer[] = [...s.answers, { ...base, questionIndex: -1, lineIndex: -1, action: unread("聞いている質問が無い") }];
-    return { ...s, answers, updatedAt: at };
-  }
-  const { kept } = applyAnswers(x, s.transcript, ledger, s.answers);
+  if (q === undefined) return keep(-1, -1, unread("聞いている質問が無い"));
+  const kept = keptLines(s.refs.lines.length, s.answers);
   const line = q.lineIndex >= 0 ? s.invoice.lines[q.lineIndex] : undefined;
-  const action = readAnswer(q, line, utterance, ledger);
+  let action = readAnswer(q, line, utterance, ledger, s.candidates);
+  // 客の声で行を取り消さない
+  if (action.kind === "drop" && speaker === "customer") action = unread("客の声");
   const lineIndex = q.lineIndex >= 0 ? (kept[q.lineIndex] ?? -1) : -1;
-  const answers: Answer[] = [...s.answers, { ...base, questionIndex: 0, lineIndex, action }];
-  if (action.kind === "unread") return { ...s, answers, updatedAt: at };
+  if (action.kind === "unread") return keep(0, lineIndex, action);
 
+  const answers: Answer[] = [...s.answers, { ...base, questionIndex: 0, lineIndex, action }];
   const drafting = transition({ ...s, answers }, "drafting", now);
   const r = applyAnswers(x, s.transcript, ledger, answers);
   const invoice: AssembledInvoice = { lines: r.lines, confirmations: r.confirmations, total: r.total, unused: r.unused };

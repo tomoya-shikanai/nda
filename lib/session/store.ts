@@ -24,6 +24,8 @@ export const AnswerAction = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("confirm") }),
   z.object({ kind: z.literal("deny") }),
   z.object({ kind: z.literal("drop") }),
+  /** 「X は何の数ですか」に「関係ない」。その行の使われない数の確認事項を解く。 */
+  z.object({ kind: z.literal("unrelated") }),
   z.object({ kind: z.literal("approve") }),
   z.object({ kind: z.literal("unread"), reason: z.string() }),
 ]);
