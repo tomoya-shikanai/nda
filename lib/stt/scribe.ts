@@ -8,12 +8,21 @@
  * 発話の分け方: speaker_id が変わるか、語が「。」「？」「！」で終わったら区切る。
  * 誰が父かの対応付けはしない（speaker は speaker_id のまま。無ければ null）。
  * words が無い・空なら throw する（応答の text を 1 発話にして時刻を推測しない）。
+ * 語は type・text・start・end が必須で、欠けた語があれば throw する（黙って捨てない）。出口で TranscriptSchema を通す。
  */
-import type { Segment, Transcript } from "./types";
+import { z } from "zod";
+import { type Segment, type Transcript, TranscriptSchema } from "./types";
 
 export type SttAudio = { data: Uint8Array; mimeType: string; recordingId: string };
 
-type ScribeWord = { text: string; start: number; end: number; type: string; speaker_id?: string | null };
+const ScribeWord = z.object({
+  text: z.string(),
+  start: z.number(),
+  end: z.number(),
+  type: z.string(),
+  speaker_id: z.string().nullish(),
+});
+type ScribeWord = z.infer<typeof ScribeWord>;
 
 const URL_SCRIBE = "https://api.elevenlabs.io/v1/speech-to-text";
 const SENTENCE_END = /[。？！?!]$/;
@@ -67,17 +76,22 @@ export async function transcribeScribe(
     const body = await r.text().catch(() => "");
     throw new Error(redact(`scribe ${r.status} ${body.slice(0, 200)}`, opts.apiKey));
   }
-  const j = (await r.json()) as { words?: ScribeWord[] };
+  const j = (await r.json()) as { words?: unknown };
   if (!Array.isArray(j.words) || j.words.length === 0) {
     throw new Error("scribe の応答に words が無い（時刻を推測しない）");
   }
-  const segments = wordsToSegments(j.words);
+  const words = j.words.map((w, i) => {
+    const p = ScribeWord.safeParse(w);
+    if (!p.success) throw new Error(`scribe の応答の語 ${i} に type・text・start・end が揃っていない`);
+    return p.data;
+  });
+  const segments = wordsToSegments(words);
   if (segments.length === 0) throw new Error("scribe の応答に語が無い（時刻を推測しない）");
-  return {
+  return TranscriptSchema.parse({
     recordingId: audio.recordingId,
     vendor: "scribe_v2",
     language: "ja",
     segments,
     glossaryHint: keyterms.length > 0,
-  };
+  });
 }

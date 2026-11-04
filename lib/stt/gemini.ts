@@ -4,9 +4,10 @@
  *
  * 時刻と話者は取らない（custom_vocabulary と併用できないと docs/research.md にある。取り方は実録音の後に決める）。
  * なので 1 発話 { startSec: 0, endSec: WAV の長さ, speaker: null, text } にする。WAV でなければ throw（長さを推測しない）。
+ * model_output の content に text の無いブロックがあれば throw する（黙って捨てない）。出口で TranscriptSchema を通す。
  */
 import { redact, type SttAudio } from "./scribe";
-import type { Transcript } from "./types";
+import { type Transcript, TranscriptSchema } from "./types";
 import { wavDurationSec } from "./wav";
 
 const URL_INTERACTIONS = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -37,19 +38,21 @@ export async function transcribeGemini(
     const text = await r.text().catch(() => "");
     throw new Error(redact(`gemini-transcribe ${r.status} ${text.slice(0, 200)}`, opts.apiKey));
   }
-  const j = (await r.json()) as { steps?: { type: string; content?: { type: string; text?: string }[] }[] };
-  const text = (j.steps ?? [])
-    .filter((s) => s.type === "model_output")
-    .flatMap((s) => s.content ?? [])
-    .map((c) => c.text ?? "")
+  const j = (await r.json()) as { steps?: { type: string; content?: { type: string; text?: unknown }[] }[] };
+  const blocks = (j.steps ?? []).filter((s) => s.type === "model_output").flatMap((s) => s.content ?? []);
+  if (blocks.some((c) => typeof c.text !== "string")) {
+    throw new Error("gemini-transcribe の応答に text の無いブロックがある");
+  }
+  const text = blocks
+    .map((c) => c.text as string)
     .join("")
     .trim();
   if (!text) throw new Error("gemini-transcribe の応答に本文が無い");
-  return {
+  return TranscriptSchema.parse({
     recordingId: audio.recordingId,
     vendor: "gemini-3.5-transcribe",
     language: "ja",
     segments: [{ startSec: 0, endSec, speaker: null, text }],
     glossaryHint: vocabulary.length > 0,
-  };
+  });
 }

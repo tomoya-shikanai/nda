@@ -13,7 +13,7 @@ import { type Candidate, enumerateCandidates } from "../lib/invoice/candidates";
 import type { InvoiceRefs, LineRef } from "../lib/invoice/schema";
 import type { LedgerEntry } from "../lib/ledger/lookup";
 import { type Extractor, startSession } from "../lib/session/run";
-import { type Answer, newSession, readSession, type Session, SESSION_STATES, transition } from "../lib/session/store";
+import { type Answer, latestSession, newSession, readSession, type Session, SESSION_STATES, transition } from "../lib/session/store";
 import { SAY, toMonitorView, VOICE_CREDIT } from "../lib/session/view";
 import type { Transcript } from "../lib/stt/types";
 
@@ -176,7 +176,10 @@ test("(3) extractor が throw すると throw し直し、保存は idle で err
     s.history.map((h) => h.status),
     ["idle", "listening", "thinking", "idle"],
   );
-  assert.equal(s.error, "偽の抽出の失敗");
+  // SDK の文は保存しない。固定の文と例外の種類名だけ
+  assert.equal(s.error, "抽出に失敗しました（Error）");
+  assert.equal(s.extraction?.inputTokens, null);
+  assert.ok(Number.isFinite(s.extraction?.seconds));
   assert.equal(toMonitorView(s).say, "うまく分けられませんでした。もう一度話してください");
 });
 
@@ -325,5 +328,35 @@ test("(7) route: 不正な body は 400、POST は 201、GET current は同じ i
   const text = await bad.text();
   assert.ok(!text.includes("test"), text);
   assert.ok("error" in (JSON.parse(text) as object));
+  // 保存された error にも SDK の文（「偽の失敗」）を入れない
+  const failed = (await latestSession(process.env.NDA_SESSION_DIR as string)) as Session;
+  assert.equal(failed.status, "idle");
+  assert.match(failed.error ?? "", /^抽出に失敗しました（[A-Za-z]+）$/);
+  assert.ok(!(failed.error ?? "").includes("偽の失敗"));
+  // 成功した抽出は偽サーバーの usage（1・1）を保存する
+  const okSaved = await readSession(process.env.NDA_SESSION_DIR as string, body.id);
+  assert.equal(okSaved?.extraction?.inputTokens, 1);
+  assert.equal(okSaved?.extraction?.outputTokens, 1);
   fail = false;
+});
+
+test("抽出の費用: usage とかかった秒数を保存し、失敗は例外の種類名だけを残す", async () => {
+  const dir = await tmp();
+  const withUsage: Extractor = async (t, l) => ({ ...(await fakeExtract(t, l)), usage: { inputTokens: 1200, outputTokens: 340 } });
+  const s = await startSession({ dir, transcript: byId("tire-001"), ledger, extract: withUsage, now, id: "cost1" });
+  assert.equal(s.extraction?.inputTokens, 1200);
+  assert.equal(s.extraction?.outputTokens, 340);
+  assert.ok((s.extraction?.seconds ?? -1) >= 0);
+  assert.deepEqual(await readSession(dir, "cost1"), s);
+  // 偽の extractor が usage を返さなければ null（推測しない）
+  const plain = await startSession({ dir, transcript: byId("tire-001"), ledger, extract: fakeExtract, now, id: "cost2" });
+  assert.equal(plain.extraction?.inputTokens, null);
+
+  class FakeApiError extends Error {}
+  const boom: Extractor = async () => {
+    throw new FakeApiError("401 invalid x-api-key 偽のキーの値 要求の中身");
+  };
+  await assert.rejects(startSession({ dir, transcript: byId("tire-001"), ledger, extract: boom, now, id: "cost3" }));
+  const f = await readSession(dir, "cost3");
+  assert.equal(f?.error, "抽出に失敗しました（FakeApiError）");
 });

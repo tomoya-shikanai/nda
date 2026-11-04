@@ -47,6 +47,14 @@ const HistoryEntry = z.object({ status: SessionStatus, at: z.string() });
 /** 中身の形は各モジュールが正。ここでは null か配列・オブジェクトかだけを確かめる。 */
 const AnyObject = z.record(z.string(), z.unknown());
 
+/** 抽出の費用の記録（文の中身は入れない）。トークン数は分からなければ null。 */
+export const ExtractionCost = z.object({
+  inputTokens: z.number().int().nonnegative().nullable(),
+  outputTokens: z.number().int().nonnegative().nullable(),
+  seconds: z.number().nonnegative(),
+});
+export type ExtractionCost = z.infer<typeof ExtractionCost>;
+
 const SessionSchema = z.object({
   id: z.string(),
   status: SessionStatus,
@@ -62,6 +70,8 @@ const SessionSchema = z.object({
   approved: z.boolean(),
   approvedAt: z.string().nullable(),
   error: z.string().nullable(),
+  /** 前の版のファイルには無いので、無ければ null。 */
+  extraction: ExtractionCost.nullable().default(null),
 });
 
 export type Session = {
@@ -80,6 +90,8 @@ export type Session = {
   approved: boolean;
   approvedAt: string | null;
   error: string | null;
+  /** 抽出の費用（トークン数とかかった秒数）。抽出の前は null。 */
+  extraction: ExtractionCost | null;
 };
 
 /** 形を確かめて Session として返す。不正なら throw。 */
@@ -113,6 +125,7 @@ export function newSession(id: string, now: Date): Session {
     approved: false,
     approvedAt: null,
     error: null,
+    extraction: null,
   };
 }
 
@@ -164,7 +177,14 @@ export async function readSession(dir: string, id: string): Promise<Session | nu
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw e;
   }
-  return parseSession(JSON.parse(text));
+  const s = parseSession(JSON.parse(text));
+  // 読み込みで壊れたファイルを受け入れない
+  if (s.id !== id) throw new Error(`session のファイル名と中の id が違う: ${id}`);
+  const confs: unknown = s.invoice?.confirmations;
+  if (s.status === "done" && (s.approved !== true || !Array.isArray(confs) || confs.length !== 0)) {
+    throw new Error(`done なのに承認されていないか確認事項が残っている: ${id}`);
+  }
+  return s;
 }
 
 /** dir の *.json のうち updatedAt が最新のもの。.tmp は読まない。dir が無い・空なら null。 */

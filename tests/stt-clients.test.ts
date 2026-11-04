@@ -12,6 +12,7 @@ import { after, before, test } from "node:test";
 import { readSession } from "../lib/session/store";
 import { transcribeGemini } from "../lib/stt/gemini";
 import { transcribeScribe } from "../lib/stt/scribe";
+import { TranscriptSchema } from "../lib/stt/types";
 import { wavDurationSec } from "../lib/stt/wav";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -117,6 +118,53 @@ test("(2) Scribe: words が空・無いなら text があっても throw", async
   for (const body of [{ text: "全文", words: [] }, { text: "全文" }]) {
     const { fetch } = fakeFetch(() => json(body));
     await assert.rejects(transcribeScribe(audio, { apiKey: KEY, fetch }), /words/);
+  }
+});
+
+test("(2') Scribe: 語に type・text・start・end が欠ければ throw（黙って捨てない）。時刻の逆転も throw", async () => {
+  const w = { text: "脱着4本。", start: 0, end: 1, type: "word", speaker_id: "s0" };
+  const bad = [
+    [{ ...w, start: undefined }],
+    [{ ...w, end: undefined }],
+    [{ ...w, type: undefined }],
+    [{ ...w, text: undefined }],
+    [w, { text: "はしない。", start: 1, end: 2 }],
+    [{ ...w, start: "0" }],
+  ];
+  for (const words of bad) {
+    const { fetch } = fakeFetch(() => json({ words }));
+    await assert.rejects(transcribeScribe(audio, { apiKey: KEY, fetch }), /type・text・start・end/, JSON.stringify(words));
+  }
+  // 発話の中で開始が終了より後、発話の順で時刻が逆転
+  for (const words of [
+    [{ ...w, text: "脱着", start: 5, end: 6 }, { ...w, text: "4本。", start: 1, end: 2 }],
+    [{ ...w, start: 5, end: 6 }, { ...w, text: "バランス4本。", start: 1, end: 2 }],
+  ]) {
+    const { fetch } = fakeFetch(() => json({ words }));
+    await assert.rejects(transcribeScribe(audio, { apiKey: KEY, fetch }), JSON.stringify(words));
+  }
+});
+
+test("(3') Gemini: model_output の content に text の無いブロックがあれば throw", async () => {
+  for (const content of [[{ type: "text", text: "脱着4本" }, { type: "text" }], [{ type: "audio" }]]) {
+    const { fetch } = fakeFetch(() => json({ steps: [{ type: "model_output", content }] }));
+    await assert.rejects(transcribeGemini(audio, { apiKey: KEY, fetch }), /text の無いブロック/, JSON.stringify(content));
+  }
+});
+
+test("TranscriptSchema: 時刻が有限で開始 ≤ 終了、発話の順で逆転しない、発話が空でない", () => {
+  const seg = (startSec: number, endSec: number, text = "脱着4本。") => ({ startSec, endSec, speaker: null, text });
+  const tr = (segments: unknown[]) => ({ recordingId: "r", vendor: "v", language: "ja", glossaryHint: false, segments });
+  assert.doesNotThrow(() => TranscriptSchema.parse(tr([seg(0, 1), seg(0.5, 2), seg(2, 2)])));
+  for (const segs of [
+    [seg(Infinity, 1)],
+    [seg(0, Number.NaN)],
+    [seg(2, 1)],
+    [seg(3, 4), seg(1, 2)],
+    [seg(0, 1, "  ")],
+    [seg(0, 1, "")],
+  ]) {
+    assert.throws(() => TranscriptSchema.parse(tr(segs)), JSON.stringify(segs));
   }
 });
 

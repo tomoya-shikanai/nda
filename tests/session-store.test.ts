@@ -2,7 +2,7 @@
  * 作業 1 件の状態の保存（lib/session/store.ts）の検証。素材は架空のもの。data/ は読まない。
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -133,4 +133,39 @@ test("latestSession は updatedAt の最新を返し、空・無いフォルダ�
   const c = { ...newSession("c", at(0)), updatedAt: at(20).toISOString() };
   for (const s of [a, b, c]) await writeSession(dir, s);
   assert.deepEqual(await latestSession(dir), b);
+});
+
+test("読み込みで壊れたファイルを受け入れない: ファイル名と中の id が違う、done なのに未承認・確認事項あり", async () => {
+  const dir = await tmp();
+  await writeSession(dir, sample("a"));
+  const raw = JSON.parse(await readFile(join(dir, "a.json"), "utf8"));
+  await writeFile(join(dir, "a.json"), JSON.stringify({ ...raw, id: "b" }));
+  await assert.rejects(readSession(dir, "a"), /id が違う/);
+  await assert.rejects(latestSession(dir), /id が違う/);
+
+  const done = (over: Partial<Session>): Session => ({
+    ...newSession("d", t0),
+    status: "done",
+    approved: true,
+    invoice: { lines: [], confirmations: [], total: 0, unused: [] },
+    ...over,
+  });
+  const dir2 = await tmp();
+  await writeSession(dir2, done({}));
+  assert.equal((await readSession(dir2, "d"))?.status, "done");
+  await writeSession(dir2, done({ approved: false }));
+  await assert.rejects(readSession(dir2, "d"), /承認/);
+  const conf = { lineIndex: 0, item: "x", field: "qty" as const, message: "「x」の数量が分からない" };
+  await writeSession(dir2, done({ invoice: { lines: [], confirmations: [conf], total: null, unused: [] } }));
+  await assert.rejects(readSession(dir2, "d"), /確認事項/);
+  await writeSession(dir2, done({ invoice: null }));
+  await assert.rejects(readSession(dir2, "d"), /確認事項/);
+});
+
+test("前の版のファイル（extraction が無い）は extraction null として読む", async () => {
+  const dir = await tmp();
+  const { extraction, ...old } = sample("old");
+  assert.equal(extraction, null);
+  await writeFile(join(dir, "old.json"), JSON.stringify(old));
+  assert.deepEqual(await readSession(dir, "old"), sample("old"));
 });
