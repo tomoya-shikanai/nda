@@ -9,6 +9,8 @@ DB の構造は `docs/racros-schema.md` にあります。
   - SELECT か WITH で始まる 1 文だけを通します。文字列・コメント・`[ ]` を取り除いた骨格に、INSERT・UPDATE・DELETE・MERGE・DDL・EXEC・BACKUP・RESTORE・ATTACH・INTO・SET・WAITFOR などの語があれば、送る前に止めます。
   - 接続は READ UNCOMMITTED のトランザクションで読み、最後に必ず ROLLBACK します（RacroS の利用を止めるロックを取らない。万一ガードをすり抜けても確定させない）。
   - 対象は `RS3_` で始まる DB だけです。`C:\RACROS3` 以下のファイルには触れません。
+  - 接続は、読むだけのログイン（`claude_reader`。RS3_* の db_datareader だけ）で行います。接続文字列は `C:\Users\PRS\nda-private\sql-reader.txt`（リポジトリの外）にあり、実行のたびに読んで `Initial Catalog` を足します。Windows 認証の接続文字列は拒否します。パスワードは出力・ログ・コミットに出しません。ガードとログインの権限の二重の防御です。
+  - バックアップ（`C:\RS_BACKUP`）は読みません。
 - **客の情報を外に出さない**: 取り出しは許可リスト（`Export-RacrosTireLines.ps1` の `$spec`）の列だけです。
   - 客・車・伝票の番号は `顧客A`・`車両001`・`伝票00001` の仮名にします。対応表は `C:\Users\PRS\nda-private\racros\pseudonyms.csv`（リポジトリの外）です。
   - 品名などの自由記述は、3 人以上の客に共通する文言だけを残し、ほかは `<タイヤ 銘柄 サイズ>`・`<自由記述>`・`<除外>` に置き換えます。
@@ -74,7 +76,7 @@ Invoke-Pester -Script .\tests
 
 ### タスクスケジューラへの登録（まだ登録していません）
 
-1. 事務所の PC に PRS でログオンします（SQL Server には Windows 認証で入るため、PRS として動かします）。
+1. 事務所の PC に PRS でログオンします（SQL Server には `claude_reader` で入りますが、接続文字列のファイル `C:\Users\PRS\nda-private\sql-reader.txt` を読めるのが PRS なので、タスクは PRS として動かします）。
 2. 管理者でない PowerShell で、次を実行します（毎日 2:30。RacroS を使っていない時間）。パスワードを聞かれたら PRS のパスワードを入れます（画面に出ません）。
 
    ```powershell

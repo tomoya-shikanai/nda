@@ -57,6 +57,23 @@ Describe 'Assert-ReadOnlySql: 拒否する文' {
 
 Describe 'Invoke-RacrosSelect: 送る前に止める' {
     It 'RS3_ 以外のデータベースは拒否' { { Invoke-RacrosSelect -Database 'master' -Sql 'SELECT 1' } | Should Throw }
-    It '書き換えの文は接続の前に拒否' { { Invoke-RacrosSelect -Database 'RS3_DATA' -Sql 'DELETE FROM T' -Instance 'nonexistent\none' } | Should Throw 'SELECT か WITH' }
-    It 'WITH に続く書き換えも接続の前に拒否' { { Invoke-RacrosSelect -Database 'RS3_DATA' -Sql 'WITH x AS (SELECT 1 a) DELETE FROM x' -Instance 'nonexistent\none' } | Should Throw '使えない語' }
+    It 'WITH に続く書き換えも接続の前に拒否' { { Invoke-RacrosSelect -Database 'RS3_DATA' -Sql 'WITH x AS (SELECT 1 a) DELETE FROM x' -ConnectionFile 'C:\nonexistent\none.txt' } | Should Throw '使えない語' }
+}
+
+Describe 'Get-RacrosConnectionString: 読むだけのログインだけを使う' {
+    It 'データベース名と読み取りの意図を足す（架空の値）' {
+        $f = Join-Path $TestDrive 'reader.txt'
+        Set-Content -LiteralPath $f -Value 'Server=.\FAKE;User ID=fake_reader;Password=fake-pass' -Encoding UTF8
+        $cs = Get-RacrosConnectionString -Database 'RS3_DATA' -ConnectionFile $f
+        $cs | Should Match 'Initial Catalog=RS3_DATA'
+        $cs | Should Match 'ApplicationIntent=ReadOnly'
+        $cs | Should Match 'User ID=fake_reader'
+    }
+    It 'Windows 認証の接続文字列は拒否' {
+        $f = Join-Path $TestDrive 'win.txt'
+        Set-Content -LiteralPath $f -Value 'Server=.\FAKE;Integrated Security=True' -Encoding UTF8
+        { Get-RacrosConnectionString -Database 'RS3_DATA' -ConnectionFile $f } | Should Throw 'Windows 認証'
+    }
+    It 'ファイルが無ければ止まる' { { Get-RacrosConnectionString -Database 'RS3_DATA' -ConnectionFile 'C:\nonexistent\none.txt' } | Should Throw }
+    It '書き換えの文は、接続文字列のファイルを読む前に拒否' { { Invoke-RacrosSelect -Database 'RS3_DATA' -Sql 'DELETE FROM T' -ConnectionFile 'C:\nonexistent\none.txt' } | Should Throw 'SELECT か WITH' }
 }

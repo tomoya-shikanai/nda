@@ -6,7 +6,25 @@
 
 Set-StrictMode -Version Latest
 
-$script:DefaultInstance = '.\S1DATABASE2019'
+# 読むだけのログイン（db_datareader だけ）の接続文字列。リポジトリの外に置き、実行のたびに読む。
+# 中身（パスワード）は出力・ログ・例外の文言に出さない。
+$script:DefaultConnectionFile = 'C:\Users\PRS\nda-private\sql-reader.txt'
+
+# 接続文字列のファイルを読み、データベース名などを足して返す。Windows 認証の接続は受け付けない。
+function Get-RacrosConnectionString {
+    param([Parameter(Mandatory)][string]$Database, [string]$ConnectionFile = $script:DefaultConnectionFile)
+    if (-not (Test-Path -LiteralPath $ConnectionFile)) { throw "接続文字列のファイルがありません: $ConnectionFile" }
+    $raw = (Get-Content -LiteralPath $ConnectionFile -Raw -Encoding UTF8).Trim()
+    try { $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder $raw }
+    catch { throw "接続文字列のファイルを読めません（中身は表示しません）: $ConnectionFile" }
+    # PowerShell は接続文字列のビルダーを辞書として扱うので、キー名（空白入り）で読み書きする
+    if ($b.ContainsKey('Integrated Security') -and "$($b['Integrated Security'])" -match '^(?i)(true|yes|sspi)$') { throw 'Windows 認証の接続は使いません（読むだけのログインを使う）' }
+    if (-not $b.ContainsKey('User ID') -or -not "$($b['User ID'])") { throw '接続文字列に User ID がありません' }
+    $b['Initial Catalog'] = $Database
+    $b['Application Name'] = 'nda-racros-readonly'
+    $b['ApplicationIntent'] = 'ReadOnly'
+    return $b.ConnectionString
+}
 
 # 文字列リテラル・コメント・[角括弧の識別子] を空白に置き換えた「骨格」を返す。
 # ガードは骨格に対して判定する（'DELETE' という文字列や列名 [UPDATE_DT] で誤判定しないため）。
@@ -98,15 +116,19 @@ function Invoke-RacrosSelect {
         [Parameter(Mandatory)][string]$Database,
         [Parameter(Mandatory)][string]$Sql,
         [hashtable]$Parameters = @{},
-        [string]$Instance = $script:DefaultInstance,
+        [string]$ConnectionFile = $script:DefaultConnectionFile,
         [int]$TimeoutSec = 300
     )
     if ($Database -notmatch '^RS3_[A-Z0-9_]+$') { throw "対象は RS3_ で始まるデータベースだけです: $Database" }
     [void](Assert-ReadOnlySql -Sql $Sql)
 
-    $cs = "Server=$Instance;Database=$Database;Integrated Security=True;Application Name=nda-racros-readonly;ApplicationIntent=ReadOnly"
-    $conn = New-Object System.Data.SqlClient.SqlConnection $cs
-    $conn.Open()
+    $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RacrosConnectionString -Database $Database -ConnectionFile $ConnectionFile)
+    try { $conn.Open() }
+    catch {
+        # SqlClient の例外の文言にパスワードは入らないが、念のため接続文字列は出さず、原因の文だけを返す
+        $conn.Dispose()
+        throw "SQL Server に接続できません: $($_.Exception.InnerException.Message -replace '(?i)password=[^;]*', 'Password=***')$($_.Exception.Message -replace '(?i)password=[^;]*', 'Password=***')"
+    }
     try {
         $tx = $conn.BeginTransaction([System.Data.IsolationLevel]::ReadUncommitted)
         try {
@@ -140,4 +162,4 @@ function Invoke-RacrosSelect {
     }
 }
 
-Export-ModuleMember -Function Get-SqlSkeleton, Assert-ReadOnlySql, Invoke-RacrosSelect
+Export-ModuleMember -Function Get-SqlSkeleton, Assert-ReadOnlySql, Get-RacrosConnectionString, Invoke-RacrosSelect
