@@ -127,7 +127,8 @@ function Invoke-RacrosSelect {
     catch {
         # SqlClient の例外の文言にパスワードは入らないが、念のため接続文字列は出さず、原因の文だけを返す
         $conn.Dispose()
-        throw "SQL Server に接続できません: $($_.Exception.InnerException.Message -replace '(?i)password=[^;]*', 'Password=***')$($_.Exception.Message -replace '(?i)password=[^;]*', 'Password=***')"
+        $msg = "$($_.Exception.Message)" -replace '(?i)(password|pwd)\s*=[^;]*', '$1=***'
+        throw "SQL Server に接続できません: $msg"
     }
     try {
         $tx = $conn.BeginTransaction([System.Data.IsolationLevel]::ReadUncommitted)

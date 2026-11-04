@@ -77,3 +77,14 @@ Describe 'Get-RacrosConnectionString: 読むだけのログインだけを使う
     It 'ファイルが無ければ止まる' { { Get-RacrosConnectionString -Database 'RS3_DATA' -ConnectionFile 'C:\nonexistent\none.txt' } | Should Throw }
     It '書き換えの文は、接続文字列のファイルを読む前に拒否' { { Invoke-RacrosSelect -Database 'RS3_DATA' -Sql 'DELETE FROM T' -ConnectionFile 'C:\nonexistent\none.txt' } | Should Throw 'SELECT か WITH' }
 }
+
+Describe 'Invoke-RacrosSelect: 接続の失敗' {
+    It '接続できないとき、文言にパスワードを出さない（架空の接続先）' {
+        $f = Join-Path $TestDrive 'bad.txt'
+        Set-Content -LiteralPath $f -Value 'Server=tcp:127.0.0.1,1;User ID=fake_reader;Password=fake-secret-pass;Connect Timeout=2' -Encoding UTF8
+        $err = $null
+        try { Invoke-RacrosSelect -Database 'RS3_DATA' -Sql 'SELECT 1 a' -ConnectionFile $f } catch { $err = "$($_.Exception.Message)" }
+        $err | Should Match '接続できません'
+        $err | Should Not Match 'fake-secret-pass'
+    }
+}
