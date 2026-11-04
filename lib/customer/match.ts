@@ -84,7 +84,7 @@ const PARTICLES = new Set(["は", "が", "の", "と", "に", "を", "も", "で
 /** 敬称。名前でない語（「たくさん」「様子」「様々」「さまざま」）は除く。 */
 const HONORIFIC = /さん|様|さま/g;
 const NOT_HONORIFIC = ["たくさん", "沢山", "様子", "様々", "さまざま"];
-/** 敬称の前でも名前でない語（遡った並びの末尾がこれなら伏せない・一覧外の名前に数えない）。 */
+/** 敬称の前でも名前でない語（遡った並び全体がこれ（頭の「お」は任意）なら伏せない・一覧外の名前に数えない）。 */
 const NOT_NAMES = ["お客", "客", "皆", "みな", "奥", "父", "母", "兄", "姉", "おじ", "おば", "じい", "ばあ"];
 
 /**
@@ -93,8 +93,11 @@ const NOT_NAMES = ["お客", "客", "皆", "みな", "奥", "父", "母", "兄",
  * 間の空白・「・」1 字は、前後が名前の字なら続きとみなす。伏せすぎる側に倒す。無ければ null。
  */
 function nameBefore(text: string, at: number): Span | null {
-  // 助詞とみなすのは、直前が漢字・カタカナ・英字のとき（「山田の」）。ひらがなの続き・文頭の「や」「の」は名前の字（「やまだ」「のぞみ」）
-  const particle = (j: number) => PARTICLES.has(text[j]) && isNameChar(text[j - 1]) && !/[\u3041-\u3096]/.test(text[j - 1]);
+  // 助詞とみなすのは、直前が漢字・カタカナ・英字のとき（「山田の」）。ひらがなの続き・文頭の「や」「の」は名前の字（「やまだ」「のぞみ」）。
+  // ただし助詞の後ろ、敬称までがひらがなだけなら、その字は名前の一部とみなして止めない（「山田はなこ」「佐藤のぞみ」。伏せすぎる側）
+  const hiraganaOnly = (j: number) => /^[\u3041-\u3096]+$/.test(text.slice(j + 1, at));
+  const particle = (j: number) =>
+    PARTICLES.has(text[j]) && isNameChar(text[j - 1]) && !/[\u3041-\u3096]/.test(text[j - 1]) && !hiraganaOnly(j);
   const stop = (j: number) => !isNameChar(text[j]) || particle(j) || /(さん|様|さま)$/.test(text.slice(0, j + 1));
   if (stop(at - 1)) return null;
   let i = at - 1;
@@ -114,7 +117,8 @@ function honorificNames(text: string): Span[] {
     if (NOT_HONORIFIC.some((w) => [...text.matchAll(new RegExp(w, "g"))].some((x) => (x.index ?? 0) <= at && at < (x.index ?? 0) + w.length))) continue;
     const sp = nameBefore(text, at);
     if (sp === null) continue;
-    if (NOT_NAMES.some((w) => text.slice(sp.start, sp.end).endsWith(w))) continue;
+    const word = text.slice(sp.start, sp.end);
+    if (NOT_NAMES.some((w) => word === w || word === `お${w}`)) continue;
     out.push(sp);
   }
   return out;

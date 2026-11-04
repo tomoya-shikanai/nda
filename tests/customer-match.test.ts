@@ -331,10 +331,24 @@ test("自動のセキュリティ点検: 字の種類が混ざった名前・々
     assert.equal(m("タイヤの山田ヨシ子さん"), `タイヤの${MASK_NAME}さん`);
     assert.equal(m("脱着、Tanakaさん"), `脱着、${MASK_NAME}さん`);
     assert.equal(m("番号は4佐々木さん"), `番号は4${MASK_NAME}さん`);
-    assert.equal(m("脱着したお客さん"), "脱着したお客さん", "名前でない語で終わる並びは伏せない");
+    // 名前でない語は、並び全体がその語のときだけ伏せない（「お客さん」「父さん」）。後ろに付くだけなら丸ごと伏せる
+    assert.equal(m("お客さん、父さん"), "お客さん、父さん");
+    assert.equal(m("山田父さん"), `${MASK_NAME}さん`);
+    assert.equal(m("脱着したお客さん"), `${MASK_NAME}さん`, "伏せすぎる側");
   }
   // 一覧の名前と並んだ一覧外の名前（字の種類が混ざっても）で決めない
   assert.equal(identifyCustomer(["見本さんと山田ヨシ子さん、2222。"], customers).customerId, null);
   assert.equal(identifyCustomer(["見本さんとTanakaさん、2222。"], customers).customerId, null);
   assert.equal(identifyCustomer(["見本花子さん、2222。"], customers).customerId, "cust-002");
+});
+
+test("自動のセキュリティ点検: 姓とひらがなの名の間の「は」「の」で止めず、姓まで伏せる", () => {
+  for (const list of [customers, []]) {
+    const m = (t: string) => identifyCustomer([t], list).texts[0];
+    assert.equal(m("山田はなこさん"), `${MASK_NAME}さん`);
+    assert.equal(m("佐藤のぞみさん"), `${MASK_NAME}さん`);
+    assert.equal(m("田中ゆみなさん"), `${MASK_NAME}さん`);
+    // 助詞の後ろが漢字・カタカナを含めば、これまでどおり助詞で止める
+    assert.equal(m("脱着4本は山田さん"), `脱着4本は${MASK_NAME}さん`);
+  }
 });
