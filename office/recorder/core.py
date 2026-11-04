@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -102,6 +102,9 @@ class Tracker:
         self.window: Window | None = None
         self.focus: Element | None = None
         self.focus_value_at_enter: str | None = None
+        # 今の部品にフォーカスがある間に、一度でもパスワード欄・保護された欄と判定されたか。
+        # 立ったら部品を離れるまで下ろさない（保護中に読んだ値を後で before・after に出さない）
+        self.focus_protected = False
 
     def observe(self, s: Snapshot) -> list[Event]:
         events: list[Event] = []
@@ -111,6 +114,8 @@ class Tracker:
                 events += self._leave_focus()
                 events.append(Event("session_end", {"pid": self.pid}))
                 self.window = None
+                self.focus = None
+                self.focus_protected = False
             if s.target_pid is not None:
                 events.append(Event("session_start", {"pid": s.target_pid, "exe": s.target_exe, "path": s.target_path}))
             self.pid = s.target_pid
@@ -134,8 +139,10 @@ class Tracker:
             events.append(Event("focus", s.focus.to_dict()))
             self.focus = s.focus
             self.focus_value_at_enter = s.focus.value
+            self.focus_protected = s.focus.is_password
         elif s.focus is not None:
             self.focus = s.focus  # 同じ部品。値だけ更新される
+            self.focus_protected = self.focus_protected or s.focus.is_password
         return events
 
     def _leave_focus(self) -> list[Event]:
@@ -143,13 +150,16 @@ class Tracker:
         if f is None or f.value is None or f.value == self.focus_value_at_enter:
             return []
         before = self.focus_value_at_enter
+        hide = self.focus_protected or f.is_password
+        if hide:
+            f = replace(f, is_password=True)
         return [
             Event(
                 "value_changed",
                 {
                     "element": f.to_dict(),
-                    "before": MASK if f.is_password else (before or "")[:MAX_VALUE],
-                    "after": MASK if f.is_password else f.value[:MAX_VALUE],
+                    "before": MASK if hide else (before or "")[:MAX_VALUE],
+                    "after": MASK if hide else f.value[:MAX_VALUE],
                 },
             )
         ]
@@ -161,37 +171,51 @@ class Tracker:
             events.append(Event("session_end", {"pid": self.pid}))
         self.pid = None
         self.focus = None
+        self.focus_protected = False
         return events
 
 
 class Store:
-    """<root>/<YYYY-MM-DD>/session-<HHMMSS>/events.jsonl と screenshots/ に書く。"""
+    """<root>/<YYYY-MM-DD>/session-<HHMMSS>/events.jsonl と screenshots/ に書く。
+    日付が変わったら新しい日付のフォルダに切り替え（session_continue を先頭に書く）、
+    書く前に保存先が無ければ作り直す（長く動かしている間に消されても止まらない）。"""
 
     def __init__(self, root: Path, min_shot_interval: float = 2.0, clock=time.time) -> None:
         self.root = root
         self.min_shot_interval = min_shot_interval
         self.clock = clock
         self.dir: Path | None = None
+        self.day: str | None = None
         self.shots = 0
         self.last_shot = -1e9
 
     def open_session(self) -> Path:
         now = datetime.fromtimestamp(self.clock())
-        self.dir = self.root / now.strftime("%Y-%m-%d") / now.strftime("session-%H%M%S")
+        self.day = now.strftime("%Y-%m-%d")
+        self.dir = self.root / self.day / now.strftime("session-%H%M%S")
         (self.dir / "screenshots").mkdir(parents=True, exist_ok=True)
         self.shots = 0
         return self.dir
 
     def close_session(self) -> None:
         self.dir = None
+        self.day = None
 
-    def write(self, e: Event) -> None:
-        if e.kind == "session_start" or self.dir is None:
-            self.open_session()
+    def _append(self, rec: dict[str, Any]) -> None:
         assert self.dir is not None
-        rec = {"at": datetime.fromtimestamp(self.clock()).isoformat(timespec="milliseconds"), "kind": e.kind, **e.data}
+        self.dir.mkdir(parents=True, exist_ok=True)
         with open(self.dir / "events.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    def write(self, e: Event) -> None:
+        at = datetime.fromtimestamp(self.clock())
+        if e.kind == "session_start" or self.dir is None:
+            self.open_session()
+        elif at.strftime("%Y-%m-%d") != self.day:
+            prev = self.dir
+            self.open_session()
+            self._append({"at": at.isoformat(timespec="milliseconds"), "kind": "session_continue", "from": f"{prev.parent.name}/{prev.name}"})
+        self._append({"at": at.isoformat(timespec="milliseconds"), "kind": e.kind, **e.data})
         if e.kind == "session_end":
             self.close_session()
 
@@ -202,22 +226,33 @@ class Store:
             return None
         self.last_shot = now
         self.shots += 1
-        return self.dir / "screenshots" / f"{self.shots:04d}-{reason}.jpg"
+        shots = self.dir / "screenshots"
+        shots.mkdir(parents=True, exist_ok=True)
+        return shots / f"{self.shots:04d}-{reason}.jpg"
 
 
-def cleanup(root: Path, keep_days: int, today: date | None = None) -> list[Path]:
-    """keep_days より古い日付のフォルダを消す。日付の形でないフォルダには触らない。"""
+def cleanup(root: Path, keep_days: int, today: date | None = None, active: Path | None = None) -> list[Path]:
+    """keep_days より古い日付のフォルダと、dumps の中の更新日が keep_days より古いファイルを消す。
+    日付の形でないフォルダには触らない。active（今書いているセッションのフォルダ）を含む日付のフォルダは消さない。"""
     today = today or date.today()
     limit = today - timedelta(days=keep_days)
     removed: list[Path] = []
     if not root.exists():
         return removed
-    for d in root.iterdir():
+    for d in sorted(root.iterdir()):
         try:
             day = date.fromisoformat(d.name)
         except ValueError:
             continue
+        if active is not None and active.is_relative_to(d):
+            continue
         if d.is_dir() and day < limit:
             shutil.rmtree(d)
             removed.append(d)
+    dumps = root / "dumps"
+    if dumps.is_dir():
+        for f in sorted(dumps.iterdir()):
+            if f.is_file() and date.fromtimestamp(f.stat().st_mtime) < limit:
+                f.unlink()
+                removed.append(f)
     return removed

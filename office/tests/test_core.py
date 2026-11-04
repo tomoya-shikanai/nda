@@ -3,9 +3,10 @@
 """
 
 import json
+import os
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from recorder.core import MASK, Click, Element, Snapshot, Store, Tracker, Window, cleanup
@@ -82,6 +83,32 @@ class TrackerTest(unittest.TestCase):
         t.observe(Snapshot(target_pid=10, focus=Element(**{**PRICE.__dict__, "value": "2200"})))
         self.assertEqual(kinds(t.flush()), ["value_changed", "session_end"])
 
+    def test_一度でも保護された欄は離れるまで伏せる(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10, focus=NAME))
+        t.observe(Snapshot(target_pid=10, focus=PRICE))  # 入った時は保護されていない
+        t.observe(Snapshot(target_pid=10, focus=Element(**{**PRICE.__dict__, "value": "SECRET", "is_password": True})))
+        t.observe(Snapshot(target_pid=10, focus=Element(**{**PRICE.__dict__, "value": "2200"})))
+        ev = t.observe(Snapshot(target_pid=10, focus=NAME))
+        self.assertEqual(kinds(ev), ["value_changed", "focus"])
+        self.assertEqual((ev[0].data["before"], ev[0].data["after"], ev[0].data["element"]["value"]), (MASK, MASK, MASK))
+
+    def test_保護中に入った欄の値が後で_before_に出ない(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10, focus=Element(**{**PRICE.__dict__, "value": "SECRET", "is_password": True})))
+        t.observe(Snapshot(target_pid=10, focus=Element(**{**PRICE.__dict__, "value": "2200"})))
+        ev = t.observe(Snapshot(target_pid=10, focus=NAME))
+        self.assertNotIn("SECRET", json.dumps([e.data for e in ev], ensure_ascii=False))
+        self.assertEqual(ev[0].data["before"], MASK)
+
+    def test_保護された欄を離れたら次の欄は伏せない(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10, focus=Element(**{**PRICE.__dict__, "value": "x", "is_password": True})))
+        t.observe(Snapshot(target_pid=10, focus=NAME))
+        t.observe(Snapshot(target_pid=10, focus=Element(**{**NAME.__dict__, "value": "タイヤ組替"})))
+        ev = t.observe(Snapshot(target_pid=10, focus=PRICE))
+        self.assertEqual(ev[0].data["after"], "タイヤ組替")
+
     def test_長い値は切り詰める(self):
         e = Element(name="備考", value="あ" * 1000)
         self.assertEqual(len(e.to_dict()["value"]), 500)
@@ -115,15 +142,72 @@ class StoreTest(unittest.TestCase):
             self.assertTrue(p is not None and p.name == "0002-click.jpg")
 
 
+    def test_保存先が消えていたら作り直して書く(self):
+        import shutil
+
+        with tempfile.TemporaryDirectory() as d:
+            now = [datetime(2026, 11, 4, 9, 0).timestamp()]
+            s = Store(Path(d), clock=lambda: now[0])
+            t = Tracker()
+            for e in t.observe(Snapshot(target_pid=10, window=W1)):
+                s.write(e)
+            shutil.rmtree(s.dir)
+            s.write(t.observe(Snapshot(target_pid=10, window=W2))[0])
+            self.assertEqual(json.loads((s.dir / "events.jsonl").read_text(encoding="utf-8"))["kind"], "window")
+            p = s.screenshot_path("window")
+            self.assertTrue(p.parent.is_dir())
+
+    def test_日付が変わったら新しい日付のフォルダに書く(self):
+        with tempfile.TemporaryDirectory() as d:
+            now = [datetime(2026, 11, 4, 23, 59).timestamp()]
+            s = Store(Path(d), clock=lambda: now[0])
+            t = Tracker()
+            for e in t.observe(Snapshot(target_pid=10, window=W1)):
+                s.write(e)
+            first = s.dir
+            now[0] = datetime(2026, 11, 5, 0, 1).timestamp()
+            s.write(t.observe(Snapshot(target_pid=10, window=W2))[0])
+            self.assertEqual(first.parent.name, "2026-11-04")
+            self.assertEqual(s.dir.parent.name, "2026-11-05")
+            lines = [json.loads(x) for x in (s.dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([x["kind"] for x in lines], ["session_continue", "window"])
+            self.assertTrue(s.screenshot_path("window").is_relative_to(s.dir))
+
+
 class CleanupTest(unittest.TestCase):
     def test_古い日付のフォルダだけ消す(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            for name in ["2026-10-20", "2026-11-01", "2026-11-04", "dumps"]:
+            for name in ["2026-10-20", "2026-11-01", "2026-11-04", "dumps", "other"]:
                 (root / name).mkdir()
             removed = cleanup(root, keep_days=7, today=date(2026, 11, 4))
             self.assertEqual([p.name for p in removed], ["2026-10-20"])
-            self.assertEqual(sorted(p.name for p in root.iterdir()), ["2026-11-01", "2026-11-04", "dumps"])
+            # dumps のフォルダ自体と、日付の形でないフォルダは残す（dumps の中身は下の試験）
+            self.assertEqual(sorted(p.name for p in root.iterdir()), ["2026-11-01", "2026-11-04", "dumps", "other"])
+
+    def test_dumps_の古いファイルを消す(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "dumps").mkdir()
+            old, new = root / "dumps" / "dump-20261020-090000.txt", root / "dumps" / "dump-20261101-090000.jpg"
+            for f, day in ((old, datetime(2026, 10, 20, 9)), (new, datetime(2026, 11, 1, 9))):
+                f.write_text("x")
+                os.utime(f, (day.timestamp(), day.timestamp()))
+            removed = cleanup(root, keep_days=7, today=date(2026, 11, 4))
+            self.assertEqual(removed, [old])
+            self.assertEqual([p.name for p in (root / "dumps").iterdir()], [new.name])
+
+    def test_書いている最中のセッションのフォルダは消さない(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            now = [datetime(2026, 10, 20, 9).timestamp()]
+            s = Store(root, clock=lambda: now[0])
+            for e in Tracker().observe(Snapshot(target_pid=10, window=W1)):
+                s.write(e)
+            (root / "2026-10-21").mkdir()
+            removed = cleanup(root, keep_days=7, today=date(2026, 11, 4), active=s.dir)
+            self.assertEqual([p.name for p in removed], ["2026-10-21"])
+            self.assertTrue((s.dir / "events.jsonl").exists())
 
 
 if __name__ == "__main__":

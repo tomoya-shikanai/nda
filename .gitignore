@@ -29,6 +29,8 @@ data/kartes/
 data/audio/
 # 夜間ループのログ
 .night/
+# 別のエージェントの作業コピーの置き場
+.claude/worktrees/
 
 # 事務所の記録（設定は PC ごと）
 office/recorder/config.json

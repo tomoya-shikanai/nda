@@ -35,8 +35,10 @@ class Indicator:
 
     def loop(self, tick: Callable[[], None], interval_ms: int) -> None:
         def step() -> None:
-            tick()
-            self.root.after(interval_ms, step)
+            try:
+                tick()
+            finally:  # tick が例外を出しても次の呼び出しを必ず登録する
+                self.root.after(interval_ms, step)
 
         self.root.after(0, step)
         self.root.mainloop()

@@ -31,6 +31,105 @@ def set_dpi_aware() -> None:
             pass
 
 
+# Win32 API は ctypes で直接呼ぶ。UIA と違い、pynput のスレッドからも安全に呼べる。
+# Windows でない所（試験）では windll が無いので、どれも None を返す（安全側＝撮らない・捨てる）。
+
+
+def foreground_window() -> int | None:
+    """前面の窓のハンドル。"""
+    try:
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        h = user32.GetForegroundWindow()
+        return int(h) if h else None
+    except Exception:
+        return None
+
+
+def pid_of_window(hwnd: int | None) -> int | None:
+    """窓を持つプロセスの番号。"""
+    if not hwnd:
+        return None
+    try:
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        pid = wintypes.DWORD(0)
+        if not user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid)):
+            return None
+        return int(pid.value) or None
+    except Exception:
+        return None
+
+
+def pid_at(x: int, y: int) -> int | None:
+    """画面の座標にある窓のプロセスの番号。"""
+    try:
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.WindowFromPoint.argtypes = [wintypes.POINT]
+        user32.WindowFromPoint.restype = wintypes.HWND
+        h = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
+        return pid_of_window(int(h)) if h else None
+    except Exception:
+        return None
+
+
+def window_rect(hwnd: int) -> tuple[int, int, int, int] | None:
+    """窓の今の位置。影の部分を含まない DWM の枠を優先し、取れなければ GetWindowRect。"""
+    try:
+        from ctypes import wintypes
+
+        r = wintypes.RECT()
+        DWMWA_EXTENDED_FRAME_BOUNDS = 9
+        ok = False
+        try:
+            ok = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                wintypes.HWND(hwnd), DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(r), ctypes.sizeof(r)
+            ) == 0
+        except Exception:
+            ok = False
+        if not ok:
+            user32 = ctypes.windll.user32
+            user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+            if not user32.GetWindowRect(hwnd, ctypes.byref(r)):
+                return None
+        if r.right <= r.left or r.bottom <= r.top:
+            return None
+        return (int(r.left), int(r.top), int(r.right), int(r.bottom))
+    except Exception:
+        return None
+
+
+def is_front(hwnd: int, pid: int) -> bool:
+    """前面の窓が、対象のプロセスの、この窓そのものか。"""
+    fg = foreground_window()
+    return fg is not None and fg == hwnd and pid_of_window(fg) == pid
+
+
+def grab_front(hwnd: int, pid: int, path: Path, quality: int) -> bool:
+    """窓が前面にあるときだけ、その窓の範囲を撮って保存する。撮る前と撮った後の両方で確かめ、
+    途中で前面が変わったら保存しない。常に手前に出る他の窓が重なっていれば写り込む（README に注意を書く）。"""
+    try:
+        if not is_front(hwnd, pid):
+            return False
+        rect = window_rect(hwnd)
+        if rect is None:
+            return False
+        img = ImageGrab.grab(bbox=rect, all_screens=True)
+        if not is_front(hwnd, pid):
+            return False
+        img.convert("RGB").save(path, "JPEG", quality=quality)
+        return True
+    except Exception:
+        return False
+
+
 def _rect(r) -> tuple[int, int, int, int] | None:
     try:
         return (int(r.left), int(r.top), int(r.right), int(r.bottom))
@@ -86,7 +185,8 @@ def element_of(c) -> Element | None:
         try:
             is_password = protected or bool(c.IsPassword)
         except Exception:
-            pass
+            # パスワード欄かどうか分からない部品は安全側に倒し、値を残さない
+            value, value_source = None, None
         return Element(
             name=c.Name or "",
             automation_id=c.AutomationId or "",
@@ -126,7 +226,7 @@ class Reader:
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
-        self.clicks: queue.Queue[tuple[int, int, str, float]] = queue.Queue()
+        self.clicks: queue.Queue[tuple[int, int, str, float, int | None]] = queue.Queue()
         self.listener = mouse.Listener(on_click=self._on_click)
         self.listener.start()
         self.last_find = 0.0
@@ -134,9 +234,10 @@ class Reader:
         self.proc_path = ""
 
     def _on_click(self, x, y, button, pressed) -> None:
-        # pynput の別スレッドで呼ばれる。ここでは UIA を触らず、座標だけ積む。
+        # pynput の別スレッドで呼ばれる。ここでは UIA を触らない。
+        # 座標と、クリックの瞬間にその座標にあった窓のプロセス（Win32 API で取る）を積む。
         if pressed:
-            self.clicks.put((int(x), int(y), str(button).replace("Button.", ""), time.time()))
+            self.clicks.put((int(x), int(y), str(button).replace("Button.", ""), time.time(), pid_at(x, y)))
 
     def _target(self) -> psutil.Process | None:
         now = time.time()
@@ -168,7 +269,10 @@ class Reader:
             if focus is not None and focus.ProcessId == pid:
                 s.focus = element_of(focus)
 
-        for x, y, button, at in clicks_raw:
+        for x, y, button, at, click_pid in clicks_raw:
+            # クリックの瞬間に対象のソフトの窓でなければ捨てる（分からなければ捨てる）
+            if click_pid != pid:
+                continue
             try:
                 c = auto.ControlFromPoint(x, y)
             except Exception:
@@ -178,20 +282,19 @@ class Reader:
                 s.clicks.append(Click(x=x, y=y, button=button, element=element_of(c), at=at))
         return s
 
-    def screenshot(self, rect: tuple[int, int, int, int], path: Path) -> bool:
-        try:
-            img = ImageGrab.grab(bbox=rect, all_screens=True)
-            img.convert("RGB").save(path, "JPEG", quality=self.cfg.jpeg_quality)
-            return True
-        except Exception:
+    def screenshot(self, window: Window, path: Path) -> bool:
+        """前面の窓が対象のソフトのこの窓のときだけ撮る。違えば撮らない。"""
+        if self.proc is None:
             return False
+        return grab_front(window.handle, self.proc.pid, path, self.cfg.jpeg_quality)
 
     def stop(self) -> None:
         self.listener.stop()
 
 
 def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
-    """対象のソフトの前面の窓の部品ツリーを書き出す。読むだけ。"""
+    """対象のソフトの窓の部品ツリーを書き出す。読むだけ。
+    スクリーンショットは、前面にある対象のソフトの窓だけを撮る（他のアプリが前面なら撮らない）。"""
     proc = find_target(cfg)
     if proc is None:
         return None
@@ -224,12 +327,14 @@ def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
                     f"{'  ' * depth}{e.control_type} class={e.class_name!r} name={e.name[:80]!r} "
                     f"id={e.automation_id!r} rect={e.rect} patterns={have}{v}\n"
                 )
-            r = _rect(w.BoundingRectangle)
-            if r is not None:
-                try:
-                    ImageGrab.grab(bbox=r, all_screens=True).convert("RGB").save(out / f"dump-{stamp}-{i}.jpg", "JPEG", quality=80)
-                except Exception:
-                    pass
+            try:
+                hwnd = int(w.NativeWindowHandle)
+            except Exception:
+                hwnd = 0
+            if hwnd and grab_front(hwnd, proc.pid, out / f"dump-{stamp}-{i}.jpg", 80):
+                f.write(f"# screenshot dump-{stamp}-{i}.jpg\n")
+            else:
+                f.write(f"# window {i}: 前面に無いので撮っていない\n")
     return path
 
 

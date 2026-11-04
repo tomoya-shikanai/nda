@@ -4,8 +4,10 @@ Windows 専用のライブラリは偽物に差し替えて import する（Mac 
 
 import importlib
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 
@@ -72,9 +74,52 @@ class _Process:
 
 
 class _Window:
-    def __init__(self, pid, title):
+    def __init__(self, pid, title, handle=0):
         self.ProcessId = pid
         self.Name = title
+        self.NativeWindowHandle = handle
+        self.ClassName = "ThunderRT6FormDC"
+        self.BoundingRectangle = _Rect(0, 0, 800, 600)
+
+
+class _Listener:
+    """pynput.mouse.Listener の偽物。"""
+
+    def __init__(self, on_click=None):
+        self.on_click = on_click
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+class _TargetProcess:
+    """対象のプロセスの偽物（Reader と dump_tree が使う所だけ）。"""
+
+    def __init__(self, pid, name="RacroS.exe"):
+        self.pid = pid
+        self.info = {"pid": pid, "name": name}
+
+    def is_running(self):
+        return True
+
+    def name(self):
+        return self.info["name"]
+
+    def exe(self):
+        return r"C:\RacroS\RacroS.exe"
+
+
+class _Image:
+    """ImageGrab.grab が返す画像の偽物。保存したら印のファイルを作る。"""
+
+    def convert(self, mode):
+        return self
+
+    def save(self, path, *a, **k):
+        Path(path).write_bytes(b"jpg")
 
 
 def _fake_modules():
@@ -85,6 +130,7 @@ def _fake_modules():
     pil.ImageGrab = types.ModuleType("PIL.ImageGrab")
     pynput = types.ModuleType("pynput")
     pynput.mouse = types.ModuleType("pynput.mouse")
+    pynput.mouse.Listener = _Listener
     psutil = types.ModuleType("psutil")
     psutil.Process = _Process
     psutil.process_iter = lambda attrs=None: []
@@ -205,6 +251,22 @@ class LegacyValueTest(unittest.TestCase):
         e = self.win.element_of(_Control(value="secret", is_password=True))
         self.assertEqual(e.to_dict()["value"], "***")
 
+    def test_IsPassword_が読めなければ値を出さない(self):
+        class _NoIsPassword(_Control):
+            @property
+            def IsPassword(self):
+                raise RuntimeError("取れない")
+
+            @IsPassword.setter
+            def IsPassword(self, v):
+                pass
+
+        for kw in ({"value": "secret"}, {"legacy_value": "secret"}):
+            e = self.win.element_of(_NoIsPassword(**kw))
+            self.assertIsNotNone(e, kw)
+            self.assertEqual((e.value, e.value_source), (None, None), kw)
+            self.assertNotIn("secret", str(e.to_dict()), kw)
+
 
 class FindTargetTest(unittest.TestCase):
     def setUp(self):
@@ -230,6 +292,131 @@ class FindTargetTest(unittest.TestCase):
 
     def test_名前は大文字小文字を区別しない(self):
         self.assertEqual(self._find([_Process(3, "RACROS.EXE")]).pid, 3)
+
+
+PID = 42
+OTHER = 99
+
+
+class ScreenshotTest(unittest.TestCase):
+    """前面の窓が対象のプロセスの同じ窓のときだけ撮る。"""
+
+    def setUp(self):
+        from recorder.config import Config
+        from recorder.core import Window
+
+        self.win = _import_win(self)
+        self.reader = self.win.Reader(Config(target_exe=["RacroS.exe"]))
+        self.reader.proc = _TargetProcess(PID)
+        self.window = Window(handle=100, title="請求書入力", class_name="TForm", rect=(0, 0, 800, 600))
+        self.grabs = []
+        sys.modules["PIL.ImageGrab"].grab = lambda bbox=None, all_screens=False: self.grabs.append(bbox) or _Image()
+        self.win.window_rect = lambda hwnd: (10, 20, 810, 620)
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.path = Path(d.name) / "0001-window.jpg"
+
+    def _front(self, hwnds, pids):
+        """foreground_window が呼ばれるたびに hwnds の順で返す。"""
+        it = iter(hwnds)
+        self.win.foreground_window = lambda: next(it)
+        self.win.pid_of_window = lambda hwnd: pids.get(hwnd)
+
+    def test_前面が対象の同じ窓なら撮る(self):
+        self._front([100, 100], {100: PID})
+        self.assertTrue(self.reader.screenshot(self.window, self.path))
+        self.assertTrue(self.path.exists())
+        self.assertEqual(self.grabs, [(10, 20, 810, 620)])  # 撮る直前の窓の位置で撮る
+
+    def test_前面が他のアプリなら撮らない(self):
+        self._front([200, 200], {100: PID, 200: OTHER})
+        self.assertFalse(self.reader.screenshot(self.window, self.path))
+        self.assertEqual(self.grabs, [])
+        self.assertFalse(self.path.exists())
+
+    def test_前面が対象の別の窓でも撮らない(self):
+        self._front([101, 101], {100: PID, 101: PID})
+        self.assertFalse(self.reader.screenshot(self.window, self.path))
+        self.assertEqual(self.grabs, [])
+
+    def test_同じ窓の番号でも別のプロセスなら撮らない(self):
+        self._front([100, 100], {100: OTHER})  # 窓が閉じて番号が他のアプリに使い回された
+        self.assertFalse(self.reader.screenshot(self.window, self.path))
+        self.assertEqual(self.grabs, [])
+
+    def test_撮っている間に前面が変わったら保存しない(self):
+        self._front([100, 200], {100: PID, 200: OTHER})
+        self.assertFalse(self.reader.screenshot(self.window, self.path))
+        self.assertFalse(self.path.exists())
+
+    def test_前面の窓が分からなければ撮らない(self):
+        self._front([None, None], {})
+        self.assertFalse(self.reader.screenshot(self.window, self.path))
+        self.assertEqual(self.grabs, [])
+
+
+class DumpScreenshotTest(unittest.TestCase):
+    def setUp(self):
+        from recorder.config import Config
+
+        self.win = _import_win(self)
+        self.cfg = Config(target_exe=["RacroS.exe"])
+        sys.modules["psutil"].process_iter = lambda attrs=None: [_TargetProcess(PID)]
+        auto = sys.modules["uiautomation"]
+        auto.GetRootControl = lambda: types.SimpleNamespace(GetChildren=lambda: [_Window(PID, "請求書入力", handle=100)])
+        auto.WalkControl = lambda w, includeTop=True, maxDepth=25: iter([])
+        self.grabs = []
+        sys.modules["PIL.ImageGrab"].grab = lambda bbox=None, all_screens=False: self.grabs.append(bbox) or _Image()
+        self.win.window_rect = lambda hwnd: (0, 0, 800, 600)
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.out = Path(d.name)
+
+    def test_前面が他のアプリなら_dump_でも撮らない(self):
+        self.win.foreground_window = lambda: 200
+        self.win.pid_of_window = lambda hwnd: {100: PID, 200: OTHER}.get(hwnd)
+        self.assertIsNotNone(self.win.dump_tree(self.cfg, self.out))
+        self.assertEqual(self.grabs, [])
+        self.assertEqual(list(self.out.glob("*.jpg")), [])
+
+    def test_前面が対象の窓なら_dump_で撮る(self):
+        self.win.foreground_window = lambda: 100
+        self.win.pid_of_window = lambda hwnd: {100: PID}.get(hwnd)
+        self.win.dump_tree(self.cfg, self.out)
+        self.assertEqual(len(list(self.out.glob("*.jpg"))), 1)
+
+
+class ClickTest(unittest.TestCase):
+    """クリックの瞬間に、その座標の窓のプロセスを確かめる。"""
+
+    def setUp(self):
+        from recorder.config import Config
+
+        self.win = _import_win(self)
+        self.reader = self.win.Reader(Config(target_exe=["RacroS.exe"]))
+        self.reader.proc = _TargetProcess(PID)
+        auto = sys.modules["uiautomation"]
+        auto.GetForegroundControl = lambda: None
+        auto.GetFocusedControl = lambda: None
+        # 後で調べると、同じ座標に RacroS III の部品がある（窓が切り替わった後）
+        ok = _Control(control_type="ButtonControl")
+        ok.ProcessId = PID
+        auto.ControlFromPoint = lambda x, y: ok
+
+    def _click_on(self, pid):
+        self.win.pid_at = lambda x, y: pid
+        self.reader._on_click(5, 6, "Button.left", True)
+        return self.reader.snapshot()
+
+    def test_クリックの瞬間に他のアプリの窓なら捨てる(self):
+        self.assertEqual(self._click_on(OTHER).clicks, [])
+
+    def test_クリックの瞬間の窓が分からなければ捨てる(self):
+        self.assertEqual(self._click_on(None).clicks, [])
+
+    def test_クリックの瞬間に対象の窓なら残す(self):
+        (c,) = self._click_on(PID).clicks
+        self.assertEqual((c.x, c.y, c.button), (5, 6, "left"))
 
 
 if __name__ == "__main__":

@@ -20,7 +20,10 @@ def run() -> None:
     cfg = load()
     win.set_dpi_aware()
     root = Path(cfg.root)
-    cleanup(root, cfg.keep_days)
+    try:
+        cleanup(root, cfg.keep_days)
+    except Exception as ex:  # 消せなくても記録は始める
+        _stderr(ex)
     reader = win.Reader(cfg)
     tracker = Tracker()
     store = Store(root, min_shot_interval=cfg.min_shot_interval)
@@ -40,15 +43,15 @@ def run() -> None:
                 store.write(e)
                 if e.screenshot and tracker.window is not None:
                     p = store.screenshot_path(e.screenshot)
-                    if p is not None and reader.screenshot(tracker.window.rect, p):
+                    if p is not None and reader.screenshot(tracker.window, p):
                         store.write(type(e)("screenshot", {"file": p.name, "for": e.kind}))
             if indicator is not None:
                 indicator.show(s.target_pid is not None)
             if time.time() - last_cleanup > 3600:
-                cleanup(root, cfg.keep_days)
-                last_cleanup = time.time()
+                last_cleanup = time.time()  # 消すのに失敗しても毎回やり直さない
+                cleanup(root, cfg.keep_days, active=store.dir)
         except Exception as ex:  # 記録の失敗で常駐を止めない
-            store.write(type_error(ex))
+            _report(store, ex)
 
     try:
         if indicator is not None:
@@ -60,9 +63,29 @@ def run() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        for e in tracker.flush():
-            store.write(e)
-        reader.stop()
+        try:
+            for e in tracker.flush():
+                store.write(e)
+        except Exception as ex:  # 終了時に書けなくても reader.stop() まで進む
+            _stderr(ex)
+        finally:
+            reader.stop()
+
+
+def _stderr(ex: BaseException) -> None:
+    """標準エラーに 1 行だけ出す（pythonw では出る先が無いので、出せなくても何もしない）。"""
+    try:
+        print(f"recorder: {type(ex).__name__}: {ex}"[:500].replace("\n", " "), file=sys.stderr)
+    except Exception:
+        pass
+
+
+def _report(store, ex: Exception) -> None:
+    """失敗を記録する。記録も失敗したら標準エラーに 1 行出すだけにする。"""
+    try:
+        store.write(type_error(ex))
+    except Exception as ex2:
+        _stderr(ex2)
 
 
 def type_error(ex: Exception):
