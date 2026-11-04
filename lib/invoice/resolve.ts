@@ -22,7 +22,7 @@ export const NEGATION_CUES = [
 ];
 
 /** 訂正の合図（条件 19）。この合図がある発話の数を使った行を、言い直しの疑いとして確かめる。語彙はここだけに置く。 */
-export const CORRECTION_CUES = ["いや", "やっぱり", "じゃなくて", "違う"];
+export const CORRECTION_CUES = ["いや", "やっぱり", "じゃなくて", "じゃない", "違う"];
 
 /** 条件 18・19 で見る、行が使った候補の種類。 */
 const NEGATION_SPAN_KINDS = new Set<CandidateKind>(["item", "qty", "unitPrice", "amount", "bareNumber"]);
