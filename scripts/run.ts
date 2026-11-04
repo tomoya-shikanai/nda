@@ -3,6 +3,7 @@
  * 使い方: pnpm tsx scripts/run.ts data/transcripts/<id>.json --arm extract|fixed|claude|all [--photo path]
  * --arm all は同じ分離結果で 3 腕を回す（腕の比較を分離のばらつきから切り離す）。
  */
+import "../lib/env-auto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { parseArgs } from "node:util";

@@ -2,6 +2,7 @@
  * 父の裁定を記録する。「んだ」で承認、「まいね」で否認。息子の問いは承認済みだけを使う。
  * 使い方: pnpm tsx scripts/approve.ts <karteId> んだ|まいね [--answer "一問への父の回答"]
  */
+import "../lib/env-auto";
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { Karte } from "../lib/karte/schema";

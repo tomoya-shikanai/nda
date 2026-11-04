@@ -33,3 +33,4 @@ data/audio/
 # 事務所の記録（設定は PC ごと）
 office/recorder/config.json
 __pycache__/
+!.env.example

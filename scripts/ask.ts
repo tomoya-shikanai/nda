@@ -2,6 +2,7 @@
  * 息子の問い: 承認済みカルテだけで答える。無ければ止まる。
  * 使い方: pnpm tsx scripts/ask.ts "客がゴトゴト言うと言っている。父ならどこから確かめる？"
  */
+import "../lib/env-auto";
 import { readdir, readFile } from "node:fs/promises";
 import { Karte } from "../lib/karte/schema";
 import { ask, STOP_MESSAGE } from "../lib/son/ask";
