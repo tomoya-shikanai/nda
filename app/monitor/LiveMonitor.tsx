@@ -4,7 +4,7 @@
 // 金額は view の値だけを出す（計算しない）。読めないときは前の表示のまま「つながっていません」を出す。
 // states.ts は node:fs を使う store を import するので、ここでは型だけを使い、文言は page から受け取る。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type MonitorLine, type MonitorView, toMonitorView, yenText } from "../../lib/session/view";
 import Companion from "./Companion";
 import styles from "./monitor.module.css";
@@ -36,6 +36,20 @@ function lineState(l: MonitorLine): string {
 export default function LiveMonitor({ labels, hint }: { labels: Record<StateKey, string>; hint: string }) {
   const [view, setView] = useState<MonitorView>(() => toMonitorView(null));
   const [offline, setOffline] = useState(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const spokenRef = useRef<string | null>(null);
+
+  // say が前と変わったときだけ声を鳴らす（W5）。VOICEVOX が動いていない（503）・自動再生の制限で鳴らないときは、文字だけで続ける。
+  // 読み込む前の仮の表示（toMonitorView(null)）では鳴らさない。
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!loaded || spokenRef.current === view.say) return;
+    spokenRef.current = view.say;
+    const a = audioRef.current;
+    if (!a) return;
+    a.src = `/api/session/current/speech?t=${Date.now()}`;
+    void a.play().catch(() => {});
+  }, [loaded, view.say]);
 
   useEffect(() => {
     let alive = true;
@@ -47,6 +61,7 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<StateKey,
         if (!isView(json, labels)) throw new Error("形が違う");
         if (!alive) return;
         setView(json);
+        setLoaded(true);
         setOffline(false);
       } catch {
         if (alive) setOffline(true);
@@ -149,6 +164,8 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<StateKey,
           </div>
         </div>
       </section>
+
+      <audio ref={audioRef} preload="none" />
 
       <footer className={styles.foot}>
         {view.credit}
