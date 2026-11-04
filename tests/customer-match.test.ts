@@ -315,3 +315,26 @@ test("Codex 指摘 2: 一覧の名前を含む文に否定・訂正の合図、�
   assert.equal(r.customerId, null);
   assert.equal(toMonitorView(r, customers).say, `もう一度お願いします。${CUSTOMER_QUESTION}`);
 });
+
+test("自動のセキュリティ点検: 字の種類が混ざった名前・々・ヶ・ラテン文字の名前も丸ごと伏せる。助詞・句読点・数字で止める", () => {
+  for (const list of [customers, []]) {
+    const m = (t: string) => identifyCustomer([t], list).texts[0];
+    assert.equal(m("山田ヨシ子さんの車"), `${MASK_NAME}さんの車`);
+    assert.equal(m("佐々木さん"), `${MASK_NAME}さん`);
+    assert.equal(m("一ヶ谷さん"), `${MASK_NAME}さん`);
+    assert.equal(m("Tanakaさん、脱着4本"), `${MASK_NAME}さん、脱着4本`);
+    assert.equal(m("Ｔａｎａｋａ様"), `${MASK_NAME}様`);
+    assert.equal(m("マイケル・ジョーダンさん"), `${MASK_NAME}さん`);
+    assert.equal(m("やまださま"), `${MASK_NAME}さま`);
+    // 助詞・句読点・数字・前の敬称で止める（品目の語は残す）
+    assert.equal(m("脱着4本は山田さん"), `脱着4本は${MASK_NAME}さん`);
+    assert.equal(m("タイヤの山田ヨシ子さん"), `タイヤの${MASK_NAME}さん`);
+    assert.equal(m("脱着、Tanakaさん"), `脱着、${MASK_NAME}さん`);
+    assert.equal(m("番号は4佐々木さん"), `番号は4${MASK_NAME}さん`);
+    assert.equal(m("脱着したお客さん"), "脱着したお客さん", "名前でない語で終わる並びは伏せない");
+  }
+  // 一覧の名前と並んだ一覧外の名前（字の種類が混ざっても）で決めない
+  assert.equal(identifyCustomer(["見本さんと山田ヨシ子さん、2222。"], customers).customerId, null);
+  assert.equal(identifyCustomer(["見本さんとTanakaさん、2222。"], customers).customerId, null);
+  assert.equal(identifyCustomer(["見本花子さん、2222。"], customers).customerId, "cust-002");
+});

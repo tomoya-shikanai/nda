@@ -8,7 +8,7 @@
  * 伏せ字（照合が決まっても決まらなくても、一覧の有無にかかわらず。客の情報を Claude にも保存にも渡さない）:
  * - 一覧のどれかの名前の語。
  * - 前後が数字でなく「円」が続かない 4 桁の数（算用数字・全角・漢数字の 1 字ずつ）。一覧に無いナンバーも伏せる。
- * - 「さん」「様」「さま」の直前の、同じ字の種類（漢字・ひらがな・カタカナ）の並び（名前らしい部分。一覧に無い客の名前も伏せる）。
+ * - 「さん」「様」「さま」の直前の名前らしい並び（字の種類をまたぎ、助詞・句読点・数字で止める。一覧に無い客の名前も伏せる）。
  *
  * 決めないとき（customerId は null。候補をどこにも出さない）: 名前だけ・下 4 桁だけ・2 件以上に合う・合わない、
  * 一覧の名前を含む文に否定・訂正の合図がある（「見本さんじゃなくて」）、一覧の名前と同じ発話に一覧に無いさん付けの名前がある。
@@ -75,30 +75,32 @@ export type Identified = {
   customerId: string | null;
 };
 
-type Script = "han" | "hira" | "kata";
-
-function scriptOf(c: string | undefined): Script | null {
-  if (c === undefined) return null;
-  if (/\p{Script=Han}/u.test(c) && c !== "様") return "han";
-  if (/[\u3041-\u3096]/.test(c)) return "hira";
-  if (/[\u30a1-\u30fa\u30fcｦ-ﾟ]/.test(c)) return "kata";
-  return null;
-}
+/** 名前に使う字（漢字・々・ヶ・ひらがな・カタカナ・ー・ラテン文字・全角英字）。字の種類が変わっても続ける。 */
+const NAME_CHAR = /[\p{Script=Han}々〆ヶ\u3041-\u3096\u30a1-\u30fa\u30fcｦ-ﾟA-Za-zＡ-Ｚａ-ｚ]/u;
+const isNameChar = (c: string | undefined) => c !== undefined && c !== "様" && NAME_CHAR.test(c);
+/** 敬称から遡るとき、ここで止める助詞（その字は名前に入れない）。 */
+const PARTICLES = new Set(["は", "が", "の", "と", "に", "を", "も", "で", "へ", "や"]);
 
 /** 敬称。名前でない語（「たくさん」「様子」「様々」「さまざま」）は除く。 */
 const HONORIFIC = /さん|様|さま/g;
 const NOT_HONORIFIC = ["たくさん", "沢山", "様子", "様々", "さまざま"];
-/** 敬称の前でも名前でない語。伏せない・一覧外の名前に数えない。 */
-const NOT_NAMES = new Set(["客", "お客", "皆", "みな", "奥", "父", "母", "兄", "姉", "おじ", "おば", "じい", "ばあ"]);
+/** 敬称の前でも名前でない語（遡った並びの末尾がこれなら伏せない・一覧外の名前に数えない）。 */
+const NOT_NAMES = ["お客", "客", "皆", "みな", "奥", "父", "母", "兄", "姉", "おじ", "おば", "じい", "ばあ"];
 
-/** 敬称の直前の、同じ字の種類の並び（間の空白・「・」1 字は続きとみなす）。無ければ null。 */
+/**
+ * 敬称の直前の名前らしい並び。名前に使う字を、字の種類をまたいで遡る（「山田ヨシ子」「佐々木」「Tanaka」）。
+ * 止めるのは、名前に使う字でないもの（句読点・数字など）・文頭・助詞（漢字・カタカナ・英字の後の「の」など）・前の敬称の終わり。
+ * 間の空白・「・」1 字は、前後が名前の字なら続きとみなす。伏せすぎる側に倒す。無ければ null。
+ */
 function nameBefore(text: string, at: number): Span | null {
-  const script = scriptOf(text[at - 1]);
-  if (script === null) return null;
+  // 助詞とみなすのは、直前が漢字・カタカナ・英字のとき（「山田の」）。ひらがなの続き・文頭の「や」「の」は名前の字（「やまだ」「のぞみ」）
+  const particle = (j: number) => PARTICLES.has(text[j]) && isNameChar(text[j - 1]) && !/[\u3041-\u3096]/.test(text[j - 1]);
+  const stop = (j: number) => !isNameChar(text[j]) || particle(j) || /(さん|様|さま)$/.test(text.slice(0, j + 1));
+  if (stop(at - 1)) return null;
   let i = at - 1;
   for (;;) {
-    if (scriptOf(text[i - 1]) === script) i--;
-    else if (/[\s・]/.test(text[i - 1] ?? "") && scriptOf(text[i - 2]) === script) i -= 2;
+    if (i - 1 >= 0 && !stop(i - 1)) i--;
+    else if (/[\s・]/.test(text[i - 1] ?? "") && i - 2 >= 0 && !stop(i - 2)) i -= 2;
     else break;
   }
   return { start: i, end: at };
@@ -112,8 +114,7 @@ function honorificNames(text: string): Span[] {
     if (NOT_HONORIFIC.some((w) => [...text.matchAll(new RegExp(w, "g"))].some((x) => (x.index ?? 0) <= at && at < (x.index ?? 0) + w.length))) continue;
     const sp = nameBefore(text, at);
     if (sp === null) continue;
-    const word = text.slice(sp.start, sp.end).replace(/^お/, "");
-    if (NOT_NAMES.has(word) || NOT_NAMES.has(text.slice(sp.start, sp.end))) continue;
+    if (NOT_NAMES.some((w) => text.slice(sp.start, sp.end).endsWith(w))) continue;
     out.push(sp);
   }
   return out;
