@@ -25,7 +25,7 @@ Pi 5 が届いたら、鹿内さんは「SD に OS を書く・電源を入れ�
 | P1 書き込み（約 15 分） | Imager で SD に OS を書く（§4）。Pi に挿し、Jabra とモニターをつないで電源を入れる | 設定値を渡す |
 | P2 初回接続（約 5 分） | 同じ LAN の Mac から Claude が入れない場合だけ、モニターに出た Tailscale の認証 URL を開く | `ssh` で入り、Tailscale を入れる（§5） |
 | P3 設定（約 1 時間） | なし（終わったらモニターの表示を目で確認） | 更新、電源・音声・画面の確認、自動起動（§6） |
-| P4 秘密の値 | API キーを Pi の `~/nda/.env` に自分で書く（Claude は値を見ない） | ファイルの権限を確かめる（中身は読まない） |
+| P4 秘密の値 | API キーを Pi の `/etc/nda/nda.env` にパスワード付きの sudo で書き、`nda-app:nda-app` の 600 にする（Claude は値を見ない。手順は `deploy/pi/README.md`） | ファイルの権限と所有者を確かめる（中身は読まない） |
 
 ## 3. 決めたこと
 
@@ -42,7 +42,8 @@ Pi 5 が届いたら、鹿内さんは「SD に OS を書く・電源を入れ�
 | 項目 | 値 |
 |---|---|
 | ホスト名 | `nda-pi` |
-| ユーザー | `nda`（`pi` は攻撃の辞書に載っているので避ける） |
+| ユーザー | `nda`（管理用。`pi` は攻撃の辞書に載っているので避ける） |
+| 本体を動かすユーザー | `nda-app`（`50-service.sh` が `--system` で作る。sudo なし、ログインできない） |
 | Mac の SSH の別名 | `ssh nda-pi` |
 | SSH 鍵 | この Pi 専用に `~/.ssh/id_nda_pi`（ed25519）を作る。他案件の鍵を使い回さない |
 
@@ -53,9 +54,11 @@ Pi 5 が届いたら、鹿内さんは「SD に OS を書く・電源を入れ�
 
 ### 3-5. Claude が Pi で守ること
 - 設定の変更は、Mac のリポジトリの `deploy/pi/` に、何度流しても同じ結果になるスクリプトとして残し、それを `ssh nda-pi` で流す。手で打った変更を残さない。SD が壊れても同じ状態に戻せるようにする。
-- `sudo` はセットアップ中だけパスワードなしで使えるようにする。終わったら、使う命令（`systemctl`・`reboot`・`apt`）だけに絞る。
-- API キーなどの秘密の値は、鹿内さんが Pi 上の `~/nda/.env`（権限 600）に書く。Claude は中身を読まず、リポジトリにも入れない。
-- 客の情報と録音は Pi の `~/nda/data/` に置き、リポジトリには入れない（CLAUDE.md の匿名化の規則と同じ）。
+- 管理と本体の実行を別のユーザーに分ける。Claude が入る `nda` は管理用、本体（`nda.service`）は sudo を持たない `nda-app` で動かし、systemd の保護（`NoNewPrivileges`・`ProtectSystem=strict` など）をかける。本体の不具合が管理者の権限につながらないようにするため。
+- `sudo` はセットアップ中だけパスワードなしで使えるようにする。終わったら、パスワードなしは引数まで固定した命令（`systemctl start/stop/restart nda.service`・`reboot`）だけに絞る。`apt` と `systemctl` の任意の操作は、フックや任意のユニットで root を取れるので許さない。OS の更新は `unattended-upgrades` に任せ、手で行うときはパスワード付きの sudo を使う。ログは sudo なしで読む（`systemd-journal` グループ）。
+- 置き場: 本体は `/opt/nda`（`nda` が配置、`nda-app` は読むだけ）、データは `/var/lib/nda`（`nda-app` だけが書ける）。
+- API キーなどの秘密の値は、鹿内さんが Pi 上の `/etc/nda/nda.env`（`nda-app:nda-app`、権限 600）に書く。Claude は中身を読まず、リポジトリにも入れない。
+- 客の情報と録音は Pi の `/var/lib/nda/` に置き、リポジトリには入れない（CLAUDE.md の匿名化の規則と同じ）。
 - 夜間ループは Pi に触れない。夜間の sandbox はネットワークを塞いでいるので、今の設定のまま届かない。
 - 再起動・電源断・Wi-Fi の切り替えなど、接続が切れる操作は、事前に鹿内さんに伝えてから行う。
 
@@ -107,19 +110,19 @@ sudo tailscale up --ssh   # 表示された URL を鹿内さんが Mac のブラ
 
 順に行い、各段で §7 の確認をしてから次へ進む。各段のスクリプトは `deploy/pi/` にある（流し方と戻し方は `deploy/pi/README.md`）。
 
-1. **更新と基本**（`10-base.sh`）: `apt full-upgrade`、`ja_JP.UTF-8` と `en_US.UTF-8` の `locale-gen`（Mac が SSH で `en_US` を送るため）、`timedatectl` で時刻を確かめる。
+1. **更新と基本**（`10-base.sh`）: `apt full-upgrade`、`unattended-upgrades` の有効化（60 で apt の sudo を外すため）、`ja_JP.UTF-8` と `en_US.UTF-8` の `locale-gen`（Mac が SSH で `en_US` を送るため）、`timedatectl` で時刻を確かめる。
 2. **電源**（`20-power-check.sh`）: 5V 5A で認識されたかを確かめる（§7-1）。駄目なら、電源を Traskit の単品（5.1V/5A、PSE 認証）に替える。
 3. **音声**（`30-audio.sh`）: Jabra を既定の録音・再生の機器にする。Pi 本体の音声出力と順番が入れ替わらないよう、ALSA の設定でカードを固定する。16kHz の音で音程がおかしくなる報告があるので、Jabra の対応する形式に変換して流す。
 4. **画面**（`40-display.sh`）: Chromium のキオスク表示で、仮のページ（「んだ、Claude」待機中）を全画面に出す。画面が消えないよう、省電力の画面オフを止める。
-5. **自動起動**（`50-service.sh`）: nDa の本体を systemd のサービスにし、停電から戻ったら自動で上がるようにする（`Restart=always`）。
-6. **sudo を絞る**（`60-sudo-tighten.sh`）: §3-5 のとおり。
+5. **自動起動**（`50-service.sh`）: 本体専用の `nda-app` を作り、nDa の本体を `nda-app` で動く systemd のサービスにし、停電から戻ったら自動で上がるようにする（`Restart=always`）。音声機器を使うサービスは後で別に作る。
+6. **sudo を絞る**（`60-sudo-tighten.sh`）: §3-5 のとおり、パスワードなしは固定の 4 命令だけにする。
 7. **保守の skill**: `.claude/skills/pi/` に、状態・ログ・反映・再起動の命令を書く（AwesomeSea の `sensor` skill と同じ形）。
 
 起動語の検出（Picovoice Porcupine を予定）、文字起こし、Claude の呼び出しは、この土台ができてから別の作業で入れる。Porcupine は日本語の独自起動語に対応しているかと、無料枠をハッカソンの提出に使ってよいかを、入れる前に確かめる。
 
 ## 7. 確かめ方
 
-Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表にする（#4・#5・#6 と #7 の再起動後の確認は人が行う）。
+Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表にする（#4・#5・#6 と #7 の再起動後の確認は人が行う。#10 は本体が動いていれば自動）。
 
 | # | 確かめること | 命令 | 合格 |
 |---|---|---|---|
@@ -130,7 +133,10 @@ Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表
 | 5 | モニター | 目で見る | 仮のページが全画面で出て、10 分たっても消えない |
 | 6 | 外からの接続 | 工場の外の Mac から `ssh nda-pi` | 入れる |
 | 7 | 停電からの復帰 | `sudo reboot` の 2 分後に `ssh nda-pi 'systemctl is-active nda'` | `active`。モニターに仮のページが戻る |
-| 8 | 秘密の値 | `stat -c %a ~/nda/.env` | `600`（中身は読まない） |
+| 8 | 秘密の値 | `stat -c '%U:%G %a' /etc/nda/nda.env` | `nda-app:nda-app 600`（中身は読まない） |
+| 9 | 本体のユーザーに sudo が無い | `id -nG nda-app`、`getent passwd nda-app` | `sudo` 等のグループに入っていない。シェルが `nologin` |
+| 10 | 本体が専用のユーザーで動く | `systemctl show -p User,MainPID nda.service`、`ps -o user= -p <PID>` | `nda-app` |
+| 11 | パスワードなしの sudo が固定の命令だけ | `sudo -n -l`、`sudo -n true` | `NOPASSWD:` は `systemctl start/stop/restart nda.service` と `reboot` だけ。`sudo -n true` は拒否 |
 
 ## 8. つまずいたとき
 
@@ -142,3 +148,4 @@ Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表
 
 ## 履歴
 - 2026-11-04 初版。Pi 5（Traskit 4GB キット）、Jabra Speak 510、工場のモニター、Tailscale。11/5 着。
+- 2026-11-04 本体を sudo の無い `nda-app` で動かし（置き場 `/opt/nda`・`/var/lib/nda`・`/etc/nda/nda.env`）、パスワードなしの sudo を固定の 4 命令に絞った（自動セキュリティレビューの指摘）。§7 に #9〜#11 を足した。
