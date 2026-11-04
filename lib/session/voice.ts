@@ -17,6 +17,14 @@ export function routeVoice(latest: Session | null): VoiceRoute {
 }
 
 /**
+ * 作業の版。答え・状態の遷移・保存のたびに変わる（updatedAt・history・answers の長さ）。
+ * 声の返事は STT の前に覚え、当てる直前に比べる（STT の間に別の答えが入った作業に、古い音声を当てない）。
+ */
+export function sessionVersion(s: Session): string {
+  return `${s.updatedAt}|${s.history.length}|${s.answers.length}`;
+}
+
+/**
  * 返事の録音の文字起こしを、答えの 1 発話にする。発話が複数なら、文字をそのままつなぎ、時刻は最初の開始から最後の終了まで。
  * 話者は全発話で同じときだけ残し、違えば null（どれか 1 人の声とは決めない）。
  * つないだ文字に余計な語が残れば answer.ts が unread にする（言い直しを黙って 1 つに選ばない）。発話が無ければ throw。

@@ -329,3 +329,60 @@ test("voice: 作業が無ければ新しい作業（201）、最新が asking �
   });
   assert.deepEqual((await readdir(dir)).filter((n) => !n.endsWith(".json")), []);
 });
+
+test("Codex 指摘 4: STT の間に作業が変わったら、古い音声を当てずに 409（answer-audio も voice も）", async () => {
+  const answerAudio = await import("../app/api/session/[id]/answer-audio/route");
+  const voice = await import("../app/api/session/voice/route");
+  const text = await import("../app/api/session/[id]/answer/route");
+  const dir = await tmp();
+  process.env.NDA_SESSION_DIR = dir;
+
+  for (const via of ["answer-audio", "voice"] as const) {
+    const s = await startValve(dir, () => new Date());
+    const original = globalThis.fetch;
+    // 「何本ですか」の間: 声で「請求書頼む」→ STT を待つ間に文字で「4本」が入る → STT が終わる
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.startsWith("https://api.elevenlabs.io/")) return original(input, init);
+      const r = await text.POST(
+        new Request("http://localhost/x", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ utterance: { startSec: 0, endSec: 1, speaker: "father", text: "4本" } }),
+        }),
+        ctx(s.id),
+      );
+      assert.equal(r.status, 200);
+      return new Response(JSON.stringify({ words: [{ text: "請求書頼む", start: 0.1, end: 0.8, type: "word", speaker_id: "speaker_0" }] }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    process.env.ELEVENLABS_API_KEY = KEY;
+    try {
+      const res =
+        via === "answer-audio"
+          ? await answerAudio.POST(post(`/api/session/${s.id}/answer-audio`, { file: file(), vendor: "scribe" }), ctx(s.id))
+          : await voice.POST(post("/api/session/voice", { file: file(), vendor: "scribe" }));
+      assert.equal(res.status, 409, via);
+      const body = (await res.json()) as { error: string; stale?: boolean };
+      assert.equal(body.stale, true);
+    } finally {
+      globalThis.fetch = original;
+    }
+    const saved = await readSession(dir, s.id);
+    assert.equal(saved?.status, "asking", via);
+    assert.equal(saved?.approved, false, via);
+    assert.deepEqual(
+      saved?.answers.map((a) => a.action.kind),
+      ["setQty"],
+      via,
+    );
+    // 作業が変わっていなければ、同じ声はそのまま当たる
+    await withStt(["請求書頼む"], async () => {
+      const ok = await answerAudio.POST(post(`/api/session/${s.id}/answer-audio`, { file: file(), vendor: "scribe" }), ctx(s.id));
+      assert.equal(ok.status, 200);
+    });
+    assert.equal((await readSession(dir, s.id))?.status, "done", via);
+    await tick();
+  }
+});

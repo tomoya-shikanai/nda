@@ -12,7 +12,7 @@ import { type Segment, SegmentSchema, type Transcript } from "../stt/types";
 import { replySession, startSession } from "./run";
 import { latestSession, readSession, sessionDir } from "./store";
 import { toMonitorView } from "./view";
-import { answerUtterance, routeVoice } from "./voice";
+import { answerUtterance, routeVoice, sessionVersion } from "./voice";
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const KEY_ENV = { scribe: "ELEVENLABS_API_KEY", gemini: "GEMINI_API_KEY" } as const;
@@ -81,26 +81,31 @@ async function askingSession(id: string) {
 }
 
 /** 答えの 1 発話を作業に当てる。200 と { view }。答えの読み取りに Claude を使わない（明細が 0 行の作業への返事だけは、話の続きとして抽出し直す）。 */
-export async function answerWith(id: string, utterance: Segment): Promise<Response> {
+export async function answerWith(id: string, utterance: Segment, expectedVersion?: string): Promise<Response> {
   const s = await askingSession(id);
   if (s instanceof Response) return s;
+  if (expectedVersion !== undefined && sessionVersion(s) !== expectedVersion) {
+    // 聞いている間に作業が変わった（別の答えが入った）。古い音声は当てない。聞き役は「もう一度」と出す
+    return Response.json({ error: "作業が変わりました。もう一度お願いします", stale: true }, { status: 409 });
+  }
   const customers = await loadCustomers();
   const next = await replySession({ dir: sessionDir(), session: s, utterance, ledger: await ledger(), customers });
   return Response.json({ view: toMonitorView(next, customers) }, { headers: NO_STORE });
 }
 
 /**
- * 声の返事を文字起こしして答えに当てる。STT の前に作業を確かめ（無駄に STT を呼ばない）、
- * 当てる直前にも answerWith が確かめ直す（STT の間に状態が変わり得る）。
+ * 声の返事を文字起こしして答えに当てる。STT の前に作業を確かめ（無駄に STT を呼ばない）、その版を覚える。
+ * 当てる直前に answerWith が版を比べ、STT の間に作業が変わっていたら当てずに 409（古い音声を新しい質問の答えにしない）。
  */
 export async function answerFromAudio(id: string, form: AudioForm): Promise<Response> {
   const s = await askingSession(id);
   if (s instanceof Response) return s;
+  const version = sessionVersion(s);
   const transcript = await transcribe(form, `${id}-answer-${randomUUID()}`);
   if (transcript instanceof Response) return transcript;
   const u = SegmentSchema.safeParse(transcript.segments.length ? answerUtterance(transcript) : null);
   if (!u.success) return Response.json({ error: "返事が聞き取れませんでした" }, { status: 422 });
-  return answerWith(id, u.data);
+  return answerWith(id, u.data, version);
 }
 
 /** 声の入口: 最新の作業が asking ならその返事、それ以外は新しい作業（routeVoice）。 */

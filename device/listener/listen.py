@@ -104,7 +104,11 @@ def send(server: str, vendor: str, wav: bytes) -> None:
             err = json.loads(e.read()).get("error")
         except Exception:  # noqa: BLE001
             err = None
-        print(f"サーバーが断った（{e.code}）: {err}", file=sys.stderr)
+        if e.code == 409:
+            # 聞いている間に作業が変わった（別の答えが入った・終わった）。古い声は当てていない
+            print("作業が変わったので当てなかった。もう一度（起動語から）お願いします", flush=True)
+        else:
+            print(f"サーバーが断った（{e.code}）: {err}", file=sys.stderr)
     except (urllib.error.URLError, TimeoutError) as e:
         print(f"サーバーに届かない: {getattr(e, 'reason', e)}", file=sys.stderr)
 
