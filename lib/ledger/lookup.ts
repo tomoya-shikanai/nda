@@ -33,6 +33,17 @@ export function findEntry(ledger: LedgerEntry[], item: string): LedgerEntry | nu
   return byAlias.length === 1 ? byAlias[0] : null;
 }
 
+/**
+ * 品目名があいまいか。findEntry が null で、正式名か別名に当たる項目が 2 つ以上あるとき true。
+ * 料金表に 1 つも当たらない品目は false。
+ */
+export function isAmbiguous(ledger: LedgerEntry[], item: string): boolean {
+  const key = itemKey(item);
+  if (!key || findEntry(ledger, item) !== null) return false;
+  const hits = ledger.filter((e) => itemKey(e.item) === key || e.aliases.some((a) => itemKey(a) === key));
+  return hits.length >= 2;
+}
+
 /** 台帳に無ければ found:false。推測で埋めない。あいまいな品目名も found:false。 */
 export function lookup(ledger: LedgerEntry[], item: string): LedgerResult {
   const hit = findEntry(ledger, item);

@@ -1,7 +1,7 @@
 /**
  * モデルの参照（候補 ID）を発話の値に戻し、確認事項を出す（設計 docs/design/invoice-verify.md の (c)）。
  * 純粋な関数。API を呼ばない、入力を書き換えない。数は候補からだけ取り、推測で埋めない。
- * 金額（amount）は使用済みに数えるだけで、検算は V4 で行う。
+ * 金額（amount）は使用済みに数えるだけで、検算は check.ts の checkAmounts で行う。
  */
 import { type LedgerEntry, findEntry } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";

@@ -2,7 +2,8 @@
  * 明細を料金表で照らす部分（priceInvoice 単体）の検証。Claude は呼ばない。
  * 明細は架空の文字起こし（tire-transcripts.json）に合わせて手で書いた。素材は架空で、証明には使わない。
  * priceInvoice は発話と突き合わせない。「作り物の発話」と注記した試験の引用は fixture に無く、
- * 料金表の規則だけを見る。発話に裏付けられた値だけを使うことは tests/invoice-build.test.ts で見る。
+ * 料金表の規則だけを見る。発話に裏付けられた値だけを使うことは tests/invoice-resolve.test.ts と
+ * tests/invoice-assemble.test.ts で見る。
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -121,7 +122,7 @@ test("発話の単価が料金表と違う行は単価を null にして確認�
 
 test("料金表に無くても発話に単価があればそれを使う", () => {
   // 作り物の発話: tire-003 の実際の発話は「ナットの値段は後で調べる。」で、200円とは言っていない。
-  // 発話との突き合わせを通すとこの行は確認事項になる（invoice-build.test.ts の指摘 9）
+  // 発話との突き合わせを通すとこの行は確認事項になる（invoice-resolve.test.ts の指摘 9）
   const d: InvoiceDraft = {
     lines: [line("tire-003", "ホイールナット", 2, "個", 200, 5, 10, "ナット1個200円", "unknown")],
   };

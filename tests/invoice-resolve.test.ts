@@ -2,7 +2,7 @@
  * 参照を発話の値に戻す部分（resolveInvoice）の検証。Claude は呼ばない。
  * 候補は enumerateCandidates で作り、参照は手で書く。素材は架空の文字起こし（tire-transcripts.json）と、
  * この試験の中で作る架空の録音（recordingId "adv"）。証明には使わない。
- * 「指摘 N」は tests/invoice-build.test.ts の敵対レビュー（2026-11-04）の例を参照の形に直したもの。
+ * 「指摘 N」は敵対レビュー（2026-11-04）の例（旧 tests/invoice-build.test.ts、V4 で旧 verify とともに削除）を参照の形に直したもの。
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -417,7 +417,8 @@ test("指摘 7: 別名が 2 つの項目に当たる語は正式名に戻さず�
   assert.equal(r.lines[0].item, "バランス");
   const p = priceInvoice({ lines: r.lines }, ambiguous);
   assert.equal(p.lines[0].ledger.found, false);
-  assert.ok(p.confirmations.some((c) => c.field === "unitPrice"));
+  assert.equal(p.lines[0].unitPrice, null);
+  assert.ok(p.confirmations.some((c) => c.field === "item" && c.message.includes("別名があいまい")));
   assert.equal(p.total, null);
 });
 

@@ -4,7 +4,7 @@
  * 数は「最大の数字の並び」（算用数字・漢数字・十百千万・間の「,」「.」）を 1 つの塊として読み、
  * 塊全体が 1 つの数として読めたときだけ数にする。塊の途中や末尾だけを拾わない。
  * 読めない塊は捨てずに候補にする（円が続けば unparsedYen、そうでなければ unparsedNumber）。数を推測で作らない。
- * `verify.ts` は V4 で消すため、ここからは import しない（必要なものは写した）。
+ * 旧 `verify.ts`（V4 で削除）から必要なものは写した。
  */
 import { type LedgerEntry, findEntry } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
@@ -40,7 +40,7 @@ export type Candidate = {
   ledgerItem?: string;
 };
 
-/** 数量に付く単位。`verify.ts` の UNITS と同じ。長いものを先に置く。 */
+/** 数量に付く単位。長いものを先に置く。 */
 const UNITS = ["セット", "箇所", "か所", "ヶ所", "本", "個", "台", "輪", "つ", "枚", "式", "回"];
 const UNIT = `(?:${UNITS.join("|")})`;
 

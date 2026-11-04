@@ -1,7 +1,7 @@
 /**
  * 抽出（設計 docs/design/invoice-verify.md の (b)）。モデルは数字を書かず、候補の ID を指す。
  * 候補の ID はリクエストごとに zod の enum にするので、候補に無い ID は解釈の段で落ちる。
- * 値に戻すのと確認事項は resolveInvoice が行う。`verify.ts` は V4 で消すため import しない。
+ * 値に戻すのと確認事項は resolveInvoice が行う（旧 `verify.ts` は V4 で削除）。
  */
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
