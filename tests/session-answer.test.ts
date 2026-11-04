@@ -503,3 +503,34 @@ test("表示の出所: 行を除いた後も、答えは元の行の添字で引
   assert.deepEqual(toMonitorView(s).lines.map((l) => [l.item, l.answered]), [["タイヤ脱着", []], ["エアバルブ交換", ["4本"]]]);
   assert.equal(s.invoice?.total, 2200 + 1320);
 });
+
+test("画面の台詞: 読めなかった答えは「もう一度お願いします。〈質問〉」、効かなかった承認は「まだ確かめたいことがあります。〈質問〉」。台詞の通し番号は答えごとに変わる", async () => {
+  const s0 = await start(VALVE);
+  const v0 = toMonitorView(s0);
+  assert.equal(v0.say, "ゴムバルブは何本ですか");
+  assert.equal(v0.awaitingApproval, false);
+
+  const s1 = answer(s0, "4人");
+  const v1 = toMonitorView(s1);
+  assert.equal(v1.say, "もう一度お願いします。ゴムバルブは何本ですか");
+  assert.notEqual(v1.sayId, v0.sayId);
+  // 同じ読めない答えをもう一度: 台詞は同じでも通し番号が変わる（声を出し直せる）
+  const v2 = toMonitorView(answer(s1, "4人"));
+  assert.equal(v2.say, v1.say);
+  assert.notEqual(v2.sayId, v1.sayId);
+
+  const v3 = toMonitorView(answer(s0, "請求書頼む"));
+  assert.equal(v3.say, "まだ確かめたいことがあります。ゴムバルブは何本ですか");
+
+  // 読めた答えの後は、ふだんの台詞に戻る。確認事項が 0 件なら承認待ち
+  const s4 = answer(s1, "4本");
+  const v4 = toMonitorView(s4);
+  assert.equal(v4.say, "合っていれば「請求書頼む」と言ってください");
+  assert.equal(v4.awaitingApproval, true);
+  assert.equal(v4.state, "asking");
+  // 承認待ちに承認の言葉でない言葉
+  assert.equal(toMonitorView(answer(s4, "よし")).say, "もう一度お願いします。合っていれば「請求書頼む」と言ってください");
+  const done = toMonitorView(answer(s4, "請求書頼む"));
+  assert.equal(done.awaitingApproval, false);
+  assert.equal(toMonitorView(null).sayId, "none");
+});

@@ -6,6 +6,13 @@ import { HEARD } from "../_demo/tire-change";
 export const STATE_KEYS = SESSION_STATES;
 export type StateKey = SessionStatus;
 
+/**
+ * 画面の札と相棒の表情の種類。作業の状態に、asking のうち確認事項が 0 件の「承認待ち」を足したもの
+ * （「確かめたいことがある」のままにしない）。
+ */
+export type FaceKey = StateKey | "awaiting";
+export const AWAITING_LABEL = "承認待ち";
+
 /** 聞き取った言葉が無いときの、呼びかけの案内 */
 export const CALL_HINT = "「んだ、Claude」と声をかけてください";
 
@@ -37,7 +44,7 @@ export const STATES: Record<StateKey, MonitorState> = {
   },
   listening: {
     label: "聞いている",
-    heard: "タイヤ 4 本、組替とバランス。廃タイヤも",
+    heard: "タイヤ4本、組替とバランスだ。廃タイヤも",
     heardPartial: true,
     doing: "聞いています",
     items: [],
@@ -63,18 +70,18 @@ export const STATES: Record<StateKey, MonitorState> = {
   asking: {
     label: "確かめたいことがある",
     heard: HEARD,
-    doing: "バルブは何個ですか",
+    doing: "バルブは何本ですか",
     items: ["ok", "ok", "ok", "ask"],
-    asks: ["エアバルブ — 数が分からない"],
+    asks: ["バルブは何本ですか"],
     resolved: [],
   },
   done: {
     label: "終わった",
-    heard: "4 個",
+    heard: "4本",
     doing: "4 行入れました。発行は人が押してください",
     items: ["ok", "ok", "ok", "ok"],
     asks: [],
-    resolved: ["エアバルブ 4 個（答えてもらった）"],
+    resolved: ["エアバルブ交換 4本（答えてもらった）"],
   },
 };
 

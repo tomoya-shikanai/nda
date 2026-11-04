@@ -11,7 +11,7 @@ import { ANSWERED_VALVE_QTY, ITEMS, yen } from "../_demo/tire-change";
 import Companion from "./Companion";
 import LiveMonitor from "./LiveMonitor";
 import styles from "./monitor.module.css";
-import { CALL_HINT, STATE_KEYS, STATES, toStateKey, type ItemStatus, type StateKey } from "./states";
+import { AWAITING_LABEL, CALL_HINT, type FaceKey, STATE_KEYS, STATES, toStateKey, type ItemStatus } from "./states";
 
 export const metadata: Metadata = { title: "んだ — 工場のモニター" };
 
@@ -22,7 +22,10 @@ const MARK: Record<ItemStatus, { icon: string; text: string }> = {
   pending: { icon: "・", text: "まだ" },
 };
 
-const LABELS = Object.fromEntries(STATE_KEYS.map((k) => [k, STATES[k].label])) as Record<StateKey, string>;
+const LABELS = {
+  ...Object.fromEntries(STATE_KEYS.map((k) => [k, STATES[k].label])),
+  awaiting: AWAITING_LABEL,
+} as Record<FaceKey, string>;
 
 export default function MonitorPage({ searchParams }: PageProps<"/monitor">) {
   return (
@@ -43,7 +46,7 @@ function MockMonitor({ state, showNav }: { state: string | string[] | undefined;
   const s = STATES[key];
 
   return (
-    <main className={`${styles.screen} ${styles[`s_${key}`]}`}>
+    <main className={`${styles.screen} ${styles[`s_${key}`]} ${showNav ? styles.withNav : ""}`}>
       <header className={styles.top}>
         <div className={styles.brand}>
           んだ <span>nDa</span>
@@ -116,7 +119,7 @@ function MockMonitor({ state, showNav }: { state: string | string[] | undefined;
                       <span className={styles.icon}>{MARK[st].icon}</span>
                       <span className={styles.itemName}>
                         {it.name}
-                        {qty !== null && ` ×${qty}`}
+                        {qty !== null && ` ×${qty}${it.unit}`}
                       </span>
                       <span className={styles.itemState}>{MARK[st].text}</span>
                       <span className={styles.itemPrice}>{qty === null ? "値段？" : yen(it.price * qty)}</span>

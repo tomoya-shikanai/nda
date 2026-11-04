@@ -3,25 +3,30 @@
 // 工場のモニター（本番の配線）。2 秒ごとに /api/session/current の MonitorView を読んで出す。
 // 金額は view の値だけを出す（計算しない）。読めないときは前の表示のまま「つながっていません」を出す。
 // states.ts は node:fs を使う store を import するので、ここでは型だけを使い、文言は page から受け取る。
+// 1920×1080 で明細の合計が必ず見えるよう、吹き出しと確認事項の帯の高さに上限を置き、明細の行は詰めるかスクロールし、
+// 合計の行は明細の欄の下に固定する。
 
 import { useEffect, useRef, useState } from "react";
 import { type MonitorLine, type MonitorView, toMonitorView, yenText } from "../../lib/session/view";
 import Companion from "./Companion";
 import styles from "./monitor.module.css";
-import type { StateKey } from "./states";
+import type { FaceKey } from "./states";
 
 const POLL_MS = 2000;
+/** これより行が多ければ明細を詰める。 */
+const DENSE_LINES = 4;
 
-function isView(v: unknown, labels: Record<StateKey, string>): v is MonitorView {
+function isView(v: unknown, labels: Record<FaceKey, string>): v is MonitorView {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Record<string, unknown>;
   return (
     typeof o.state === "string" &&
     Object.prototype.hasOwnProperty.call(labels, o.state) &&
     typeof o.say === "string" &&
+    typeof o.sayId === "string" &&
+    typeof o.awaitingApproval === "boolean" &&
     Array.isArray(o.lines) &&
     Array.isArray(o.questions) &&
-    typeof o.confirmationCount === "number" &&
     typeof o.credit === "string"
   );
 }
@@ -33,23 +38,32 @@ function lineState(l: MonitorLine): string {
   return parts.length > 0 ? parts.join("・") : "入れた";
 }
 
-export default function LiveMonitor({ labels, hint }: { labels: Record<StateKey, string>; hint: string }) {
+/** 台詞の長さで文字の大きさを選ぶ（吹き出しの高さを超えないように）。 */
+function sayClass(say: string): string {
+  if (say.length <= 30) return styles.doing;
+  if (say.length <= 40) return `${styles.doing} ${styles.doingLong}`;
+  return `${styles.doing} ${styles.doingLonger}`;
+}
+
+export default function LiveMonitor({ labels, hint }: { labels: Record<FaceKey, string>; hint: string }) {
   const [view, setView] = useState<MonitorView>(() => toMonitorView(null));
   const [offline, setOffline] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const spokenRef = useRef<string | null>(null);
+  const linesRef = useRef<HTMLUListElement>(null);
 
-  // say が前と変わったときだけ声を鳴らす（W5）。VOICEVOX が動いていない（503）・自動再生の制限で鳴らないときは、文字だけで続ける。
+  // 台詞の通し番号が変わったときだけ声を鳴らす（同じ台詞でも、答えが読めなかったときは言い直す）。
+  // VOICEVOX が動いていない（503）・自動再生の制限で鳴らないときは、文字だけで続ける。
   // 読み込む前の仮の表示（toMonitorView(null)）では鳴らさない。
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    if (!loaded || spokenRef.current === view.say) return;
-    spokenRef.current = view.say;
+    if (!loaded || spokenRef.current === view.sayId) return;
+    spokenRef.current = view.sayId;
     const a = audioRef.current;
     if (!a) return;
     a.src = `/api/session/current/speech?t=${Date.now()}`;
     void a.play().catch(() => {});
-  }, [loaded, view.say]);
+  }, [loaded, view.sayId]);
 
   useEffect(() => {
     let alive = true;
@@ -75,26 +89,36 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<StateKey,
     };
   }, [labels]);
 
-  const key = view.state;
-  const asksOn = view.confirmationCount > 0 || view.questions.length > 0;
+  // 明細が欄に収まらないときは、最初の確認待ちの行がちょうど見える所までだけスクロールする
+  useEffect(() => {
+    const ul = linesRef.current;
+    if (!ul) return;
+    const ask = ul.querySelector<HTMLElement>("[data-ask]");
+    const bottom = ask ? ask.offsetTop + ask.offsetHeight : 0;
+    ul.scrollTop = Math.max(0, bottom - ul.clientHeight);
+  }, [view.lines]);
+
+  const face: FaceKey = view.awaitingApproval ? "awaiting" : view.state;
+  const asks = view.questions.length;
   const okCount = view.lines.filter((l) => l.status === "ok").length;
   const total = yenText(view.total);
+  const dense = view.lines.length > DENSE_LINES;
 
   return (
-    <main className={`${styles.screen} ${styles[`s_${key}`]}`}>
+    <main className={`${styles.screen} ${styles[`s_${face}`]}`}>
       <header className={styles.top}>
         <div className={styles.brand}>
           んだ <span>nDa</span>
         </div>
         <div className={styles.status}>
           <span className={styles.lamp} />
-          {labels[key]}
+          {labels[face]}
         </div>
       </header>
 
       <section className={styles.body}>
         <div className={styles.stage}>
-          <Companion state={key} />
+          <Companion state={face} />
         </div>
 
         <div className={styles.right}>
@@ -104,21 +128,26 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<StateKey,
             ) : (
               <>
                 <p className={styles.small}>聞き取った言葉</p>
-                <p className={styles.heard}>「{view.heard}」</p>
+                {/* 長い文字起こしは最新の 2 行だけを見せる（頭は欄の上で切れる） */}
+                <div className={styles.heardBox}>
+                  <p className={styles.heard}>「{view.heard}」</p>
+                </div>
               </>
             )}
-            <p className={styles.doing}>{view.say}</p>
+            <p className={sayClass(view.say)}>{view.say}</p>
           </div>
 
-          <div className={`${styles.asks} ${asksOn ? styles.asksOn : ""}`}>
-            <h2>確認事項 {view.confirmationCount > 0 && <b>{view.confirmationCount}</b>}</h2>
+          <div className={`${styles.asks} ${asks > 0 ? styles.asksOn : ""}`}>
+            <h2>確認事項 {asks > 0 && <b>{asks}</b>}</h2>
             <ul>
-              {view.questions.length === 0 && !view.approved && <li className={styles.none}>ありません</li>}
-              {view.questions.map((q, i) => (
-                <li key={i} className={styles.ask}>
-                  {q}
+              {asks === 0 && !view.approved && <li className={styles.none}>ありません</li>}
+              {/* 帯は 1 行だけ（今聞いている質問と、残りの数）。高さを変えず、明細の合計を押し出さない */}
+              {asks > 0 && (
+                <li className={styles.askRow}>
+                  <span className={styles.ask}>{view.questions[0]}</span>
+                  {asks > 1 && <span className={styles.more}>ほか {asks - 1} 問</span>}
                 </li>
-              ))}
+              )}
               {view.approved && <li className={styles.resolved}>✓ 承認済み</li>}
             </ul>
           </div>
@@ -135,22 +164,24 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<StateKey,
             {view.lines.length === 0 ? (
               <p className={styles.none}>まだありません</p>
             ) : (
-              <ul>
-                {view.lines.map((l, i) => {
-                  const ask = l.status === "ask";
-                  return (
-                    <li key={i} className={`${styles.item} ${ask ? styles.i_ask : styles.i_ok}`}>
-                      <span className={styles.icon}>{ask ? "?" : "✓"}</span>
-                      <span className={styles.itemName}>
-                        {l.item}
-                        {l.qty !== null && ` ×${l.qty}${l.unit ?? ""}`}
-                      </span>
-                      <span className={styles.itemState}>{lineState(l)}</span>
-                      <span className={styles.itemPrice}>{yenText(l.amount) ?? "値段？"}</span>
-                    </li>
-                  );
-                })}
-                <li className={styles.item}>
+              <>
+                <ul ref={linesRef} className={`${styles.lines} ${dense ? styles.dense : ""}`}>
+                  {view.lines.map((l, i) => {
+                    const ask = l.status === "ask";
+                    return (
+                      <li key={i} data-ask={ask ? "" : undefined} className={`${styles.item} ${ask ? styles.i_ask : styles.i_ok}`}>
+                        <span className={styles.icon}>{ask ? "?" : "✓"}</span>
+                        <span className={styles.itemName}>
+                          {l.item}
+                          {l.qty !== null && ` ×${l.qty}${l.unit ?? ""}`}
+                        </span>
+                        <span className={styles.itemState}>{lineState(l)}</span>
+                        <span className={styles.itemPrice}>{yenText(l.amount) ?? "値段？"}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className={`${styles.item} ${styles.totalRow}`}>
                   <span className={styles.icon} />
                   <span className={styles.itemName}>合計</span>
                   {total === null ? (
@@ -158,8 +189,8 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<StateKey,
                   ) : (
                     <span className={styles.itemPrice}>{total}</span>
                   )}
-                </li>
-              </ul>
+                </div>
+              </>
             )}
           </div>
         </div>

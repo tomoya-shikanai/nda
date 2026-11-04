@@ -2,7 +2,7 @@
 // Clawd と見分けがつくよう、ピクセル絵にせず曲線で描き、色は藤色、形は丸い頭と 8 本の腕にする。
 
 import styles from "./monitor.module.css";
-import type { StateKey } from "./states";
+import type { FaceKey } from "./states";
 
 const BODY = "#8f78d8";
 const BODY_LIGHT = "#c3b4f0";
@@ -26,26 +26,29 @@ function mirror(d: string): string {
   return d.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g, (_, x, y) => `${400 - Number(x)} ${y}`);
 }
 
-const POSE: Record<StateKey, { left: Pose; right: Pose }> = {
+const POSE: Record<FaceKey, { left: Pose; right: Pose }> = {
   idle: { left: "down", right: "down" },
   listening: { left: "down", right: "ear" },
   thinking: { left: "front", right: "down" },
   drafting: { left: "front", right: "front" },
   asking: { left: "down", right: "offer" },
   done: { left: "up", right: "up" },
+  // 承認待ち: できた請求書を抱えて、耳を傾けて承認の言葉を待つ
+  awaiting: { left: "front", right: "ear" },
 };
 
 // 目の中の黒目の向き
-const LOOK: Record<StateKey, [number, number]> = {
+const LOOK: Record<FaceKey, [number, number]> = {
   idle: [0, 4],
   listening: [9, 0],
   thinking: [-8, -11],
   drafting: [0, 12],
   asking: [0, 0],
   done: [0, 0],
+  awaiting: [7, 0],
 };
 
-function Eye({ cx, state }: { cx: number; state: StateKey }) {
+function Eye({ cx, state }: { cx: number; state: FaceKey }) {
   const cy = 175;
   if (state === "done") {
     return <path d={`M${cx - 24} ${cy + 6} Q${cx} ${cy - 22} ${cx + 24} ${cy + 6}`} stroke={INK} strokeWidth={9} fill="none" strokeLinecap="round" />;
@@ -65,7 +68,7 @@ function Eye({ cx, state }: { cx: number; state: StateKey }) {
   );
 }
 
-function Mouth({ state }: { state: StateKey }) {
+function Mouth({ state }: { state: FaceKey }) {
   switch (state) {
     case "listening":
       return <ellipse cx={200} cy={232} rx={9} ry={11} fill={INK} />;
@@ -96,7 +99,7 @@ function Wrench({ x, y, rotate }: { x: number; y: number; rotate: number }) {
   );
 }
 
-export default function Companion({ state }: { state: StateKey }) {
+export default function Companion({ state }: { state: FaceKey }) {
   const pose = POSE[state];
   const arm = (side: "left" | "right") => {
     const d = ARM_R[pose[side]];
@@ -134,7 +137,7 @@ export default function Companion({ state }: { state: StateKey }) {
         <text x={248} y={317} textAnchor="middle" fontSize={14} fontWeight={800} fill={SUIT}>んだびょん</text>
 
         {/* 持ち物（腕より奥） */}
-        {(state === "drafting" || state === "thinking") && (
+        {(state === "drafting" || state === "thinking" || state === "awaiting") && (
           <g transform="rotate(-6 200 340)">
             <rect x={146} y={296} width={108} height={86} rx={8} fill="#a77b4f" stroke={INK} strokeWidth={4} />
             <rect x={156} y={306} width={88} height={68} fill="#fff" />
@@ -193,8 +196,8 @@ export default function Companion({ state }: { state: StateKey }) {
       </g>
 
       {/* 状態ごとの記号（体の外） */}
-      {state === "listening" && (
-        <g stroke="#1f6fd1" strokeWidth={7} fill="none" strokeLinecap="round">
+      {(state === "listening" || state === "awaiting") && (
+        <g stroke={state === "awaiting" ? "#0f7f65" : "#1f6fd1"} strokeWidth={7} fill="none" strokeLinecap="round">
           <path d="M358 150 Q372 170 358 190" className={styles.wave1} />
           <path d="M374 132 Q398 170 374 208" className={styles.wave2} />
         </g>
