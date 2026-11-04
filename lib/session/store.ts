@@ -27,6 +27,11 @@ export const AnswerAction = z.discriminatedUnion("kind", [
   /** 「X は何の数ですか」に「関係ない」。その行の使われない数の確認事項を解く。 */
   z.object({ kind: z.literal("unrelated") }),
   z.object({ kind: z.literal("approve") }),
+  /**
+   * 明細が 0 行の作業への返事を、作業の話の続きとして文字起こしの後ろに足して抽出し直した（run.ts の continueSession）。
+   * offsetSec は足した発話を後ろにずらした秒数。文字起こしの時刻 − offsetSec が、返事の録音（provenance.recordingId）の時刻。
+   */
+  z.object({ kind: z.literal("continue"), offsetSec: z.number() }),
   z.object({ kind: z.literal("unread"), reason: z.string() }),
 ]);
 export type AnswerAction = z.infer<typeof AnswerAction>;

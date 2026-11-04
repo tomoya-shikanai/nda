@@ -8,9 +8,8 @@ import { loadLedger, type LedgerEntry } from "../ledger/lookup";
 import { transcribeGemini } from "../stt/gemini";
 import { transcribeScribe } from "../stt/scribe";
 import { type Segment, SegmentSchema, type Transcript } from "../stt/types";
-import { answerSession } from "./answer";
-import { startSession } from "./run";
-import { latestSession, readSession, sessionDir, writeSession } from "./store";
+import { replySession, startSession } from "./run";
+import { latestSession, readSession, sessionDir } from "./store";
 import { toMonitorView } from "./view";
 import { answerUtterance, routeVoice } from "./voice";
 
@@ -79,12 +78,11 @@ async function askingSession(id: string) {
   return s;
 }
 
-/** 答えの 1 発話を作業に当てる。200 と { view }。答えの読み取りに Claude を使わない。 */
+/** 答えの 1 発話を作業に当てる。200 と { view }。答えの読み取りに Claude を使わない（明細が 0 行の作業への返事だけは、話の続きとして抽出し直す）。 */
 export async function answerWith(id: string, utterance: Segment): Promise<Response> {
   const s = await askingSession(id);
   if (s instanceof Response) return s;
-  const next = answerSession(s, utterance, await ledger(), new Date());
-  await writeSession(sessionDir(), next);
+  const next = await replySession({ dir: sessionDir(), session: s, utterance, ledger: await ledger() });
   return Response.json({ view: toMonitorView(next) }, { headers: NO_STORE });
 }
 

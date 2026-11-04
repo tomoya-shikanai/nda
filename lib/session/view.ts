@@ -80,7 +80,7 @@ export function yenText(n: number | null): string | null {
   return n === null ? null : `¥${n.toLocaleString("ja-JP")}`;
 }
 
-const NOT_ANSWERS =new Set(["unread", "approve"]);
+const NOT_ANSWERS = new Set(["unread", "approve", "continue"]);
 
 export function toMonitorView(s: Session | null): MonitorView {
   const segs = s?.transcript?.segments ?? [];

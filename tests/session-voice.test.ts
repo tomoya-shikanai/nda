@@ -315,10 +315,16 @@ test("voice: 作業が無ければ新しい作業（201）、最新が asking �
     assert.notEqual(third.id, valve.id);
     assert.equal((await readSession(dir, valve.id))?.answers.length, 2);
 
-    // 新しい作業（明細 0 行）も asking なので、次の声はその返事になる（Gemini）
+    // 新しい作業（明細 0 行）も asking なので、次の声はその返事になる（Gemini）。0 行なので話の続きとして文字起こしに足して抽出し直す
     const r4 = await route.POST(post("/api/session/voice", { file: file(), vendor: "gemini" }));
     assert.equal(r4.status, 200);
-    assert.equal((await readSession(dir, third.id))?.answers.length, 1);
+    const t4 = await readSession(dir, third.id);
+    assert.equal(t4?.answers.length, 1);
+    assert.equal(t4?.answers[0].action.kind, "continue");
+    assert.deepEqual(
+      t4?.transcript?.segments.map((x) => x.text),
+      ["次の作業", "4本"],
+    );
     assert.deepEqual(calls, ["scribe", "scribe", "scribe", "gemini", "gemini"]);
   });
   assert.deepEqual((await readdir(dir)).filter((n) => !n.endsWith(".json")), []);

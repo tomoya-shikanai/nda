@@ -3,6 +3,7 @@
  * 抽出の前に thinking を書くので、モニターは「考え中」を見られる。
  * 確認事項が 0 件でも asking で止める。done にするのは承認だけ（W4）。
  * 抽出の失敗は固定の文と例外の種類名だけを保存する。抽出のトークン数とかかった秒数を保存する（文の中身は入れない。事前登録の副の指標）。
+ * 明細が 0 行の作業への返事は、作業の話の続きとして文字起こしに足して抽出し直す（continueSession）。
  */
 import { randomUUID } from "node:crypto";
 import { assembleInvoice } from "../invoice/build";
@@ -11,8 +12,10 @@ import { extractInvoice } from "../invoice/extract";
 import { toQuestions } from "../invoice/questions";
 import type { InvoiceRefs } from "../invoice/schema";
 import type { LedgerEntry } from "../ledger/lookup";
-import { type Transcript, TranscriptSchema } from "../stt/types";
-import { type ExtractionCost, newSession, type Session, transition, writeSession } from "./store";
+import { type Segment, type Transcript, TranscriptSchema } from "../stt/types";
+import { answerBase, answerSession } from "./answer";
+import { isApproval } from "./approval";
+import { type Answer, type ExtractionCost, newSession, type Session, transition, writeSession } from "./store";
 
 /** POST の body の文字起こしの形。正は lib/stt/types.ts。 */
 export { TranscriptSchema };
@@ -27,6 +30,34 @@ export function extractionError(e: unknown): string {
   return `抽出に失敗しました（${kind}）`;
 }
 
+/** 抽出して、かかった秒数とトークン数を測る。失敗は cost つきで投げ直す。 */
+async function extractWithCost(
+  extract: Extractor,
+  t: Transcript,
+  ledger: LedgerEntry[],
+): Promise<{ ok: true; out: Extracted; cost: ExtractionCost } | { ok: false; error: unknown; cost: ExtractionCost }> {
+  const t0 = performance.now();
+  const cost = (usage?: Extracted["usage"]): ExtractionCost => ({
+    inputTokens: usage?.inputTokens ?? null,
+    outputTokens: usage?.outputTokens ?? null,
+    seconds: (performance.now() - t0) / 1000,
+  });
+  try {
+    const out = await extract(t, ledger);
+    return { ok: true, out, cost: cost(out.usage) };
+  } catch (error) {
+    return { ok: false, error, cost: cost() };
+  }
+}
+
+/** 抽出の結果から、明細・質問・参照を組む（startSession と continueSession で同じ）。 */
+function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[]) {
+  const { candidates, ...refs } = out;
+  const invoice = assembleInvoice(out, t, ledger);
+  const questions = toQuestions(invoice, candidates, t, ledger);
+  return { candidates, refs: { lines: refs.lines, negations: refs.negations }, invoice, questions };
+}
+
 export async function startSession(x: {
   dir: string;
   transcript: Transcript;
@@ -36,41 +67,92 @@ export async function startSession(x: {
   id?: string;
 }): Promise<Session> {
   const now = x.now ?? (() => new Date());
-  const extract = x.extract ?? extractInvoice;
   let s = newSession(x.id ?? randomUUID(), now());
   s = transition(s, "listening", now());
   s = { ...transition(s, "thinking", now()), transcript: x.transcript };
   await writeSession(x.dir, s);
 
-  let out: Extracted;
-  const t0 = performance.now();
-  const cost = (usage?: Extracted["usage"]): ExtractionCost => ({
-    inputTokens: usage?.inputTokens ?? null,
-    outputTokens: usage?.outputTokens ?? null,
-    seconds: (performance.now() - t0) / 1000,
-  });
-  try {
-    out = await extract(x.transcript, x.ledger);
-  } catch (e) {
-    const failed = { ...transition(s, "idle", now()), error: extractionError(e), extraction: cost() };
+  const r = await extractWithCost(x.extract ?? extractInvoice, x.transcript, x.ledger);
+  if (!r.ok) {
+    const failed = { ...transition(s, "idle", now()), error: extractionError(r.error), extraction: r.cost };
     await writeSession(x.dir, failed);
-    throw e;
+    throw r.error;
   }
-  const extraction = cost(out.usage);
-
-  const { candidates, ...refs } = out;
-  const invoice = assembleInvoice(out, x.transcript, x.ledger);
-  const questions = toQuestions(invoice, candidates, x.transcript, x.ledger);
-  s = {
-    ...transition(s, "drafting", now()),
-    candidates,
-    refs: { lines: refs.lines, negations: refs.negations },
-    invoice,
-    questions,
-    extraction,
-  };
+  s = { ...transition(s, "drafting", now()), ...draft(r.out, x.transcript, x.ledger), extraction: r.cost };
   await writeSession(x.dir, s);
   s = transition(s, "asking", now());
   await writeSession(x.dir, s);
   return s;
+}
+
+/** 抽出で 1 行も取れなかった作業が、質問中（asking）か。返事は作業の話の続きとして扱う。答えで行を除いて 0 行になった作業は含めない。 */
+export function isEmptyDraft(s: Session): boolean {
+  return s.status === "asking" && s.refs !== null && s.refs.lines.length === 0 && s.invoice !== null && s.invoice.lines.length === 0;
+}
+
+/**
+ * 文字起こしの後ろに返事の 1 発話を足す。返事の時刻は元の最後の終了の秒数だけ後ろにずらす（発話の順で時刻が逆転しない）。
+ * recordingId は元のまま（抽出と明細の出所は 1 本の文字起こしを指す）。返事の録音の時刻は、answers の continue の offsetSec で戻せる。
+ */
+export function appendUtterance(t: Transcript, u: Segment): { transcript: Transcript; offsetSec: number } {
+  const offsetSec = t.segments.length ? Math.max(...t.segments.map((x) => x.endSec)) : 0;
+  const seg: Segment = { ...u, startSec: u.startSec + offsetSec, endSec: u.endSec + offsetSec };
+  return { transcript: TranscriptSchema.parse({ ...t, segments: [...t.segments, seg] }), offsetSec };
+}
+
+/**
+ * 明細が 0 行の作業への返事を、作業の話の続きとして扱う。文字起こしの後ろに返事を足し、抽出から組み直して同じ作業を更新する。
+ * 状態は asking → drafting（抽出中）→ asking。done には飛ばさない（確認事項があれば質問、0 件なら承認待ち）。
+ * 抽出が失敗したら文字起こしを元に戻し、答えを unread（固定の文と例外の種類名）にして asking に戻す（投げない。声で言い直せる）。
+ */
+export async function continueSession(x: {
+  dir: string;
+  session: Session;
+  utterance: Segment;
+  ledger: LedgerEntry[];
+  extract?: Extractor;
+  now?: () => Date;
+}): Promise<Session> {
+  const now = x.now ?? (() => new Date());
+  const s = x.session;
+  if (!isEmptyDraft(s) || s.transcript === null) throw new Error("明細が 0 行の質問中の作業でない");
+  const { transcript, offsetSec } = appendUtterance(s.transcript, x.utterance);
+  const base = answerBase(s, x.utterance, now());
+  const answer = (action: Answer["action"]): Answer => ({ ...base, questionIndex: 0, lineIndex: -1, action });
+
+  const drafting = { ...transition(s, "drafting", now()), transcript, answers: [...s.answers, answer({ kind: "continue", offsetSec })] };
+  await writeSession(x.dir, drafting);
+
+  const r = await extractWithCost(x.extract ?? extractInvoice, transcript, x.ledger);
+  if (!r.ok) {
+    const back = {
+      ...transition(drafting, "asking", now()),
+      transcript: s.transcript,
+      answers: [...s.answers, answer({ kind: "unread", reason: extractionError(r.error) })],
+      extraction: r.cost,
+    };
+    await writeSession(x.dir, back);
+    return back;
+  }
+  const next = transition({ ...drafting, ...draft(r.out, transcript, x.ledger), extraction: r.cost }, "asking", now());
+  await writeSession(x.dir, next);
+  return next;
+}
+
+/**
+ * 質問中の作業への返事の 1 発話を当てて保存する。明細が 0 行なら作業の話の続き（continueSession）、
+ * それ以外と承認の言葉は従来どおり answerSession（承認の言葉は抽出し直さない）。
+ */
+export async function replySession(x: {
+  dir: string;
+  session: Session;
+  utterance: Segment;
+  ledger: LedgerEntry[];
+  extract?: Extractor;
+  now?: () => Date;
+}): Promise<Session> {
+  if (isEmptyDraft(x.session) && !isApproval(x.utterance.text)) return continueSession(x);
+  const next = answerSession(x.session, x.utterance, x.ledger, (x.now ?? (() => new Date()))());
+  await writeSession(x.dir, next);
+  return next;
 }

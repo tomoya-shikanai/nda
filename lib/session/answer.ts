@@ -204,20 +204,16 @@ export function applyAnswers(
   return { lines: final, confirmations, total, unused: resolved.unused, kept };
 }
 
-/** 父の答えの 1 発話を作業に当てる。入力は書き換えない。asking でなければ throw。 */
-export function answerSession(s: Session, utterance: Segment, ledger: LedgerEntry[], now: Date): Session {
-  if (s.status !== "asking") throw new Error(`asking でないので答えを受けられない: ${s.status}`);
-  if (s.invoice === null || s.transcript === null || s.refs === null) throw new Error("明細が無いので答えを受けられない");
-  const at = now.toISOString();
-  const n = s.answers.length + 1;
+/** 答えの記録の共通部分。出所は作業の n 番目の答えの録音（`<id>#answer-<n>`）の時刻と言葉そのまま。 */
+export function answerBase(s: Session, utterance: Segment, now: Date): Omit<Answer, "questionIndex" | "lineIndex" | "action"> {
   const speaker: Answer["provenance"]["speaker"] =
     utterance.speaker !== null && SPEAKERS.has(utterance.speaker)
       ? (utterance.speaker as "father" | "customer" | "son")
       : "unknown";
-  const base: Omit<Answer, "questionIndex" | "lineIndex" | "action"> = {
-    at,
+  return {
+    at: now.toISOString(),
     provenance: {
-      recordingId: `${s.id}#answer-${n}`,
+      recordingId: `${s.id}#answer-${s.answers.length + 1}`,
       startSec: utterance.startSec,
       endSec: utterance.endSec,
       speaker,
@@ -225,6 +221,15 @@ export function answerSession(s: Session, utterance: Segment, ledger: LedgerEntr
     },
     source: "answer",
   };
+}
+
+/** 父の答えの 1 発話を作業に当てる。入力は書き換えない。asking でなければ throw。 */
+export function answerSession(s: Session, utterance: Segment, ledger: LedgerEntry[], now: Date): Session {
+  if (s.status !== "asking") throw new Error(`asking でないので答えを受けられない: ${s.status}`);
+  if (s.invoice === null || s.transcript === null || s.refs === null) throw new Error("明細が無いので答えを受けられない");
+  const at = now.toISOString();
+  const base = answerBase(s, utterance, now);
+  const speaker = base.provenance.speaker;
   const keep = (questionIndex: number, lineIndex: number, action: Action): Session => ({
     ...s,
     answers: [...s.answers, { ...base, questionIndex, lineIndex, action }],

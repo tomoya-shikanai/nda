@@ -1,6 +1,6 @@
 /**
  * 父の答えの 1 発話を作業に当てる（W4）。無い ID 404、形の不正 400、asking でなければ 409。
- * 答えの読み取りに Claude を使わない。料金表は POST /api/session と同じ。処理は lib/session/routes.ts と共用。
+ * 答えの読み取りに Claude を使わない（明細が 0 行の作業への返事だけは、話の続きとして抽出し直す）。料金表は POST /api/session と同じ。処理は lib/session/routes.ts と共用。
  */
 import { z } from "zod";
 import { answerWith } from "../../../../../lib/session/routes";
