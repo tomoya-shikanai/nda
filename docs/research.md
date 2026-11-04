@@ -27,6 +27,16 @@
 | 2026-11-04 | microWakeWord はマイコン向けで、学習は上級者向け。日本語への対応は読み取れない | 未確認 | 11/8 には間に合わないので使わない | [microWakeWord](https://github.com/kahrendt/microWakeWord) |
 | 2026-11-04 | ESP32-S3 の端末側の検出（Espressif WakeNet）は、独自の起動語に Espressif 側での学習が要る | 未確認（記憶） | 検出は Pi で行う | — |
 
+## 声とキャラクター
+
+| 日付 | 分かったこと | 確度 | 影響 | 出典 |
+|---|---|---|---|---|
+| 2026-11-04 | VOICEVOX エンジンの安定版 0.26.0 に Linux CPU arm64 版がある。オフラインで動き、無料 | 確認済（公式のリリース） | Pi 5 でも動く見込み。1 文にかかる時間は実機で測る。遅ければ Mac で動かすか、定型の質問を前もって WAV にしておく | [VOICEVOX engine releases](https://github.com/VOICEVOX/voicevox_engine/releases) |
+| 2026-11-04 | VOICEVOX は商用・非商用ともに使えるが、VOICEVOX を使ったと分かるクレジットが要る。生成した音声の扱いはキャラクターごとの規約に従う | 確認済（公式の利用規約） | 使う声を決めたら、その声の規約を個別に確かめる | [VOICEVOX 利用規約](https://voicevox.hiroshiba.jp/term/) |
+| 2026-11-04 | ずんだもんの声は商用利用でき、表記は「VOICEVOX:ずんだもん」。クレジットなしで使うなら 1 キャラクター 40 万円＋税の契約 | 確認済（公式の音源の規約） | 声の候補の 1 つ。クレジットは画面の隅と README に書く | [ずんだもんの規約](https://zunko.jp/con_ongen_kiyaku.html) |
+| 2026-11-04 | Anthropic の商標ガイドラインでは、商標の利用は Anthropic が明示的に許可した範囲と、事前に承認した素材に限る。色・字体・比率を含め、改変は一切不可。問い合わせは marketing@anthropic.com（取引関係のある相手向け） | 確認済（公式ガイドライン） | Clawd に整備服を着せるのは改変に当たるおそれがある。許可なしには使わない | [Anthropic Trademark Guidelines](https://www.anthropic.com/legal/trademark-guidelines) |
+| 2026-11-04 | Built with Claude: Japan 2026 のイベントページと、過去の Built with Claude の公式ルールに、ロゴ・キャラクター・知的財産の使い方の記載は無い | 確認済（記載が無いことを確認） | 大会としての許可も無い。使うなら運営に聞く | [イベントページ](https://cerebralvalley.ai/e/built-with-claude-japan2026)、[過去の公式ルール](https://support.claude.com/ja/articles/12003471) |
+
 ## データの扱い（Claude API）
 
 | 日付 | 分かったこと | 確度 | 影響 | 出典 |
