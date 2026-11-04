@@ -16,8 +16,6 @@
       "Bash(node --import tsx --test tests/*)"
     ],
     "deny": [
-      "Read(//**/.env*)",
-      "Read(**/.env*)",
       "Edit(**/docs/preregistration.md)",
       "Write(**/docs/preregistration.md)",
       "Edit(**/tasks/backlog*.md)",

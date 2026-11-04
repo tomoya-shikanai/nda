@@ -18,6 +18,14 @@ night_settings() { # <worktree> <出力先>
     esac
     deny+=("$d")
   done
+  # 作業する worktree の直下の .env*（.env.example は除く）。どこにでも当たる glob にせず絶対パスで拒否する
+  # （glob だと試験が一時フォルダに作る .env まで読めなくなる）。.env は無くても入れる。
+  deny+=("$wt/.env")
+  for d in "$wt"/.env.*; do
+    [ -e "$d" ] || continue
+    [ "$d" = "$wt/.env.example" ] && continue
+    deny+=("$d")
+  done
   # tsx は一時フォルダにソケットを作る。Claude の sandbox が割り当てる一時フォルダの下だけ許す。
   tmp=/tmp/claude-$(id -u)
   # --args の後ろは全部文字列扱いになるので、設定ファイルは標準入力で渡す
