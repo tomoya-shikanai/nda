@@ -50,7 +50,7 @@ const ref = (item: LineRef["item"], qty: string | null, over: Partial<LineRef> =
 const run = (t: Transcript, mk: (cs: Candidate[]) => InvoiceRefs) => {
   const cs = enumerateCandidates(t, ledger);
   const r = assembleInvoice({ candidates: cs, ...mk(cs) }, t, ledger);
-  return { r, qs: toQuestions(r, cs, t) };
+  return { r, qs: toQuestions(r, cs, t, ledger) };
 };
 
 /** 確認事項が 1 件も落ちず、重ならずに、どれかの質問に入る。行ごとに 1 問、-1 は理由ごとに 1 問。質問は 40 字まで。 */
@@ -86,7 +86,7 @@ test("tire-001・tire-002: 確認事項が無ければ質問も無い", () => {
           ];
     const r = assembleInvoice({ candidates: cs, lines, negations: [] }, t, ledger);
     assert.equal(r.total, rid === "tire-001" ? 6600 : 13640);
-    assert.deepEqual(toQuestions(r, cs, t), []);
+    assert.deepEqual(toQuestions(r, cs, t, ledger), []);
   }
 });
 
@@ -230,15 +230,53 @@ test("行に付かない事項は理由ごとに 1 問: 使われない金額・
   assert.equal(qs.find((q) => q.reason === "unparsed")!.confirmations.length, 2);
 });
 
-test("行が 0 件: 「請求する作業はありませんか」の 1 問（否定の文に挙げた形・lines だけ空の形）", () => {
-  for (const [t, negations] of [
-    [seq("バランスは大丈夫です。"), [{ seg: 0, text: "バランスは大丈夫です。" }]],
-    [seq("こんにちは。"), []],
-  ] as const) {
-    const { r, qs } = run(t, () => ({ lines: [], negations: [...negations] }));
-    assertShape(r, qs);
-    assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [[-1, "total", "請求する作業はありませんか"]]);
-  }
+test("行が 0 件: 「請求する作業はありませんか」の 1 問。N2 は否定の文の確かめ「バランスはやらないのですね」が加わる", () => {
+  const empty = run(seq("こんにちは。"), () => ({ lines: [], negations: [] }));
+  assertShape(empty.r, empty.qs);
+  assert.deepEqual(empty.qs.map((q) => [q.lineIndex, q.reason, q.text]), [[-1, "total", "請求する作業はありませんか"]]);
+  const n2 = run(seq("バランスは大丈夫です。"), () => ({ lines: [], negations: [{ seg: 0, text: "バランスは大丈夫です。" }] }));
+  assertShape(n2.r, n2.qs);
+  assert.deepEqual(n2.qs.map((q) => [q.lineIndex, q.reason, q.text]), [
+    [-1, "negation", "バランスはやらないのですね"],
+    [-1, "total", "請求する作業はありませんか"],
+  ]);
+});
+
+test("否定の文の品目の行が無い（脱着 done、「やっぱりやめて、バランスだけにします。」）: total null、確かめの 1 問", () => {
+  const { r, qs } = run(seq("脱着4本。", "やっぱりやめて、バランスだけにします。"), (cs) => ({
+    lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))],
+    negations: [{ seg: 1, text: "やっぱりやめて、バランスだけにします。" }],
+  }));
+  assertShape(r, qs);
+  assert.equal(r.total, null);
+  assert.deepEqual(qs.filter((q) => q.reason === "negation").map((q) => [q.lineIndex, q.text]), [[-1, "バランスはやらないのですね"]]);
+});
+
+test("二重の行の数は料金表の正式名にそろえて数える（ID と {seg,text} の混在・3 つの別名）", () => {
+  const mixed = run(seq("脱着4本。", "脱着2本。"), (cs) => ({
+    lines: [ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本")), ref({ seg: 1, text: "脱着" }, id(cs, "qty", 1, "2本"))],
+    negations: [],
+  }));
+  assertShape(mixed.r, mixed.qs);
+  assert.ok(mixed.qs.every((q) => q.text !== "脱着が1行あります。別の作業ですか"), JSON.stringify(mixed.qs.map((q) => q.text)));
+  assert.ok(mixed.qs.some((q) => q.lineIndex === 1 && q.text === "脱着が2行あります。別の作業ですか"), JSON.stringify(mixed.qs.map((q) => q.text)));
+  const aliases = run(seq("脱着1本。", "履き替え2本。", "タイヤ脱着3本。"), (cs) => ({
+    lines: [
+      ref({ seg: 0, text: "脱着" }, id(cs, "qty", 0, "1本")),
+      ref({ seg: 1, text: "履き替え" }, id(cs, "qty", 1, "2本")),
+      ref({ seg: 2, text: "タイヤ脱着" }, id(cs, "qty", 2, "3本")),
+    ],
+    negations: [],
+  }));
+  assertShape(aliases.r, aliases.qs);
+  assert.deepEqual(
+    aliases.qs.map((q) => [q.lineIndex, q.reason, q.text]),
+    [
+      [0, "ledger", "脱着が3行あります。別の作業ですか"],
+      [1, "ledger", "履き替えが3行あります。別の作業ですか"],
+      [2, "ledger", "タイヤ脱着が3行あります。別の作業ですか"],
+    ],
+  );
 });
 
 test("品目の無い否定の文は「何をやめましたか」、2 つなら数を言う。通しで total null", () => {
@@ -360,6 +398,6 @@ test("呼び出しの前後で明細・候補・文字起こしが変わらな�
     ledger,
   );
   const before = JSON.stringify([r, cs, t]);
-  toQuestions(r, cs, t);
+  toQuestions(r, cs, t, ledger);
   assert.equal(JSON.stringify([r, cs, t]), before);
 });

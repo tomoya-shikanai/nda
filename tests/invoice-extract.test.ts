@@ -371,11 +371,22 @@ test("条件 18（規則）: 否定の文が行の候補を含まなくても、
     const r = resolveInvoice(datsu(cs), cs, t, ledger, [{ seg: t.segments.length - 1, text: "やっぱりやめます。" }]);
     assert.ok(has(r.confirmations, "line", "（否定）", -1), JSON.stringify(r.confirmations));
   }
-  // 品目の語があり、同じ品目の行が無ければ確認事項なし（モデルが正しく行を作らなかった）
+  // 品目の語があり、同じ品目の行も近くの negated の行も無ければ、品目つきの行に付かない「否定」（例外なく確認事項）
   const t5 = seq("脱着4本。", "バランスは大丈夫です。");
   const c5 = enumerateCandidates(t5, ledger);
   const r5 = resolveInvoice(datsu(c5), c5, t5, ledger, [{ seg: 1, text: "バランスは大丈夫です。" }]);
-  assert.deepEqual(r5.confirmations, []);
+  assert.deepEqual(
+    r5.confirmations.map((c) => [c.lineIndex, c.field, c.candidates]),
+    [[-1, "line", [id(c5, "item", 1, "バランス")]]],
+  );
+  assert.ok(has(r5.confirmations, "line", "否定の文の品目の行が無い", -1));
+  // 再現: 「やっぱりやめて、バランスだけにします。」（脱着 done、バランスの行なし）も確認事項
+  const t6 = seq("脱着4本。", "やっぱりやめて、バランスだけにします。");
+  const c6 = enumerateCandidates(t6, ledger);
+  const r6 = resolveInvoice(datsu(c6), c6, t6, ledger, [{ seg: 1, text: "やっぱりやめて、バランスだけにします。" }]);
+  assert.ok(has(r6.confirmations, "line", "（否定）", -1), JSON.stringify(r6.confirmations));
+  // 条件 15 の「行が無い」とは重ならない（同じ品目で 2 件出さない）
+  assert.ok(!r6.confirmations.some((c) => c.message.includes("料金表の品目の語が出たのに行が無い")), JSON.stringify(r6.confirmations));
 });
 
 test("条件 5（語彙）: 同じ品目の別の語の文に否定の合図があれば、その行も「否定」（negations が無くても止まる）", () => {
@@ -476,17 +487,22 @@ test("条件 18（D2）: 同じ否定の文が 2 回あれば、2 回目の文�
   const r2 = resolveInvoice([ref(id(c2, "item", 0, "脱着"), id(c2, "qty", 0, "4本"))], c2, t2, ledger, [
     { seg: 0, text: "バランスは大丈夫です。" },
   ]);
-  assert.ok(!has(r2.confirmations, "line", "モデルの挙げた否定の文"), JSON.stringify(r2.confirmations));
+  assert.ok(!has(r2.confirmations, "line", "モデルの挙げた否定の文", 0), JSON.stringify(r2.confirmations));
+  // その文は行に付かない確認事項になる（例外なく確認事項）
+  assert.ok(has(r2.confirmations, "line", "否定の文の品目の行が無い", -1), JSON.stringify(r2.confirmations));
 });
 
-test("条件 15: モデルが行にせず否定の文に挙げた品目は「行が無い」にしない、否定の文の外の品目は今のまま", () => {
+test("条件 15・18（N2、0 件から 1 件に変更: 否定の文は例外なく確認事項にする）: 否定の文に挙げた品目は「行が無い」と重ねず、否定の 1 件だけ", () => {
   const t = seq("バランスは大丈夫です。");
   const cs = enumerateCandidates(t, ledger);
   const r = resolveInvoice([], cs, t, ledger, [{ seg: 0, text: "バランスは大丈夫です。" }]);
-  assert.deepEqual(r.confirmations, []);
-  // 一部だけ写しても文全体で除く
+  assert.deepEqual(r.confirmations.map((c) => [c.lineIndex, c.field, c.message]), [
+    [-1, "line", "「バランスは大丈夫です。」（モデルの挙げた否定の文の品目の行が無い）（否定）"],
+  ]);
+  // 一部だけ写しても文全体で見る
   const r1 = resolveInvoice([], cs, t, ledger, [{ seg: 0, text: "大丈夫です" }]);
-  assert.deepEqual(r1.confirmations, []);
+  assert.equal(r1.confirmations.length, 1, JSON.stringify(r1.confirmations));
+  assert.ok(has(r1.confirmations, "line", "（否定）", -1));
   // negations が無ければ今のまま「行が無い」
   const r2 = resolveInvoice([], cs, t, ledger, []);
   assert.ok(has(r2.confirmations, "item", "料金表の品目の語が出たのに行が無い", -1), JSON.stringify(r2.confirmations));
@@ -514,13 +530,14 @@ test("条件 18: negations の文が発話に無い・seg が範囲外なら lin
   }
 });
 
-test("条件 18: 否定の文の候補を使った行が無ければ、条件 18 の確認事項は出ない", () => {
+test("条件 18: 否定の文の候補を使った行が無ければ、その行には付けず、行に付かない確認事項にする", () => {
   const t = seq("組替はしません。脱着4本。");
   const cs = enumerateCandidates(t, ledger);
   const r = resolveInvoice([ref(id(cs, "item", 0, "脱着"), id(cs, "qty", 0, "4本"))], cs, t, ledger, [
     { seg: 0, text: "組替はしません。" },
   ]);
-  assert.ok(!r.confirmations.some((c) => c.message.includes("否定")), JSON.stringify(r.confirmations));
+  assert.ok(!r.confirmations.some((c) => c.lineIndex === 0 && c.message.includes("否定")), JSON.stringify(r.confirmations));
+  assert.ok(has(r.confirmations, "line", "否定の文の品目の行が無い", -1), JSON.stringify(r.confirmations));
   // 漢数字・全角の書き方の違いは正規化して比べる
   const t2 = seq("脱着四本は替えてない。");
   const c2 = enumerateCandidates(t2, ledger);

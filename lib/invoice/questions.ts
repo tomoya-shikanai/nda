@@ -4,7 +4,7 @@
  * 行（lineIndex 0 以上）は 1 行につき 1 問、行に付かない事項（lineIndex -1）は理由ごとに 1 問。
  * 同じ質問の確認事項は理由の種類にまとめ、優先度の最上位の理由で 1 文の質問を作る。数は候補の文字列だけを使う。
  */
-import { itemKey } from "../ledger/lookup";
+import { type LedgerEntry, findEntry, itemKey } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 import type { Candidate } from "./candidates";
 import type { Confirmation, PricedInvoice } from "./price";
@@ -66,7 +66,9 @@ function listed(vals: string[], build: (s: string) => string): string {
 type Result = Pick<PricedInvoice, "lines" | "confirmations">;
 type Line = Result["lines"][number];
 
-export function toQuestions(result: Result, candidates: Candidate[], t: Transcript): Question[] {
+export function toQuestions(result: Result, candidates: Candidate[], t: Transcript, ledger: LedgerEntry[]): Question[] {
+  /** 品目の比べ方。price.ts の二重の行と同じく、料金表の正式名にそろえる。 */
+  const itemName = (item: string) => itemKey(findEntry(ledger, item)?.item ?? item);
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const order = new Map(candidates.map((c, i) => [c.id, i]));
   /** 確認事項たちが指す候補（発話の順、重複なし）。 */
@@ -135,7 +137,7 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return line.ledger.unit ? `${name}は何${line.ledger.unit}ですか` : `${name}の単位は何ですか`;
       case "ledger":
         if (mine.some((c) => c.message.includes("二重"))) {
-          const n = result.lines.filter((l) => itemKey(l.item) === itemKey(line.item)).length;
+          const n = result.lines.filter((l) => itemName(l.item) === itemName(line.item)).length;
           return `${name}が${n}行あります。別の作業ですか`;
         }
         return `${name}は料金表のどの品目ですか`;
@@ -153,8 +155,14 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return items.length === 1
           ? `「${items[0]}」は何と言いましたか`
           : `聞き取れない数が${items.length}か所あります。何と言いましたか`;
-      case "negation":
-        return cs.length === 1 ? "何をやめましたか" : `やめる話が${cs.length}つあります。何をやめましたか`;
+      case "negation": {
+        // 品目の語がある否定の文は確かめの 1 問、品目の無い文は何をやめたかを聞く
+        const names = distinctTexts(rel.filter((c) => c.kind === "item"));
+        const bare = cs.filter((c) => !(c.candidates ?? []).some((id) => byId.get(id)?.kind === "item")).length;
+        const ask = bare === 1 ? "何をやめましたか" : `やめる話が${bare}つあります。何をやめましたか`;
+        if (names.length === 0) return ask;
+        return listed(names, (x) => (bare === 0 ? `${x}はやらないのですね` : `${x}はやらないのですね。ほかに${ask}`));
+      }
       case "unitPrice": {
         const vals = distinctTexts(rel);
         return listed(vals.length ? vals : items, (x) => `${x}はどの作業の値段ですか`);

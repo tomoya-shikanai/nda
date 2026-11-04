@@ -318,10 +318,10 @@ export function resolveInvoice(
     global(c.ledgerItem, "item", `「${c.text}」（${c.ledgerItem}）と言った（料金表の品目の語が出たのに行が無い）`, [c]);
   }
 
-  // 条件 18: モデルが挙げた否定・取り消し・断りの文は、必ずどこかの確認事項にする（1 つの文につき行ごとに 1 件）
+  // 条件 18: モデルが挙げた否定・取り消し・断りの文は、例外なく必ずどこかの確認事項にする（1 つの文につき行ごとに 1 件）
   // - 行が使った候補・品目の語か、同じ品目（正式名）の語が文に入る行 → その行
-  // - 文に品目の語があり、同じ品目の行が無い → 確認事項なし（モデルが正しく行を作らなかった。条件 15 の除外と同じ）
-  // - 文に品目の語が無い（「やっぱりやめます。」）→ 行に付かない確認事項
+  // - そのような行が無ければ、文の発話から 20 秒以内に evidence か参照の候補がある negated の行のうち最も近い行
+  // - それも無ければ行に付かない確認事項（文の品目の語を付ける。「バランスは大丈夫です。」で行が無い場合も聞く）
   for (const neg of negations) {
     const ranges = negRanges.filter((x) => x.neg === neg).map((x) => x.range);
     if (ranges.length === 0) continue; // 発話に無い文は上で確認事項にした
@@ -340,9 +340,7 @@ export function resolveInvoice(
         lineAdd(li, "line", `「${lines[li].item}」の行がモデルの挙げた否定の文「${neg.text}」に入る（否定）`, qty);
       }
     }
-    const hasItemWord = ranges.some((range) => candidates.some((c) => c.kind === "item" && inside(c, range)));
-    if (!any && !hasItemWord) {
-      // 品目の語が無い文は、文の発話から 20 秒以内に evidence か参照の候補がある negated の行のうち、最も近い行に付ける
+    if (!any) {
       let near = -1;
       let bestGap = Infinity;
       for (let li = 0; li < lines.length; li++) {
@@ -355,7 +353,9 @@ export function resolveInvoice(
         const qty = lineCands[near].filter((c) => c.kind === "qty");
         lineAdd(near, "line", `「${lines[near].item}」の行の近くにモデルの挙げた否定の文「${neg.text}」がある（否定）`, qty);
       } else {
-        global(neg.text, "line", `「${neg.text}」（モデルの挙げた否定の文に品目が無く、どの行のことか分からない）（否定）`);
+        const words = candidates.filter((c) => c.kind === "item" && ranges.some((range) => inside(c, range)));
+        const why = words.length ? "モデルの挙げた否定の文の品目の行が無い" : "モデルの挙げた否定の文に品目が無く、どの行のことか分からない";
+        global(neg.text, "line", `「${neg.text}」（${why}）（否定）`, words);
       }
     }
   }

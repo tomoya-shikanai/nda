@@ -220,14 +220,12 @@ test("条件 14: 税込みと税抜きの合計を両方言えば、税込みの
 });
 
 test("条件 20: 行が 0 件なら「請求する作業が 1 つもない」（-1・total）で total null、0 円の請求を通さない", () => {
-  // モデルが否定の文に挙げて行を作らなかった形（N2）
+  // モデルが否定の文に挙げて行を作らなかった形（N2）。否定の文の確認事項（条件 18）と並ぶ
   const t = seq("バランスは大丈夫です。");
   const cs = enumerateCandidates(t, ledger);
   const r = assembleInvoice({ candidates: cs, lines: [], negations: [{ seg: 0, text: "バランスは大丈夫です。" }] }, t, ledger);
-  assert.deepEqual(
-    r.confirmations.map((c) => [c.lineIndex, c.field, c.message]),
-    [[-1, "total", "請求する作業が 1 つもない（行が無い）"]],
-  );
+  assert.ok(has(r.confirmations, "total", "請求する作業が 1 つもない（行が無い）", -1), JSON.stringify(r.confirmations));
+  assert.ok(has(r.confirmations, "line", "（否定）", -1), JSON.stringify(r.confirmations));
   assert.equal(r.total, null);
   // lines:[] だけの形
   const t2 = seq("こんにちは。");
