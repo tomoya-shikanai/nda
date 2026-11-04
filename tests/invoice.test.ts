@@ -1,14 +1,12 @@
 /**
- * 請求の明細の検証。Claude は偽サーバーで置き換える。モデルの品質は検証しない。
+ * 請求の明細の旧後検証（verify.ts、V4 で消す）の検証。Claude は呼ばない。抽出の試験は tests/invoice-extract.test.ts。
  * 確かめるのは、明細の出所と単価を文字起こしと機械的に突き合わせる部分。
  * 素材は架空で、実案件・証明には使わない。
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
 import { join, resolve } from "node:path";
-import { after, before, test } from "node:test";
-import { extractInvoice } from "../lib/invoice/extract";
+import { test } from "node:test";
 import type { InvoiceDraft, InvoiceLine } from "../lib/invoice/schema";
 import { verifyInvoice } from "../lib/invoice/verify";
 import type { LedgerEntry } from "../lib/ledger/lookup";
@@ -69,89 +67,6 @@ const good: Record<string, InvoiceDraft> = {
     ],
   },
 };
-
-let server: Server;
-let received: Record<string, unknown>[] = [];
-let reply: unknown = null;
-
-before(async () => {
-  server = createServer((req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => {
-      received.push(JSON.parse(body));
-      res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify({
-          id: "msg",
-          type: "message",
-          role: "assistant",
-          model: "fake",
-          content: [{ type: "text", text: JSON.stringify(reply) }],
-          stop_reason: "end_turn",
-          stop_sequence: null,
-          usage: { input_tokens: 1, output_tokens: 1 },
-        }),
-      );
-    });
-  });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const addr = server.address();
-  if (addr === null || typeof addr === "string") throw new Error("no port");
-  // claude() は最初の呼び出しで環境変数を読むので、extractInvoice より前に設定する
-  process.env.ANTHROPIC_API_KEY = "test";
-  process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${addr.port}`;
-});
-after(() => server.close());
-
-test("抽出: 偽サーバーの明細が戻り値になり、要求に全発話と出力形式が入る", async () => {
-  for (const t of transcripts) {
-    received = [];
-    reply = good[t.recordingId];
-    const got = await extractInvoice(t, { itemNames: ["タイヤ脱着", "ホイールバランス"] });
-    assert.deepEqual(got, good[t.recordingId]);
-    assert.equal(received.length, 1);
-    const req = received[0];
-    const sent = JSON.stringify(req.messages);
-    assert.match(sent, new RegExp(`録音 ID: ${t.recordingId}`));
-    assert.match(sent, /タイヤ脱着/);
-    for (const s of t.segments) assert.ok(sent.includes(s.text), `発話が要求に無い: ${s.text}`);
-    const oc = req.output_config as { format?: { type?: string } } | undefined;
-    assert.ok(oc?.format, "output_config.format が無い");
-    assert.equal(oc.format.type, "json_schema");
-    assert.match(String(req.system), /推測で埋めない/);
-  }
-});
-
-test("抽出: 要求の system に、後検証の規則に合わせた書き方が入る", async () => {
-  received = [];
-  reply = good["tire-001"];
-  await extractInvoice(byId("tire-001"));
-  const system = String(received[0].system);
-  assert.match(system, /数＋単位/); // 数量は発話の数と単位をそのまま
-  assert.match(system, /unit.*発話の単位/); // 単位は発話の単位
-  assert.match(system, /1 単位あたりの金額/); // 単価は 1 単位あたりの形だけ
-  assert.match(system, /合計額/); // 合計額は単価にしない
-  assert.match(system, /料金表の値は単価に入れない/);
-  assert.match(system, /quote.*数量（数＋単位）を言った発話/);
-  assert.match(system, /1 つの発話の中/);
-  assert.match(system, /unknown/);
-  assert.match(system, /20 秒以内/);
-  assert.match(system, /言っていない作業・部品を明細にしない/);
-  assert.match(system, /標準語に直さない/);
-});
-
-test("抽出: 料金表が無ければ「なし」と伝える", async () => {
-  received = [];
-  reply = good["tire-001"];
-  await extractInvoice(byId("tire-001"));
-  assert.match(JSON.stringify(received[0].messages), /料金表の品目名: なし/);
-});
-
-test("抽出: 解釈できない出力は throw する", async () => {
-  reply = { lines: "壊れた" };
-  await assert.rejects(extractInvoice(byId("tire-001")));
-});
 
 test("後検証: 3 件とも文字起こしに合う明細は合格", () => {
   for (const t of transcripts) assert.deepEqual(verifyInvoice(good[t.recordingId], t, ledger), [], t.recordingId);

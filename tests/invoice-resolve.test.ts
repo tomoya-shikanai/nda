@@ -47,6 +47,10 @@ const ref = (item: LineRef["item"], qty: string | null, unitPrice: string | null
   qty,
   unitPrice,
   amount,
+  status: "done",
+  evidence: [],
+  correctedFrom: null,
+  correctedTo: null,
 });
 
 const run = (refs: LineRef[], t: Transcript, l: LedgerEntry[] = ledger) => {

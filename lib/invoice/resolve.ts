@@ -7,7 +7,7 @@ import { type LedgerEntry, findEntry } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 import { type Candidate, type CandidateKind, normalizeText } from "./candidates";
 import type { Confirmation } from "./price";
-import type { InvoiceLine, LineRef } from "./schema";
+import type { InvoiceLine, LineRef, NegatedSentence } from "./schema";
 
 /** 1 行の根拠の時間の幅の上限（秒）。 */
 export const MAX_LINE_SEC = 20;
@@ -20,6 +20,12 @@ export const NEGATION_CUES = [
   "しない", "いらない", "要らない", "なし", "無し", "まいね", "やらない",
   "不要", "いらね", "やらね", "しね", "やめ", "見送り", "わがね",
 ];
+
+/** 訂正の合図（条件 19）。この合図がある発話の数を使った行を、言い直しの疑いとして確かめる。語彙はここだけに置く。 */
+export const CORRECTION_CUES = ["いや", "やっぱり", "じゃなくて", "違う"];
+
+/** 条件 18・19 で見る、行が使った候補の種類。 */
+const NEGATION_SPAN_KINDS = new Set<CandidateKind>(["item", "qty", "unitPrice", "amount", "bareNumber"]);
 
 /** 文の区切り。発話の終わりも文の終わり。「、」では切らない。 */
 const SENTENCE_BREAK = /[。！？!?]/;
@@ -51,6 +57,7 @@ export function resolveInvoice(
   candidates: Candidate[],
   t: Transcript,
   ledger: LedgerEntry[],
+  negations: NegatedSentence[] = [],
 ): ResolvedInvoice {
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const normSegs = t.segments.map((s) => normalizeText(s.text));
@@ -75,6 +82,10 @@ export function resolveInvoice(
   const lines: InvoiceLine[] = [];
   /** 行ごとの、参照した発話の添字。 */
   const lineSegs: number[][] = [];
+  /** 行ごとの、使った候補（品目・数量・単価・金額と、言い直しの訂正前・訂正後）。条件 18・19 で見る。 */
+  const lineCands: Candidate[][] = [];
+  /** 行ごとの、`{seg,text}` の品目の語の位置。 */
+  const lineWords: (Span | null)[] = [];
 
   refs.forEach((ref, lineIndex) => {
     const segs = new Set<number>();
@@ -96,11 +107,13 @@ export function resolveInvoice(
     let itemSpan: Span | null = null;
     let itemWordKey: string | null = null;
     let itemWordMissing = false;
+    let itemCand: Candidate | null = null;
     if (typeof ref.item === "string") {
       const c = pick(ref.item, "item");
       if (c) {
         item = c.ledgerItem ?? c.text;
         itemSpan = c;
+        itemCand = c;
       }
     } else {
       const { seg, text } = ref.item;
@@ -116,6 +129,20 @@ export function resolveInvoice(
     const qty = pick(ref.qty, "qty");
     const unitPrice = pick(ref.unitPrice, "unitPrice");
     const amount = pick(ref.amount, "amount");
+    /** 判定の根拠の ID。値には使わないので、候補にあるかだけを見る。 */
+    const known = (id: string | null): Candidate | null => {
+      if (id === null) return null;
+      const c = byId.get(id);
+      if (!c) invalid = true;
+      return c ?? null;
+    };
+    for (const e of ref.evidence) known(e);
+    const correctedFrom = known(ref.correctedFrom);
+    const correctedTo = known(ref.correctedTo);
+    lineCands.push(
+      [itemCand, qty, unitPrice, amount, correctedFrom, correctedTo].filter((c): c is Candidate => c !== null),
+    );
+    lineWords.push(typeof ref.item === "string" ? null : itemSpan);
 
     const order = [...segs].sort((a, b) => a - b);
     lineSegs.push(order);
@@ -157,6 +184,15 @@ export function resolveInvoice(
     const shared =
       ids.some((id) => usedBy.has(id)) || (itemWordKey !== null && itemWordBy.has(itemWordKey));
     if (shared) add("line", `「${item}」の行が前の行と同じ発話の箇所を指している（同じ根拠）`);
+    // 条件 17: モデルが done 以外と判定した行
+    if (ref.status === "negated") add("line", `「${item}」の行をモデルが否定・取り消し・断りと判定した（否定）`);
+    if (ref.status === "corrected") {
+      const from = correctedFrom?.text ?? "不明";
+      const to = correctedTo?.text ?? "不明";
+      add("line", `「${item}」の行をモデルが言い直しと判定した（言い直し: ${from} → ${to}）`);
+    }
+    // unsure と、型の外の値（status が無い等）は安全側に倒して確かめる
+    if (ref.status !== "done" && ref.status !== "negated" && ref.status !== "corrected") add("line", `「${item}」の行をモデルが確かでないと判定した（確かでない）`);
     for (const id of ids) if (!usedBy.has(id)) usedBy.set(id, lineIndex);
     if (itemWordKey !== null && !itemWordBy.has(itemWordKey)) itemWordBy.set(itemWordKey, lineIndex);
   });
@@ -204,6 +240,51 @@ export function resolveInvoice(
     if (lineNames.has(c.ledgerItem) || reported.has(c.ledgerItem)) continue;
     reported.add(c.ledgerItem);
     global(c.ledgerItem, "item", `「${c.text}」（${c.ledgerItem}）と言った（料金表の品目の語が出たのに行が無い）`);
+  }
+
+  const inside = (sp: Span, r: Span) => sp.seg === r.seg && sp.start >= r.start && sp.end <= r.end;
+  const lineAdd = (lineIndex: number, field: Confirmation["field"], message: string) =>
+    confirmations.push({ lineIndex, item: lines[lineIndex].item, field, message });
+
+  // 条件 18: モデルが挙げた否定・取り消し・断りの文に、行が使った候補・品目の語が入る
+  for (const neg of negations) {
+    const needle = normalizeText(neg.text);
+    const inRange = Number.isInteger(neg.seg) && neg.seg >= 0 && neg.seg < normSegs.length;
+    const at = inRange && needle !== "" ? normSegs[neg.seg].indexOf(needle) : -1;
+    if (at < 0) {
+      global(neg.text, "line", `「${neg.text}」（否定の文が発話に無い）`);
+      continue;
+    }
+    const range: Span = { seg: neg.seg, start: at, end: at + needle.length };
+    for (let li = 0; li < lines.length; li++) {
+      const word = lineWords[li];
+      const hit =
+        lineCands[li].some((c) => NEGATION_SPAN_KINDS.has(c.kind) && inside(c, range)) ||
+        (word !== null && inside(word, range));
+      if (hit) lineAdd(li, "line", `「${lines[li].item}」の行がモデルの挙げた否定の文「${neg.text}」に入る（否定）`);
+    }
+  }
+
+  // 条件 19: 訂正の合図がある発話の数を使った行と、その近くの同じ単位の数量を使った別の行（発話をまたぐ訂正）
+  const correctionSegs = new Set(
+    normSegs.flatMap((n, i) => (CORRECTION_CUES.some((w) => n.includes(w)) ? [i] : [])),
+  );
+  for (let li = 0; li < lines.length; li++) {
+    const cued = lineCands[li].filter((c) => (c.kind === "qty" || c.kind === "bareNumber") && correctionSegs.has(c.seg));
+    const clash = cued.find((c) =>
+      lineCands.some(
+        (other, oi) =>
+          oi !== li &&
+          other.some((o) => o.kind === "qty" && o.unit === c.unit && gapSec(c.seg, o.seg) <= MAX_LINE_SEC),
+      ),
+    );
+    if (clash) {
+      lineAdd(
+        li,
+        "qty",
+        `「${lines[li].item}」の行の ${clash.text} は訂正の合図がある発話の数で、近くの別の行も同じ単位の数量を使っている（言い直し）`,
+      );
+    }
   }
 
   confirmations.sort((a, b) => a.lineIndex - b.lineIndex);
