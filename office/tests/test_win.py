@@ -29,10 +29,22 @@ class _ValuePattern:
         self.Value = value
 
 
+class _LegacyPattern:
+    def __init__(self, value, state):
+        self.Value = value
+        self._state = state
+
+    @property
+    def State(self):
+        if isinstance(self._state, Exception):
+            raise self._state
+        return self._state
+
+
 class _Control:
     """uiautomation の Control の偽物。GetValuePattern は持たない（Custom・Pane などと同じ）。"""
 
-    def __init__(self, control_type="CustomControl", value=None, is_password=False, legacy_value=None):
+    def __init__(self, control_type="CustomControl", value=None, is_password=False, legacy_value=None, legacy_state=0):
         self.Name = "単価"
         self.AutomationId = "edtPrice"
         self.ControlTypeName = control_type
@@ -41,12 +53,13 @@ class _Control:
         self.BoundingRectangle = _Rect(1, 2, 3, 4)
         self._value = value
         self._legacy_value = legacy_value
+        self._legacy_state = legacy_state
 
     def GetPattern(self, pattern_id):
         if pattern_id == _PatternId.ValuePattern and self._value is not None:
             return _ValuePattern(self._value)
         if pattern_id == _PatternId.LegacyIAccessiblePattern and self._legacy_value is not None:
-            return _ValuePattern(self._legacy_value)  # Value だけ使うので同じ形でよい
+            return _LegacyPattern(self._legacy_value, self._legacy_state)
         return None
 
 
@@ -149,6 +162,29 @@ class LegacyValueTest(unittest.TestCase):
         d = e.to_dict()
         self.assertEqual(d["value"], "***")
         self.assertNotIn("secret", str(d))
+
+    def test_PROTECTED_が立った_legacy_の値は伏せる(self):
+        e = self.win.element_of(_Control(legacy_value="secret", legacy_state=0x20000000 | 0x4))
+        self.assertTrue(e.is_password)
+        d = e.to_dict()
+        self.assertEqual(d["value"], "***")
+        self.assertNotIn("secret", str(d))
+
+    def test_PROTECTED_が立った欄は_dump_にも元の値を出さない(self):
+        e = self.win.element_of(_Control(legacy_value="secret", legacy_state=0x20000000))
+        # dump_tree は e.is_password が真なら "***" を書く（同じ element_of の結果を使う）
+        shown = "***" if e.is_password else repr(e.value[:80])
+        self.assertEqual(shown, "***")
+
+    def test_状態が読めない_legacy_の値は出さない(self):
+        for state in (None, RuntimeError("取れない")):
+            e = self.win.element_of(_Control(legacy_value="secret", legacy_state=state))
+            self.assertEqual((e.value, e.value_source), (None, None))
+            self.assertNotIn("secret", str(e.to_dict()))
+
+    def test_PROTECTED_が無ければ_legacy_の値を読む(self):
+        e = self.win.element_of(_Control(legacy_value="3300", legacy_state=0x4))
+        self.assertEqual((e.value, e.value_source, e.is_password), ("3300", "legacy", False))
 
 
 class FindTargetTest(unittest.TestCase):
