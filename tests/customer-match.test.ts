@@ -248,3 +248,69 @@ test("GET /api/session/current: 一覧があれば客の名前と車、無けれ
     else process.env.NDA_CUSTOMERS_PATH = prev;
   }
 });
+
+// --- Codex 指摘 1: 一覧に無い客の情報も伏せる ---
+
+test("Codex 指摘 1: 一覧に無い名前（さん・様・さま）と 4 桁（算用・全角・漢数字）も伏せる。一覧が空でも同じ。円の数は伏せない", () => {
+  for (const list of [customers, []]) {
+    const r = identifyCustomer(["山田さん、ナンバー9876。脱着4本。"], list);
+    assert.equal(r.customerId, null);
+    assert.deepEqual(r.texts, [`${MASK_NAME}さん、ナンバー${MASK_PLATE}。脱着4本。`]);
+    assert.deepEqual(identifyCustomer(["ヤマダ様の一一一一"], list).texts, [`${MASK_NAME}様の${MASK_PLATE}`]);
+    assert.deepEqual(identifyCustomer(["やまださま、９８７６"], list).texts, [`${MASK_NAME}さま、${MASK_PLATE}`]);
+    assert.deepEqual(identifyCustomer(["山田 太郎さん"], list).texts, [`${MASK_NAME}さん`], "姓と名の間の空白");
+    assert.deepEqual(identifyCustomer(["組替1650円、たくさん。お客さんの車"], list).texts, ["組替1650円、たくさん。お客さんの車"]);
+  }
+  // 漢数字の下 4 桁でも照合できる
+  assert.equal(identifyCustomer(["仮田さん、一一一一。"], customers).customerId, "cust-001");
+  // 敬称の前の一覧の名前は、一覧外の名前として数えない
+  assert.equal(identifyCustomer(["お客さんの見本さん、2222。"], customers).customerId, "cust-002");
+});
+
+test("Codex 指摘 1: 一覧に無い客の名前と 4 桁は、抽出にも保存にも画面にも残らず、4 桁は数量の候補にならない", async () => {
+  for (const list of [customers, []]) {
+    const { dir, s, seen } = await start(["山田さん、ナンバー9876。脱着4本。"], list);
+    const t = seen[0].segments[0].text;
+    assert.ok(!t.includes("山田") && !t.includes("9876"), t);
+    assert.deepEqual(
+      enumerateCandidates(seen[0], ledger)
+        .filter((c) => c.kind !== "item")
+        .map((c) => [c.kind, c.value]),
+      [["qty", 4]],
+    );
+    const saved = JSON.stringify(await readSession(dir, s.id));
+    assert.ok(!saved.includes("山田") && !saved.includes("9876"));
+    const heard = toMonitorView(s, list).heard ?? "";
+    assert.ok(!heard.includes("山田") && !heard.includes("9876"), heard);
+    assert.equal(s.customerId, null);
+    // 返事の言葉も伏せる
+    const r = await replySession({ dir, session: s, utterance: say("山田さん、9876"), ledger, now, customers: list });
+    assert.equal(r.customerId, null);
+    assert.ok(!JSON.stringify(r).includes("山田") && !JSON.stringify(r).includes("9876"));
+  }
+});
+
+// --- Codex 指摘 2: 否定された名前・一覧外の名前と並んだ名前で決めない ---
+
+test("Codex 指摘 2: 一覧の名前を含む文に否定・訂正の合図、または同じ発話に一覧外のさん付けの名前があれば決めない", async () => {
+  for (const t of [
+    "見本さんじゃなくて新規の山田さん、2222。",
+    "見本さんは違う。2222。",
+    "見本さんじゃなくて、2222。",
+    "見本さんと山田さん、2222。",
+  ]) {
+    const r = identifyCustomer([t], customers);
+    assert.equal(r.customerId, null, t);
+    assert.ok(!leaks(r.texts[0]) && !r.texts[0].includes("山田"), r.texts[0]);
+  }
+  // 合図が別の文なら決める
+  assert.equal(identifyCustomer(["それは違う。見本さんの2222。"], customers).customerId, "cust-002");
+
+  // 作業でも: 決まらず、客の質問（候補を出さない）
+  const { dir, s } = await start(["見本さんじゃなくて新規の山田さん、2222。脱着4本。"]);
+  assert.equal(s.customerId, null);
+  assert.equal(s.questions.at(-1)?.text, CUSTOMER_QUESTION);
+  const r = await reply(dir, s, "見本さんじゃなくて山田さん、2222");
+  assert.equal(r.customerId, null);
+  assert.equal(toMonitorView(r, customers).say, `もう一度お願いします。${CUSTOMER_QUESTION}`);
+});
