@@ -42,6 +42,12 @@ const SPEAKERS = new Set(["father", "customer", "son"]);
 
 type Span = { seg: number; start: number; end: number };
 
+/** 確認事項に、関係する候補の ID を付ける（聞き返しの文に値を入れるため）。無ければ付けない。 */
+function withCandidates(c: Confirmation, related: (Candidate | null)[]): Confirmation {
+  const ids = [...new Set(related.filter((x): x is Candidate => x !== null).map((x) => x.id))];
+  return ids.length ? { ...c, candidates: ids } : c;
+}
+
 export type ResolvedInvoice = {
   lines: InvoiceLine[];
   confirmations: Confirmation[];
@@ -181,8 +187,8 @@ export function resolveInvoice(
       },
     });
 
-    const add = (field: Confirmation["field"], message: string) =>
-      confirmations.push({ lineIndex, item, field, message });
+    const add = (field: Confirmation["field"], message: string, related: (Candidate | null)[] = []) =>
+      confirmations.push(withCandidates({ lineIndex, item, field, message }, related));
     if (invalid) add("line", `「${item}」の行に候補に無い・種類の違う参照がある（参照が不正）`);
     if (qty === null) add("qty", `「${item}」の数量が分からない`);
     if (qty !== null && qty.value !== null && qty.unit !== null && COUNT_UNITS.has(qty.unit) && !Number.isInteger(qty.value)) {
@@ -190,7 +196,7 @@ export function resolveInvoice(
     }
     if (itemWordMissing) add("item", `「${item}」は指した発話に無い（品目の語が発話に無い）`);
     if ([itemSpan, qty, unitPrice, amount].some((sp) => sp !== null && negated(sp))) {
-      add("line", `「${item}」の行の文に否定の合図がある（否定）`);
+      add("line", `「${item}」の行の文に否定の合図がある（否定）`, [qty]);
     }
     if (qty?.unit && unitPrice?.unit && qty.unit !== unitPrice.unit) {
       add("unit", `「${item}」の単位が数量（${qty.unit}）と単価（${unitPrice.unit}）で違う（単位が数量と単価で違う）`);
@@ -202,13 +208,13 @@ export function resolveInvoice(
       ids.some((id) => usedBy.has(id)) || (itemWordKey !== null && itemWordBy.has(itemWordKey));
     if (shared) add("line", `「${item}」の行が前の行と同じ発話の箇所を指している（同じ根拠）`);
     // 条件 17: モデルが done 以外と判定した行
-    if (ref.status === "negated") add("line", `「${item}」の行をモデルが否定・取り消し・断りと判定した（否定）`);
+    if (ref.status === "negated") add("line", `「${item}」の行をモデルが否定・取り消し・断りと判定した（否定）`, [qty]);
     // 言い直しの訂正前・訂正後を書いたら、status によらず確かめる（モデルが言い直しに気づいたのに done にした場合）
     if (ref.status === "corrected" || ref.correctedFrom !== null || ref.correctedTo !== null) {
       const from = correctedFrom?.text ?? "不明";
       const to = correctedTo?.text ?? "不明";
       const judged = ref.status === "corrected" ? "行をモデルが言い直しと判定した" : "行にモデルが言い直しの訂正前・訂正後を書いた";
-      add("line", `「${item}」の${judged}（言い直し: ${from} → ${to}）`);
+      add("line", `「${item}」の${judged}（言い直し: ${from} → ${to}）`, [correctedFrom, correctedTo]);
     }
     // unsure と、型の外の値（status が無い等）は安全側に倒して確かめる
     if (ref.status !== "done" && ref.status !== "negated" && ref.status !== "corrected") add("line", `「${item}」の行をモデルが確かでないと判定した（確かでない）`);
@@ -219,12 +225,12 @@ export function resolveInvoice(
   const unused = candidates
     .filter((c) => (NEAR_KINDS.has(c.kind) || c.kind === "unitPrice" || c.kind === "amount") && !usedBy.has(c.id))
     .map((c) => ({ ...c }));
-  const global = (item: string, field: Confirmation["field"], message: string) =>
-    confirmations.push({ lineIndex: -1, item, field, message });
+  const global = (item: string, field: Confirmation["field"], message: string, related: Candidate[] = []) =>
+    confirmations.push(withCandidates({ lineIndex: -1, item, field, message }, related));
 
   for (const c of unused) {
     if (c.kind === "unitPrice" || c.kind === "amount") {
-      global(c.text, "unitPrice", `「${c.text}」（言った金額がどの行にも使われていない）`);
+      global(c.text, "unitPrice", `「${c.text}」（言った金額がどの行にも使われていない）`, [c]);
     } else {
       // 条件 3: いずれかの行が参照した発話から 20 秒以内（前後の発話をまたいでよい）。最も近い行に付ける
       let lineIndex = -1;
@@ -242,18 +248,19 @@ export function resolveInvoice(
           item,
           field: "qty",
           message: `「${item}」の行の近く（${MAX_LINE_SEC} 秒以内）に、どの行にも使われていない ${c.text} がある（言い直し・使われない数）`,
+          candidates: [c.id],
         });
       }
     }
   }
   for (const c of candidates) {
-    if (c.kind === "unparsedYen") global(c.text, "unitPrice", `「${c.text}」（円の前の数が読めない）`);
-    if (c.kind === "unparsedNumber") global(c.text, "qty", `「${c.text}」（数が読めない）`);
+    if (c.kind === "unparsedYen") global(c.text, "unitPrice", `「${c.text}」（円の前の数が読めない）`, [c]);
+    if (c.kind === "unparsedNumber") global(c.text, "qty", `「${c.text}」（数が読めない）`, [c]);
   }
 
   const inside = (sp: Span, r: Span) => sp.seg === r.seg && sp.start >= r.start && sp.end <= r.end;
-  const lineAdd = (lineIndex: number, field: Confirmation["field"], message: string) =>
-    confirmations.push({ lineIndex, item: lines[lineIndex].item, field, message });
+  const lineAdd = (lineIndex: number, field: Confirmation["field"], message: string, related: Candidate[] = []) =>
+    confirmations.push(withCandidates({ lineIndex, item: lines[lineIndex].item, field, message }, related));
 
   // モデルが挙げた否定・取り消し・断りの文の範囲。指した発話の中の一致を全部探し、それぞれを文全体に広げる
   // （モデルが文の一部だけ写した「替えてない」も、同じ文が 2 回ある 2 回目も拾う）
@@ -278,7 +285,7 @@ export function resolveInvoice(
     if (negRanges.some(({ range }) => inside(c, range))) continue;
     if (lineNames.has(c.ledgerItem) || reported.has(c.ledgerItem)) continue;
     reported.add(c.ledgerItem);
-    global(c.ledgerItem, "item", `「${c.text}」（${c.ledgerItem}）と言った（料金表の品目の語が出たのに行が無い）`);
+    global(c.ledgerItem, "item", `「${c.text}」（${c.ledgerItem}）と言った（料金表の品目の語が出たのに行が無い）`, [c]);
   }
 
   // 条件 18: モデルが挙げた否定・取り消し・断りの文に、行が使った候補・品目の語が入る（1 つの文につき 1 件）
@@ -291,7 +298,10 @@ export function resolveInvoice(
           lineCands[li].some((c) => NEGATION_SPAN_KINDS.has(c.kind) && inside(c, range)) ||
           (word !== null && inside(word, range)),
       );
-      if (hit) lineAdd(li, "line", `「${lines[li].item}」の行がモデルの挙げた否定の文「${neg.text}」に入る（否定）`);
+      if (hit) {
+        const qty = lineCands[li].filter((c) => c.kind === "qty");
+        lineAdd(li, "line", `「${lines[li].item}」の行がモデルの挙げた否定の文「${neg.text}」に入る（否定）`, qty);
+      }
     }
   }
 
@@ -301,18 +311,22 @@ export function resolveInvoice(
   );
   for (let li = 0; li < lines.length; li++) {
     const cued = lineCands[li].filter((c) => (c.kind === "qty" || c.kind === "bareNumber") && correctionSegs.has(c.seg));
-    const clash = cued.find((c) =>
-      lineCands.some(
-        (other, oi) =>
-          oi !== li &&
-          other.some((o) => o.kind === "qty" && o.unit === c.unit && gapSec(c.seg, o.seg) <= MAX_LINE_SEC),
-      ),
-    );
+    let clash: [Candidate, Candidate] | null = null;
+    for (const c of cued) {
+      const partner = lineCands
+        .flatMap((other, oi) => (oi === li ? [] : other))
+        .find((o) => o.kind === "qty" && o.unit === c.unit && gapSec(c.seg, o.seg) <= MAX_LINE_SEC);
+      if (partner) {
+        clash = [c, partner];
+        break;
+      }
+    }
     if (clash) {
       lineAdd(
         li,
         "qty",
-        `「${lines[li].item}」の行の ${clash.text} は訂正の合図がある発話の数で、近くの別の行も同じ単位の数量を使っている（言い直し）`,
+        `「${lines[li].item}」の行の ${clash[0].text} は訂正の合図がある発話の数で、近くの別の行も同じ単位の数量を使っている（言い直し）`,
+        clash,
       );
     }
   }

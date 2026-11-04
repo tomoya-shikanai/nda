@@ -18,6 +18,8 @@ export type Confirmation = {
    */
   field: "unitPrice" | "qty" | "unit" | "item" | "line" | "total";
   message: string;
+  /** 関係する候補の ID（言い直しの訂正前・訂正後、使われない数、否定の行の数量など）。聞き返しの文に値を入れるのに使う。 */
+  candidates?: string[];
 };
 
 export type PricedInvoice = {

@@ -29,6 +29,7 @@ export function checkAmounts(priced: PricedInvoice, refs: LineRef[], candidates:
         item: line.item,
         field: "unitPrice",
         message: `「${line.item}」の ${c.text} は数量 ${line.qty} × 単価 ${line.unitPrice} 円 = ${product} 円と合わない（金額が合わない）`,
+        candidates: [c.id],
       });
     }
   });
@@ -48,6 +49,7 @@ export function checkAmounts(priced: PricedInvoice, refs: LineRef[], candidates:
         item: c.text,
         field: "total",
         message: `「${c.text}」（税率が決まっていないので、税込みの合計は照らせない）`,
+        candidates: [c.id],
       });
       continue;
     }
@@ -57,6 +59,7 @@ export function checkAmounts(priced: PricedInvoice, refs: LineRef[], candidates:
         item: c.text,
         field: "total",
         message: `「${c.text}」（言った合計と計算が違う: 計算は ${computed} 円）`,
+        candidates: [c.id],
       });
     }
   }
