@@ -31,7 +31,7 @@ const NEGATION_SPAN_KINDS = new Set<CandidateKind>(["item", "qty", "unitPrice", 
 export const CORRECTION_KINDS = new Set<CandidateKind>(["qty", "bareNumber", "unitPrice", "amount"]);
 
 /** 1 つずつ数える単位。この単位の数量が整数でなければ確認事項にする（「0.4本」）。セット・式などは見ない。 */
-const COUNT_UNITS = new Set(["本", "個", "台", "輪", "枚", "つ", "箇所", "か所", "ヶ所", "回"]);
+export const COUNT_UNITS = new Set(["本", "個", "台", "輪", "枚", "つ", "箇所", "か所", "ヶ所", "回"]);
 
 /** 文の区切り。発話の終わりも文の終わり。「、」では切らない。 */
 const SENTENCE_BREAK = /[。！？!?]/;
