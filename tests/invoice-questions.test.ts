@@ -169,11 +169,9 @@ test("④ 断り: 数量の無い否定の行は、数を入れずに「ゴム�
     };
   });
   assertShape(r, qs);
-  // 「バルブ」は料金表の語でない（品目の語が無い）ので、否定の文は行に付かない 1 問にもなる（条件 18 の (3)）
-  assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [
-    [2, "negation", "ゴムバルブは替えなかったのですか"],
-    [-1, "negation", "何をやめましたか"],
-  ]);
+  // 「バルブ」は料金表の語でない（品目の語が無い）が、20 秒以内の negated の行に付くので 1 問（条件 18 の (3)）
+  assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [[2, "negation", "ゴムバルブは替えなかったのですか"]]);
+  assert.ok(qs[0].confirmations.some((c) => c.message.includes("バルブは大丈夫です。")), JSON.stringify(qs[0].confirmations));
   assert.ok(qs[0].reasons.includes("qty"));
 });
 
@@ -257,6 +255,29 @@ test("品目の無い否定の文は「何をやめましたか」、2 つなら
   }));
   assertShape(two.r, two.qs);
   assert.deepEqual(two.qs.map((q) => q.text), ["やめる話が2つあります。何をやめましたか"]);
+});
+
+test("品目の無い否定の文: negated の行が 20 秒より遠ければ、行に付かない「何をやめましたか」のまま", () => {
+  const t: Transcript = {
+    ...seq(),
+    segments: [
+      { startSec: 0, endSec: 3, speaker: "father", text: "組替4本。" },
+      { startSec: 3, endSec: 6, speaker: "father", text: "ゴムバルブも替えるが？" },
+      { startSec: 40, endSec: 43, speaker: "father", text: "バルブは大丈夫です。" },
+    ],
+  };
+  const { r, qs } = run(t, (cs) => {
+    const i = id(cs, "item", 1, "ゴムバルブ");
+    return {
+      lines: [ref(id(cs, "item", 0, "組替"), id(cs, "qty", 0, "4本")), ref(i, null, { status: "negated", evidence: [i] })],
+      negations: [{ seg: 2, text: "バルブは大丈夫です。" }],
+    };
+  });
+  assertShape(r, qs);
+  assert.deepEqual(qs.map((q) => [q.lineIndex, q.reason, q.text]), [
+    [1, "negation", "ゴムバルブは替えなかったのですか"],
+    [-1, "negation", "何をやめましたか"],
+  ]);
 });
 
 test("値を黙って省かない: 使われない金額 3 つは全部、長ければ「など N つ」、二重の行は実際の行数、その他は件数", () => {

@@ -106,6 +106,8 @@ export function resolveInvoice(
   /** 行ごとの、品目の正式名（料金表で 1 つに決まる語はその正式名、無ければ語そのもの）と、指した品目の語（正規化後）。 */
   const lineKeys: string[] = [];
   const lineNeedles: string[] = [];
+  /** status が negated の行の、evidence と参照の候補の発話（negated でない行は空）。条件 18 の (3) で見る。 */
+  const negatedSegs: number[][] = [];
   /**
    * 品目の正式名が key の語（同じ正式名の item 候補と、料金表に無い品目の語 needle）が、
    * 範囲 r（無ければ、否定の合図のある文）に入るか。同じ品目の 2 回目の語の否定（「脱着4本。脱着はいらない。」）を拾う。
@@ -174,7 +176,7 @@ export function resolveInvoice(
       }
       return c;
     };
-    for (const e of ref.evidence) known(e);
+    const evidence = ref.evidence.map((e) => known(e));
     const correctedFrom = known(ref.correctedFrom, CORRECTION_KINDS);
     const correctedTo = known(ref.correctedTo, CORRECTION_KINDS);
     lineCands.push(
@@ -184,6 +186,11 @@ export function resolveInvoice(
     const key = itemCand ? (itemCand.ledgerItem ?? itemCand.text) : (findEntry(ledger, item)?.item ?? item);
     const needle = itemCand ? "" : normalizeText(item);
     lineKeys.push(key);
+    negatedSegs.push(
+      ref.status === "negated"
+        ? [...new Set([...segs, ...evidence.filter((c): c is Candidate => c !== null).map((c) => c.seg)])]
+        : [],
+    );
     lineNeedles.push(needle);
 
     const order = [...segs].sort((a, b) => a - b);
@@ -335,7 +342,21 @@ export function resolveInvoice(
     }
     const hasItemWord = ranges.some((range) => candidates.some((c) => c.kind === "item" && inside(c, range)));
     if (!any && !hasItemWord) {
-      global(neg.text, "line", `「${neg.text}」（モデルの挙げた否定の文に品目が無く、どの行のことか分からない）（否定）`);
+      // 品目の語が無い文は、文の発話から 20 秒以内に evidence か参照の候補がある negated の行のうち、最も近い行に付ける
+      let near = -1;
+      let bestGap = Infinity;
+      for (let li = 0; li < lines.length; li++) {
+        for (const sg of negatedSegs[li]) {
+          const gap = gapSec(neg.seg, sg);
+          if (gap <= MAX_LINE_SEC && gap < bestGap) [near, bestGap] = [li, gap];
+        }
+      }
+      if (near >= 0) {
+        const qty = lineCands[near].filter((c) => c.kind === "qty");
+        lineAdd(near, "line", `「${lines[near].item}」の行の近くにモデルの挙げた否定の文「${neg.text}」がある（否定）`, qty);
+      } else {
+        global(neg.text, "line", `「${neg.text}」（モデルの挙げた否定の文に品目が無く、どの行のことか分からない）（否定）`);
+      }
     }
   }
 
