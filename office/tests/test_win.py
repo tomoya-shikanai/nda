@@ -419,5 +419,85 @@ class ClickTest(unittest.TestCase):
         self.assertEqual((c.x, c.y, c.button), (5, 6, "left"))
 
 
+class MultiProcessTest(unittest.TestCase):
+    """RacroS III は画面ごとに実行ファイルが分かれる。対象の名前のどのプロセスの窓・クリックも残し、他のアプリは捨てる。"""
+
+    SCREEN = 43  # 対象の別の画面（例: M_NOU.exe）
+
+    def setUp(self):
+        from recorder.config import Config
+
+        self.win = _import_win(self)
+        self.reader = self.win.Reader(Config(target_exe=["RS_MENU.exe", "M_NOU.exe"]))
+        self.reader.proc = _TargetProcess(PID, name="RS_MENU.exe")
+        names = {PID: "RS_MENU.exe", self.SCREEN: "M_NOU.exe", OTHER: "chrome.exe"}
+
+        class _P:
+            def __init__(self, pid):
+                if pid not in names:
+                    raise ProcessLookupError(pid)
+                self.pid = pid
+
+            def name(self):
+                return names[self.pid]
+
+        sys.modules["psutil"].Process = _P
+        self.auto = sys.modules["uiautomation"]
+        self.auto.GetFocusedControl = lambda: None
+
+    def _front(self, pid):
+        w = _Window(pid, "整備伝票", handle=300)
+        self.auto.GetForegroundControl = lambda: w
+
+    def test_別の画面のプロセスの窓も残し_実行ファイル名を付ける(self):
+        self._front(self.SCREEN)
+        s = self.reader.snapshot()
+        self.assertEqual(s.target_pid, PID)  # 記録の区切りは変わらない
+        self.assertEqual((s.window.pid, s.window.exe), (self.SCREEN, "M_NOU.exe"))
+        self.assertEqual(s.window.to_dict()["exe"], "M_NOU.exe")
+
+    def test_他のアプリの窓は残さない(self):
+        self._front(OTHER)
+        self.assertIsNone(self.reader.snapshot().window)
+
+    def test_読めないプロセスの窓は残さない(self):
+        self._front(7)
+        self.assertIsNone(self.reader.snapshot().window)
+
+    def test_別の画面のプロセスのクリックも残す(self):
+        self.auto.GetForegroundControl = lambda: None
+        btn = _Control(control_type="ButtonControl")
+        btn.ProcessId = self.SCREEN
+        self.auto.ControlFromPoint = lambda x, y: btn
+        self.win.pid_at = lambda x, y: self.SCREEN
+        self.reader._on_click(5, 6, "Button.left", True)
+        self.assertEqual(len(self.reader.snapshot().clicks), 1)
+
+    def test_クリックの瞬間と後で調べた部品のプロセスが違えば捨てる(self):
+        self.auto.GetForegroundControl = lambda: None
+        btn = _Control(control_type="ButtonControl")
+        btn.ProcessId = PID
+        self.auto.ControlFromPoint = lambda x, y: btn
+        self.win.pid_at = lambda x, y: self.SCREEN
+        self.reader._on_click(5, 6, "Button.left", True)
+        self.assertEqual(self.reader.snapshot().clicks, [])
+
+    def test_別の画面の窓は_その窓のプロセスで撮る(self):
+        from recorder.core import Window
+
+        grabs = []
+        self.win.grab_front = lambda hwnd, pid, path, q: grabs.append((hwnd, pid)) or True
+        w = Window(handle=300, title="整備伝票", class_name="X", rect=(0, 0, 1, 1), pid=self.SCREEN, exe="M_NOU.exe")
+        self.assertTrue(self.reader.screenshot(w, Path("x.jpg")))
+        self.assertEqual(grabs, [(300, self.SCREEN)])
+
+    def test_対象でないプロセスの窓は撮らない(self):
+        from recorder.core import Window
+
+        self.win.grab_front = lambda *a: self.fail("撮ってはいけない")
+        w = Window(handle=300, title="x", class_name="X", rect=(0, 0, 1, 1), pid=OTHER)
+        self.assertFalse(self.reader.screenshot(w, Path("x.jpg")))
+
+
 if __name__ == "__main__":
     unittest.main()

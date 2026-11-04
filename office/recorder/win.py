@@ -221,6 +221,18 @@ def find_target(cfg: Config) -> psutil.Process | None:
     return None
 
 
+def _foreground_target(cfg: Config) -> psutil.Process | None:
+    """前面の窓のプロセスが対象なら返す（dump で、開いている画面のプロセスを選ぶため）。"""
+    try:
+        pid = pid_of_window(foreground_window())
+        if pid is None:
+            return None
+        p = psutil.Process(pid)
+        return p if is_target(p.name(), cfg) else None
+    except Exception:
+        return None
+
+
 class Reader:
     """画面の様子を 1 回分ずつ取る。"""
 
@@ -230,8 +242,12 @@ class Reader:
         self.listener = mouse.Listener(on_click=self._on_click)
         self.listener.start()
         self.last_find = 0.0
+        # 記録の区切りに使う対象のプロセス（どれか 1 つ）。RacroS III は画面ごとに別のプロセスなので、
+        # 窓・クリックは「対象の実行ファイル名のどのプロセスか」で判定する（_is_target_pid）。
         self.proc: psutil.Process | None = None
         self.proc_path = ""
+        self.pid_names: dict[int, str] = {}  # pid → 実行ファイル名（対象でなければ ""）。2 秒ごとに作り直す
+        self.last_scan = 0.0
 
     def _on_click(self, x, y, button, pressed) -> None:
         # pynput の別スレッドで呼ばれる。ここでは UIA を触らない。
@@ -250,6 +266,24 @@ class Reader:
         self.proc_path = exe_path(self.proc) if self.proc is not None else ""
         return self.proc
 
+    def _target_name(self, pid: int | None) -> str:
+        """pid が対象の実行ファイル名のプロセスなら、その名前を返す。違う・分からなければ ""。"""
+        if pid is None:
+            return ""
+        if self.proc is not None and pid == self.proc.pid:
+            return self.proc.name()
+        now = time.time()
+        if now - self.last_scan >= 2.0:  # pid の使い回しに備えて、覚えた結果は 2 秒で捨てる
+            self.last_scan = now
+            self.pid_names = {}
+        if pid not in self.pid_names:
+            try:
+                name = psutil.Process(pid).name()
+            except Exception:  # 読めないプロセスは対象にしない
+                name = ""
+            self.pid_names[pid] = name if is_target(name, self.cfg) else ""
+        return self.pid_names[pid]
+
     def snapshot(self) -> Snapshot:
         proc = self._target()
         clicks_raw = []
@@ -261,32 +295,35 @@ class Reader:
         s = Snapshot(target_pid=pid, target_exe=proc.name(), target_path=self.proc_path)
 
         fg = auto.GetForegroundControl()
-        if fg is not None and fg.ProcessId == pid:
+        fg_pid = fg.ProcessId if fg is not None else None
+        fg_name = self._target_name(fg_pid)
+        if fg is not None and fg_name:
             r = _rect(fg.BoundingRectangle)
             if r is not None:
-                s.window = Window(handle=fg.NativeWindowHandle, title=fg.Name or "", class_name=fg.ClassName or "", rect=r)
+                s.window = Window(handle=fg.NativeWindowHandle, title=fg.Name or "", class_name=fg.ClassName or "", rect=r, pid=fg_pid, exe=fg_name)
             focus = auto.GetFocusedControl()
-            if focus is not None and focus.ProcessId == pid:
+            if focus is not None and focus.ProcessId == fg_pid:
                 s.focus = element_of(focus)
 
         for x, y, button, at, click_pid in clicks_raw:
             # クリックの瞬間に対象のソフトの窓でなければ捨てる（分からなければ捨てる）
-            if click_pid != pid:
+            if not self._target_name(click_pid):
                 continue
             try:
                 c = auto.ControlFromPoint(x, y)
             except Exception:
                 c = None
-            # 対象のソフトの上のクリックだけを残す
-            if c is not None and c.ProcessId == pid:
+            # 対象のソフトの上のクリックだけを残す（クリックの瞬間と同じプロセスの部品）
+            if c is not None and c.ProcessId == click_pid:
                 s.clicks.append(Click(x=x, y=y, button=button, element=element_of(c), at=at))
         return s
 
     def screenshot(self, window: Window, path: Path) -> bool:
         """前面の窓が対象のソフトのこの窓のときだけ撮る。違えば撮らない。"""
-        if self.proc is None:
+        pid = window.pid or (self.proc.pid if self.proc is not None else 0)
+        if not pid or not self._target_name(pid):
             return False
-        return grab_front(window.handle, self.proc.pid, path, self.cfg.jpeg_quality)
+        return grab_front(window.handle, pid, path, self.cfg.jpeg_quality)
 
     def stop(self) -> None:
         self.listener.stop()
@@ -295,7 +332,7 @@ class Reader:
 def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
     """対象のソフトの窓の部品ツリーを書き出す。読むだけ。
     スクリーンショットは、前面にある対象のソフトの窓だけを撮る（他のアプリが前面なら撮らない）。"""
-    proc = find_target(cfg)
+    proc = _foreground_target(cfg) or find_target(cfg)
     if proc is None:
         return None
     windows = [w for w in auto.GetRootControl().GetChildren() if w.ProcessId == proc.pid]

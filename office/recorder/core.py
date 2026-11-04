@@ -58,9 +58,15 @@ class Window:
     title: str
     class_name: str
     rect: tuple[int, int, int, int]
+    # 窓を持つプロセス。RacroS III は画面ごとに実行ファイルが分かれるので、窓ごとに持つ（0・空は不明）
+    pid: int = 0
+    exe: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {"handle": self.handle, "title": self.title, "class_name": self.class_name, "rect": list(self.rect)}
+        d: dict[str, Any] = {"handle": self.handle, "title": self.title, "class_name": self.class_name, "rect": list(self.rect)}
+        if self.exe:
+            d["exe"] = self.exe
+        return d
 
 
 @dataclass(frozen=True)
