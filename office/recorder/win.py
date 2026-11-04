@@ -43,7 +43,20 @@ STATE_SYSTEM_PROTECTED = 0x20000000  # MSAA の状態。VB6 のパスワード�
 
 def _read_value(c) -> tuple[str | None, str | None, bool]:
     """値と、どちらから読んだか（"value" | "legacy"）と、MSAA で保護された欄か。
-    ValuePattern が無いか値が取れないときだけ legacy を読む。legacy は状態が読めなければ値を捨てる。"""
+    LegacyIAccessiblePattern があれば、どちらから値を読む場合も先にその状態を確かめる。
+    状態が読めない（例外・None）部品は安全側に倒し、どちらの値も返さない。"""
+    lp = None
+    protected = False
+    try:
+        # VB6 の部品は ValuePattern を持たず、MSAA（LegacyIAccessiblePattern）だけを持つことがある。
+        lp = c.GetPattern(auto.PatternId.LegacyIAccessiblePattern)
+        if lp is not None:
+            state = lp.State
+            if state is None:
+                return None, None, False
+            protected = bool(state & STATE_SYSTEM_PROTECTED)
+    except Exception:
+        return None, None, False
     try:
         # GetValuePattern() は Edit・ComboBox など一部の部品クラスにしか無い。
         # GetPattern が返すパターンをそのまま使えば、Custom・Pane などの部品でも値が取れる。
@@ -51,19 +64,14 @@ def _read_value(c) -> tuple[str | None, str | None, bool]:
         if vp is not None:
             v = vp.Value
             if v is not None:
-                return v, "value", False
+                return v, "value", protected
     except Exception:
         pass
     try:
-        # VB6 の部品は ValuePattern を持たず、MSAA（LegacyIAccessiblePattern）だけを持つことがある。
-        lp = c.GetPattern(auto.PatternId.LegacyIAccessiblePattern)
         if lp is not None:
-            # 状態が読めない（例外・None）ときは安全側に倒し、値を記録しない。
-            state = lp.State
-            if state is not None:
-                v = lp.Value
-                if v is not None:
-                    return v, "legacy", bool(state & STATE_SYSTEM_PROTECTED)
+            v = lp.Value
+            if v is not None:
+                return v, "legacy", protected
     except Exception:
         pass
     return None, None, False

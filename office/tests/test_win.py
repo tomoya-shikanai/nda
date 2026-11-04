@@ -186,6 +186,25 @@ class LegacyValueTest(unittest.TestCase):
         e = self.win.element_of(_Control(legacy_value="3300", legacy_state=0x4))
         self.assertEqual((e.value, e.value_source, e.is_password), ("3300", "legacy", False))
 
+    def test_ValuePattern_で値が取れる欄でも_legacy_の_PROTECTED_で伏せる(self):
+        e = self.win.element_of(_Control(value="secret", legacy_value="secret", legacy_state=0x20000000))
+        self.assertTrue(e.is_password)
+        d = e.to_dict()
+        self.assertEqual(d["value"], "***")
+        self.assertNotIn("secret", str(d))
+
+    def test_ValuePattern_で値が取れても_legacy_の状態が読めなければ値を出さない(self):
+        for state in (None, RuntimeError("取れない")):
+            e = self.win.element_of(_Control(value="secret", legacy_value="x", legacy_state=state))
+            self.assertEqual((e.value, e.value_source), (None, None))
+            self.assertNotIn("secret", str(e.to_dict()))
+
+    def test_legacy_が無い欄は_IsPassword_だけで判定する(self):
+        e = self.win.element_of(_Control(value="2200"))
+        self.assertEqual((e.value, e.value_source, e.is_password), ("2200", "value", False))
+        e = self.win.element_of(_Control(value="secret", is_password=True))
+        self.assertEqual(e.to_dict()["value"], "***")
+
 
 class FindTargetTest(unittest.TestCase):
     def setUp(self):
