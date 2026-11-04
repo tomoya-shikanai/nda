@@ -81,7 +81,7 @@ test("既定: speaker は ZUNDAMON_NORMAL(3)、VOICEVOX_URL が無ければ 127.
   else process.env.VOICEVOX_URL = prev;
 });
 
-test("(1) audio_query に日本語の text と speaker 3、synthesis に応答 JSON が speedScale だけ 1.5 に変わって届き、WAV のバイト列が返る", async () => {
+test("(1) audio_query に日本語の text と speaker 3、synthesis に応答 JSON が speedScale だけ 1.25 に変わって届き、WAV のバイト列が返る", async () => {
   const { url, seen } = await fakeVoicevox();
   const text = "タイヤ脱着、4本で合ってるのだ？";
   const wav = await synthesize(text, { baseUrl: url });
@@ -96,7 +96,7 @@ test("(1) audio_query に日本語の text と speaker 3、synthesis に応答 J
   assert.equal(s.path, "/synthesis");
   assert.equal(s.params.get("speaker"), "3");
   assert.match(s.contentType ?? "", /^application\/json/);
-  assert.deepEqual(JSON.parse(s.body), { ...FAKE_QUERY, speedScale: 1.5 });
+  assert.deepEqual(JSON.parse(s.body), { ...FAKE_QUERY, speedScale: 1.25 });
 });
 
 /** 試験の中だけ NDA_TTS_SPEED を変える。 */
@@ -112,9 +112,9 @@ async function withSpeedEnv<T>(v: string | undefined, f: () => Promise<T> | T): 
   }
 }
 
-test("(1b) 話速: 既定 1.5、NDA_TTS_SPEED で上書き、opts.speed が最優先。数でない・範囲の外は呼ばずに throw", async () => {
-  assert.equal(DEFAULT_TTS_SPEED, 1.5);
-  await withSpeedEnv(undefined, () => assert.equal(ttsSpeed(), 1.5));
+test("(1b) 話速: 既定 1.25、NDA_TTS_SPEED で上書き、opts.speed が最優先。数でない・範囲の外は呼ばずに throw", async () => {
+  assert.equal(DEFAULT_TTS_SPEED, 1.25);
+  await withSpeedEnv(undefined, () => assert.equal(ttsSpeed(), 1.25));
   await withSpeedEnv("1.2", async () => {
     assert.equal(ttsSpeed(), 1.2);
     const { url, seen } = await fakeVoicevox();

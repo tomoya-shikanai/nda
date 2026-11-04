@@ -13,7 +13,7 @@ export const ZUNDAMON_NORMAL = 3;
 const DEFAULT_URL = "http://127.0.0.1:50021";
 
 /** 話速の既定（1.0 が VOICEVOX の標準）。現場で待たせないよう速める。NDA_TTS_SPEED で上書きできる。 */
-export const DEFAULT_TTS_SPEED = 1.5;
+export const DEFAULT_TTS_SPEED = 1.25;
 /** VOICEVOX の speedScale が受ける範囲。 */
 const SPEED_MIN = 0.5;
 const SPEED_MAX = 2;
