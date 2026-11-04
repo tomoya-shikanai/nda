@@ -12,6 +12,13 @@ Built with Claude: Japan 2026 の提出作品「んだ (nDa)」。父（整備�
 - **期間前の素材**は README「出所」に明記する。仮素材（本人の再話）は証明に使わず、提出前に削除する。
 - `progress.md` に日付つきで、やったこと・捨てたこと・数字を 1 行ずつ残す。
 
+## 記録の置き場
+作業を始める前に、関係する所を読む。サブエージェントの調査結果は、メインが確かめてから書く。
+- 決めたことと未決の議題: `docs/decisions.md`（主軸は 2026-11-04 に変更。README・バックログより新しい）
+- 調べて分かった事実: `docs/research.md`（出典と確度つき）
+- 間違いと対策: `tasks/lessons.md`
+- 工場の Pi: `docs/pi-setup.md`
+
 ## 技術
 - Next.js（工場の PC でローカル起動、審査員向けは同じコードを hosted）。DB は libSQL（ローカルはファイル）。
 - Claude: Messages API Tool Runner（betaZodTool）＋ structured outputs ＋ vision。分離と一問は `claude-opus-5-5`、補助は `claude-haiku-5-5`。
