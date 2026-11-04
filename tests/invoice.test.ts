@@ -11,12 +11,17 @@ import { after, before, test } from "node:test";
 import { extractInvoice } from "../lib/invoice/extract";
 import type { InvoiceDraft, InvoiceLine } from "../lib/invoice/schema";
 import { verifyInvoice } from "../lib/invoice/verify";
+import type { LedgerEntry } from "../lib/ledger/lookup";
 import type { Transcript } from "../lib/stt/types";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const transcripts = JSON.parse(
   readFileSync(join(ROOT, "tests/fixtures/tire-transcripts.json"), "utf8"),
 ) as Transcript[];
+// 品目は料金表の正式名で書くので、別名（発話の言い方）を引くために料金表を渡す
+const ledger = JSON.parse(
+  readFileSync(join(ROOT, "tests/fixtures/tire-ledger.json"), "utf8"),
+) as LedgerEntry[];
 const byId = (id: string) => {
   const t = transcripts.find((x) => x.recordingId === id);
   if (!t) throw new Error(`素材に無い: ${id}`);
@@ -131,7 +136,7 @@ test("抽出: 解釈できない出力は throw する", async () => {
 });
 
 test("後検証: 3 件とも文字起こしに合う明細は合格", () => {
-  for (const t of transcripts) assert.deepEqual(verifyInvoice(good[t.recordingId], t), [], t.recordingId);
+  for (const t of transcripts) assert.deepEqual(verifyInvoice(good[t.recordingId], t, ledger), [], t.recordingId);
   const valve = good["tire-002"].lines.find((l) => l.item === "エアバルブ交換");
   assert.equal(valve?.unitPrice, 330);
 });
@@ -139,31 +144,31 @@ test("後検証: 3 件とも文字起こしに合う明細は合格", () => {
 test("後検証: 文字起こしに無い引用は不合格", () => {
   const bad = structuredClone(good["tire-001"]);
   bad.lines[0].provenance.quote = "アライメントも取る";
-  assert.match(verifyInvoice(bad, byId("tire-001")).join(), /文字起こしに無い/);
+  assert.match(verifyInvoice(bad, byId("tire-001"), ledger).join(), /文字起こしに無い/);
 });
 
 test("後検証: 時刻が離れた引用は不合格", () => {
   const bad = structuredClone(good["tire-002"]);
   bad.lines[3].provenance = { ...bad.lines[3].provenance, startSec: 0, endSec: 3 };
-  assert.match(verifyInvoice(bad, byId("tire-002")).join(), /文字起こしに無い/);
+  assert.match(verifyInvoice(bad, byId("tire-002"), ledger).join(), /文字起こしに無い/);
 });
 
 test("後検証: 録音 ID が違う引用は不合格", () => {
   const bad = structuredClone(good["tire-001"]);
   bad.lines[0].provenance.recordingId = "tire-002";
-  assert.match(verifyInvoice(bad, byId("tire-001")).join(), /録音 ID が違う/);
+  assert.match(verifyInvoice(bad, byId("tire-001"), ledger).join(), /録音 ID が違う/);
 });
 
 test("後検証: 時刻範囲が逆の引用は不合格", () => {
   const bad = structuredClone(good["tire-001"]);
   bad.lines[0].provenance = { ...bad.lines[0].provenance, startSec: 5, endSec: 0 };
-  assert.match(verifyInvoice(bad, byId("tire-001")).join(), /時刻範囲が不正/);
+  assert.match(verifyInvoice(bad, byId("tire-001"), ledger).join(), /時刻範囲が不正/);
 });
 
 test("後検証: 話者情報の無い tire-003 で話者を father にすると不合格", () => {
   const bad = structuredClone(good["tire-003"]);
   bad.lines[0].provenance.speaker = "father";
-  assert.match(verifyInvoice(bad, byId("tire-003")).join(), /話者を father と推定/);
+  assert.match(verifyInvoice(bad, byId("tire-003"), ledger).join(), /話者を father と推定/);
 });
 
 test("推測で埋めない: 発話に金額が無い行に単価を入れると不合格、null なら合格", () => {
@@ -172,16 +177,16 @@ test("推測で埋めない: 発話に金額が無い行に単価を入れると
   const nut = bad.lines.find((l) => l.item === "ホイールナット");
   assert.ok(nut);
   nut.unitPrice = 220;
-  const failures = verifyInvoice(bad, t);
+  const failures = verifyInvoice(bad, t, ledger);
   assert.equal(failures.length, 1);
   assert.match(failures[0], /単価が発話に無い/);
 
   nut.unitPrice = null;
-  assert.deepEqual(verifyInvoice(bad, t), []);
+  assert.deepEqual(verifyInvoice(bad, t, ledger), []);
 });
 
 test("推測で埋めない: 料金表の値を単価に写しても、発話に無ければ不合格", () => {
   const bad = structuredClone(good["tire-002"]);
   bad.lines[0].unitPrice = 1650; // 料金表のタイヤ組替の値。発話には無い
-  assert.match(verifyInvoice(bad, byId("tire-002")).join(), /単価が発話に無い/);
+  assert.match(verifyInvoice(bad, byId("tire-002"), ledger).join(), /単価が発話に無い/);
 });

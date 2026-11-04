@@ -1,6 +1,8 @@
 /**
- * 明細を料金表で照らす部分の検証。Claude は呼ばない。
+ * 明細を料金表で照らす部分（priceInvoice 単体）の検証。Claude は呼ばない。
  * 明細は架空の文字起こし（tire-transcripts.json）に合わせて手で書いた。素材は架空で、証明には使わない。
+ * priceInvoice は発話と突き合わせない。「作り物の発話」と注記した試験の引用は fixture に無く、
+ * 料金表の規則だけを見る。発話に裏付けられた値だけを使うことは tests/invoice-build.test.ts で見る。
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -24,12 +26,13 @@ const line = (
   startSec: number,
   endSec: number,
   quote: string,
+  speaker: InvoiceLine["provenance"]["speaker"] = "father",
 ): InvoiceLine => ({
   item,
   qty,
   unit,
   unitPrice,
-  provenance: { recordingId, startSec, endSec, speaker: "father", quote },
+  provenance: { recordingId, startSec, endSec, speaker, quote },
 });
 
 const tire002 = (): InvoiceDraft => ({
@@ -43,8 +46,9 @@ const tire002 = (): InvoiceDraft => ({
 
 const tire003 = (): InvoiceDraft => ({
   lines: [
-    line("tire-003", "脱着", 4, "本", null, 0, 5, "脱着4本"),
-    line("tire-003", "ホイールナット", 2, "個", null, 5, 10, "ホイールナットも2個替える"),
+    // tire-003 は話者情報の無い録音なので unknown
+    line("tire-003", "脱着", 4, "本", null, 0, 5, "脱着4本", "unknown"),
+    line("tire-003", "ホイールナット", 2, "個", null, 5, 10, "ホイールナットも2個替える", "unknown"),
   ],
 });
 
@@ -101,6 +105,7 @@ test("数量が null の行は qty の確認事項になり、合計を出さな
 });
 
 test("発話の単価が料金表と違う行は単価を null にして確認事項にする", () => {
+  // 作り物の発話: tire-002 の実際の発話は「1本330円」。料金表と食い違う場合の規則だけを見る
   const d: InvoiceDraft = {
     lines: [line("tire-002", "ゴムバルブ", 4, "本", 300, 10, 13, "ゴムバルブは1本300円")],
   };
@@ -115,8 +120,10 @@ test("発話の単価が料金表と違う行は単価を null にして確認�
 });
 
 test("料金表に無くても発話に単価があればそれを使う", () => {
+  // 作り物の発話: tire-003 の実際の発話は「ナットの値段は後で調べる。」で、200円とは言っていない。
+  // 発話との突き合わせを通すとこの行は確認事項になる（invoice-build.test.ts の指摘 9）
   const d: InvoiceDraft = {
-    lines: [line("tire-003", "ホイールナット", 2, "個", 200, 5, 10, "ナット1個200円")],
+    lines: [line("tire-003", "ホイールナット", 2, "個", 200, 5, 10, "ナット1個200円", "unknown")],
   };
   const r = priceInvoice(d, ledger);
   assert.equal(r.lines[0].ledger.found, false);
