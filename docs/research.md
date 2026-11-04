@@ -54,4 +54,14 @@
 
 | 日付 | 分かったこと | 確度 | 影響 | 出典 |
 |---|---|---|---|---|
-| 2026-11-03 | GATCH と「はい！整備」は Windows 版、Maintenance.c と Car Store System Cloud はブラウザで動く、とされる | 未確認（調査役の報告） | 父の店のソフトは Windows のアプリの見込み。製品名を確かめる | — |
+| 2026-11-04 | 「はい！整備」は Windows のアプリ（FAQ に「Windows10、8.1、7、Vista で動作」）。「クラウド形式のインターネットを使用したシステムでは無い為、現在、インターネットを経由した接続はできません」。CSV・外部連携・API の記載は無く、帳票や機能の追加は有償のカスタマイズ | 確認済（公式 FAQ の原文） | もし店のソフトなら、画面の操作が本命。データは店内（共有フォルダの見込み、未確認） | [はい！整備 FAQ](https://www.isi-grp.co.jp/hi-seibi/faq/) |
+| 2026-11-04 | GATCH には 2 か月の無料体験版がある（メール・会社名・電話・住所を入れて体験 ID をもらう）。体験版は共有のクラウドサーバーを使い、外向きの 1433 番ポートが要る。体験版のデータは全利用者で共有されるので、個人情報を入れてはいけない | 確認済（公式の体験版ページの原文） | もし店のソフトなら、手元の Windows で作り込める。架空のデータだけを入れる | [GATCH 体験版](http://gatch.softplanner.co.jp/download) |
+| 2026-11-04 | 両製品とも、請求明細を CSV で取り込む機能や API は、公開資料に見当たらない | 未確認（記載が無いだけ） | 画面の操作を前提にする。店の版で CSV があるかは #2 で確かめる | 同上、[GATCH](https://gatch.softplanner.co.jp/) |
+| 2026-11-04 | pywinauto は backend が 2 つ。win32 は MFC・VB6・Delphi・古いアプリ向け、uia は WinForms・WPF 向け。どちらで多く見えるかは Inspect.exe などで確かめる。既定は win32 | 確認済（pywinauto の公式ドキュメント） | 最初の 30 分で両方を試す | [pywinauto](https://pywinauto.readthedocs.io/en/latest/getting_started.html) |
+| 2026-11-04 | SendInput は、同じかそれより低い権限のアプリにしか入力できず、失敗しても戻り値に出ない | 確認済（Microsoft の文書） | 整備ソフトが管理者権限で動くなら、こちらも管理者で動かす。入力後は必ず読み返す | [SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) |
+| 2026-11-04 | `ValuePattern.SetValue` は 1 行の編集欄だけに効き、IME に左右されない。ただし、キー入力で動く処理（合計の再計算など）が走らないことがある | 一部確認済（Microsoft の文書）。業務ロジックの点は推測 | 値を入れた後に Tab で抜け、合計欄を読んで確かめる | [ValuePattern.SetValue](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.valuepattern.setvalue) |
+| 2026-11-04 | pywinauto の `type_keys` は、既定で文字を VK_PACKET で送るので全角も送れる。IME の状態で数字・英字が全角になる恐れがある（推測） | 一部確認済 | 入力前に IME を切り、入力後に読み返す | [pywinauto keyboard](https://pywinauto.readthedocs.io/en/latest/code/pywinauto.keyboard.html) |
+| 2026-11-04 | WinForms の DataGridView は MSAA 経由でしか出ず、一部が使えない。Delphi の TStringGrid はセルが部品として存在しない | 確認済（Microsoft の文書、DelphiUIAutomation の wiki） | 明細の表（グリッド）が最大の難所。見えなければ Tab で移って読むか、座標でクリックして画像で照らす | [標準部品の UIA 対応](https://learn.microsoft.com/en-us/dotnet/framework/UI-automation/ui-automation-support-for-standard-controls)、[TStringGrid](https://github.com/jhc-systems/DelphiUIAutomation/wiki/TAutomationStringGrid) |
+| 2026-11-04 | computer use は、操作が成功したか確かめずに成功したように振る舞うことがある、と Anthropic 自身が書いている | 確認済（公式ドキュメント） | 使う場合も、読み返しの照合を必ず挟む | [computer use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool) |
+| 2026-11-04 | 安全な作法の定番：押してよいボタン・キーを許可リストで決め、確定・発行・印刷と Enter は送らない。想定外のダイアログで止まる。請求 ID ごとの処理済み台帳で二重入力を防ぐ。入力の前・後・停止時にスクリーンショットを撮り、1 件ごとに記録する | 未確認（業界の定番としての推測） | 事務所の PC 側のプログラム（N7）の設計に使う | — |
+| 2026-11-03 | GATCH と「はい！整備」は Windows 版、Maintenance.c と Car Store System Cloud はブラウザで動く、とされる | 未確認（調査役の報告） | 父の店のソフトは Windows のアプリの見込み | — |
