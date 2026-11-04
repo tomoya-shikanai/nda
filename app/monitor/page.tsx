@@ -1,15 +1,19 @@
-// 工場のモニター（1920×1080、数メートル離れて見る）。試作なので中身は架空のタイヤ交換。
-// ?state=idle|listening|thinking|drafting|asking|done で状態を切り替える。?nav=0 で切り替えの帯を隠す。
+// 工場のモニター（1920×1080、数メートル離れて見る）。
+// /monitor は作業の状態（/api/session/current）を 2 秒ごとに読んで出す（LiveMonitor）。
+// /monitor?mock=1 は架空のタイヤ交換の模擬。?mock=1&state=idle|listening|thinking|drafting|asking|done で状態を切り替える。
+// ?nav=0 で切り替えの帯を隠す。
 
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { ANSWERED_VALVE_PRICE, ITEMS, yen } from "../_demo/tire-change";
+import { VOICE_CREDIT } from "../../lib/session/view";
+import { ANSWERED_VALVE_QTY, ITEMS, yen } from "../_demo/tire-change";
 import Companion from "./Companion";
+import LiveMonitor from "./LiveMonitor";
 import styles from "./monitor.module.css";
-import { STATE_KEYS, STATES, toStateKey, type ItemStatus } from "./states";
+import { CALL_HINT, STATE_KEYS, STATES, toStateKey, type ItemStatus, type StateKey } from "./states";
 
-export const metadata: Metadata = { title: "んだ — 工場のモニター（試作）" };
+export const metadata: Metadata = { title: "んだ — 工場のモニター" };
 
 const MARK: Record<ItemStatus, { icon: string; text: string }> = {
   ok: { icon: "✓", text: "入れた" },
@@ -17,6 +21,8 @@ const MARK: Record<ItemStatus, { icon: string; text: string }> = {
   ask: { icon: "?", text: "確認待ち" },
   pending: { icon: "・", text: "まだ" },
 };
+
+const LABELS = Object.fromEntries(STATE_KEYS.map((k) => [k, STATES[k].label])) as Record<StateKey, string>;
 
 export default function MonitorPage({ searchParams }: PageProps<"/monitor">) {
   return (
@@ -28,9 +34,13 @@ export default function MonitorPage({ searchParams }: PageProps<"/monitor">) {
 
 async function Monitor({ searchParams }: Pick<PageProps<"/monitor">, "searchParams">) {
   const params = await searchParams;
-  const key = toStateKey(params.state);
+  if (params.mock !== "1") return <LiveMonitor labels={LABELS} hint={CALL_HINT} />;
+  return <MockMonitor state={params.state} showNav={params.nav !== "0"} />;
+}
+
+function MockMonitor({ state, showNav }: { state: string | string[] | undefined; showNav: boolean }) {
+  const key = toStateKey(state);
   const s = STATES[key];
-  const showNav = params.nav !== "0";
 
   return (
     <main className={`${styles.screen} ${styles[`s_${key}`]}`}>
@@ -52,7 +62,7 @@ async function Monitor({ searchParams }: Pick<PageProps<"/monitor">, "searchPara
         <div className={styles.right}>
           <div className={styles.bubble}>
             {s.heard === null ? (
-              <p className={styles.hint}>「んだ、Claude」と声をかけてください</p>
+              <p className={styles.hint}>{CALL_HINT}</p>
             ) : (
               <>
                 <p className={styles.small}>聞き取った言葉</p>
@@ -99,15 +109,17 @@ async function Monitor({ searchParams }: Pick<PageProps<"/monitor">, "searchPara
               <ul>
                 {ITEMS.map((it, i) => {
                   const st = s.items[i] ?? "pending";
-                  const price = it.price ?? (key === "done" ? ANSWERED_VALVE_PRICE : null);
+                  // 数の分からない行は、答えてもらうまで数量も金額も出さない
+                  const qty = it.qty ?? (key === "done" ? ANSWERED_VALVE_QTY : null);
                   return (
                     <li key={it.name} className={`${styles.item} ${styles[`i_${st}`]}`}>
                       <span className={styles.icon}>{MARK[st].icon}</span>
                       <span className={styles.itemName}>
-                        {it.name} ×{it.qty}
+                        {it.name}
+                        {qty !== null && ` ×${qty}`}
                       </span>
                       <span className={styles.itemState}>{MARK[st].text}</span>
-                      <span className={styles.itemPrice}>{price === null ? "値段？" : yen(price * it.qty)}</span>
+                      <span className={styles.itemPrice}>{qty === null ? "値段？" : yen(it.price * qty)}</span>
                     </li>
                   );
                 })}
@@ -117,12 +129,12 @@ async function Monitor({ searchParams }: Pick<PageProps<"/monitor">, "searchPara
         </div>
       </section>
 
-      <footer className={styles.foot}>試作・架空のデータ</footer>
+      <footer className={styles.foot}>試作・架空のデータ　{VOICE_CREDIT}</footer>
 
       {showNav && (
         <nav className={styles.nav}>
           {STATE_KEYS.map((k) => (
-            <Link key={k} href={`/monitor?state=${k}`} className={k === key ? styles.navOn : undefined}>
+            <Link key={k} href={`/monitor?mock=1&state=${k}`} className={k === key ? styles.navOn : undefined}>
               {STATES[k].label}
             </Link>
           ))}

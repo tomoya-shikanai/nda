@@ -58,7 +58,12 @@ function sayOf(s: Session | null): string {
   }
 }
 
-const NOT_ANSWERS = new Set(["unread", "approve"]);
+/** 金額の表示（¥3,300）。計算はしない。null は null のまま返す（「値段？」などの言葉は画面が選ぶ） */
+export function yenText(n: number | null): string | null {
+  return n === null ? null : `¥${n.toLocaleString("ja-JP")}`;
+}
+
+const NOT_ANSWERS =new Set(["unread", "approve"]);
 
 export function toMonitorView(s: Session | null): MonitorView {
   const segs = s?.transcript?.segments ?? [];

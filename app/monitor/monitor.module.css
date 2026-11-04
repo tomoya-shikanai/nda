@@ -277,6 +277,12 @@
   color: #8a8697;
 }
 
+.offline {
+  margin-left: calc(24 * var(--u));
+  color: #a05f00;
+  font-weight: 700;
+}
+
 .nav {
   position: absolute;
   right: calc(56 * var(--u));

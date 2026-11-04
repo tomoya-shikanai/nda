@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ANSWERED_VALVE_PRICE, CUSTOMER, ITEMS, TAX_RATE, yen } from "../_demo/tire-change";
+import { ANSWERED_VALVE_QTY, CUSTOMER, ITEMS, TAX_RATE, yen } from "../_demo/tire-change";
 import styles from "./invoice.module.css";
 
-// 模擬画面では、確認事項に答えてもらった後の値で入れる
-const ROWS = ITEMS.map((it) => ({ ...it, price: it.price ?? ANSWERED_VALVE_PRICE }));
+// 模擬画面では、確認事項に答えてもらった後の数で入れる
+const ROWS = ITEMS.map((it) => ({ ...it, qty: it.qty ?? ANSWERED_VALVE_QTY }));
 const STEP_MS = 1400;
 
 export default function MockInvoice({ initialStep, autoPlay }: { initialStep: number; autoPlay: boolean }) {

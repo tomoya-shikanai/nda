@@ -1,9 +1,13 @@
-// モニターの 6 つの状態と、試作で見せる架空の中身。
+// モニターの 6 つの状態と、試作（?mock=1）で見せる架空の中身。状態の並びは lib/session/store.ts が正。
 
+import { SESSION_STATES, type SessionStatus } from "../../lib/session/store";
 import { HEARD } from "../_demo/tire-change";
 
-export const STATE_KEYS = ["idle", "listening", "thinking", "drafting", "asking", "done"] as const;
-export type StateKey = (typeof STATE_KEYS)[number];
+export const STATE_KEYS = SESSION_STATES;
+export type StateKey = SessionStatus;
+
+/** 聞き取った言葉が無いときの、呼びかけの案内 */
+export const CALL_HINT = "「んだ、Claude」と声をかけてください";
 
 /** 明細の各行の進み具合 */
 export type ItemStatus = "ok" | "working" | "ask" | "pending";
@@ -59,18 +63,18 @@ export const STATES: Record<StateKey, MonitorState> = {
   asking: {
     label: "確かめたいことがある",
     heard: HEARD,
-    doing: "バルブは 1 個いくら？",
+    doing: "バルブは何個ですか",
     items: ["ok", "ok", "ok", "ask"],
-    asks: ["エアバルブ ×4 — 料金表に値段がない"],
+    asks: ["エアバルブ — 数が分からない"],
     resolved: [],
   },
   done: {
     label: "終わった",
-    heard: "1 個 330 円",
+    heard: "4 個",
     doing: "4 行入れました。発行は人が押してください",
     items: ["ok", "ok", "ok", "ok"],
     asks: [],
-    resolved: ["エアバルブ 1 個 330 円（答えてもらった）"],
+    resolved: ["エアバルブ 4 個（答えてもらった）"],
   },
 };
 
