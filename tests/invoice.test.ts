@@ -123,6 +123,24 @@ test("抽出: 偽サーバーの明細が戻り値になり、要求に全発話
   }
 });
 
+test("抽出: 要求の system に、後検証の規則に合わせた書き方が入る", async () => {
+  received = [];
+  reply = good["tire-001"];
+  await extractInvoice(byId("tire-001"));
+  const system = String(received[0].system);
+  assert.match(system, /数＋単位/); // 数量は発話の数と単位をそのまま
+  assert.match(system, /unit.*発話の単位/); // 単位は発話の単位
+  assert.match(system, /1 単位あたりの金額/); // 単価は 1 単位あたりの形だけ
+  assert.match(system, /合計額/); // 合計額は単価にしない
+  assert.match(system, /料金表の値は単価に入れない/);
+  assert.match(system, /quote.*数量（数＋単位）を言った発話/);
+  assert.match(system, /1 つの発話の中/);
+  assert.match(system, /unknown/);
+  assert.match(system, /20 秒以内/);
+  assert.match(system, /言っていない作業・部品を明細にしない/);
+  assert.match(system, /標準語に直さない/);
+});
+
 test("抽出: 料金表が無ければ「なし」と伝える", async () => {
   received = [];
   reply = good["tire-001"];
