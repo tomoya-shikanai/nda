@@ -1,0 +1,390 @@
+/* 工場のモニター。1920×1080 を基準に、--u（1 基準ピクセル）で全体を縮尺する。
+   文字の大きさの決め方は docs/design/companion.md。最小は 34u（3m で読める下限の目安）。 */
+
+.screen {
+  --u: min(calc(100vw / 1920), calc(100vh / 1080));
+  --ink: #1d1b26;
+  --paper: #f4f1e8;
+  --accent: #33415c;
+  --accent-ink: #fff;
+  position: relative;
+  width: calc(1920 * var(--u));
+  height: calc(1080 * var(--u));
+  margin: 0 auto;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 状態ごとの色。明るい工場で区別しやすいよう、色だけでなく文言と記号でも分ける */
+.s_idle { --accent: #dfe5ee; --accent-ink: #33415c; }
+.s_listening { --accent: #1f6fd1; }
+.s_thinking { --accent: #6b4fc9; }
+.s_drafting { --accent: #0f7f65; }
+.s_asking { --accent: #ffc400; --accent-ink: #1d1b26; }
+.s_done { --accent: #23772d; }
+
+.top {
+  height: calc(120 * var(--u));
+  padding: 0 calc(56 * var(--u));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: calc(6 * var(--u)) solid var(--accent);
+}
+
+.brand {
+  font-size: calc(52 * var(--u));
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.brand span {
+  font-size: calc(34 * var(--u));
+  font-weight: 700;
+  color: #6b6878;
+  margin-left: calc(10 * var(--u));
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: calc(20 * var(--u));
+  padding: calc(10 * var(--u)) calc(40 * var(--u));
+  border-radius: calc(60 * var(--u));
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: calc(58 * var(--u));
+  font-weight: 800;
+}
+.lamp {
+  width: calc(30 * var(--u));
+  height: calc(30 * var(--u));
+  border-radius: 50%;
+  background: currentColor;
+  animation: lamp 1.6s ease-in-out infinite;
+}
+.s_idle .lamp { animation-duration: 4s; }
+@keyframes lamp { 50% { opacity: 0.25; } }
+
+.body {
+  flex: 1;
+  display: flex;
+  padding: calc(24 * var(--u)) calc(56 * var(--u)) calc(40 * var(--u));
+  gap: calc(40 * var(--u));
+  min-height: 0;
+}
+
+.stage {
+  width: calc(620 * var(--u));
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: calc(22 * var(--u));
+  min-width: 0;
+}
+
+/* 吹き出し。しっぽは相棒（左）に向ける */
+.bubble {
+  position: relative;
+  background: #fff;
+  border: calc(6 * var(--u)) solid var(--ink);
+  border-radius: calc(40 * var(--u));
+  padding: calc(26 * var(--u)) calc(50 * var(--u)) calc(28 * var(--u));
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(8 * var(--u));
+}
+.bubble::before,
+.bubble::after {
+  content: "";
+  position: absolute;
+  top: calc(130 * var(--u));
+  border-style: solid;
+  border-color: transparent;
+}
+.bubble::before {
+  left: calc(-54 * var(--u));
+  border-width: calc(28 * var(--u)) calc(54 * var(--u)) calc(28 * var(--u)) 0;
+  border-right-color: var(--ink);
+}
+.bubble::after {
+  left: calc(-42 * var(--u));
+  top: calc(136 * var(--u));
+  border-width: calc(22 * var(--u)) calc(44 * var(--u)) calc(22 * var(--u)) 0;
+  border-right-color: #fff;
+}
+
+.small {
+  font-size: calc(34 * var(--u));
+  font-weight: 700;
+  color: #5d5a6b;
+}
+.heard {
+  font-size: calc(52 * var(--u));
+  font-weight: 700;
+  line-height: 1.3;
+}
+.hint {
+  font-size: calc(64 * var(--u));
+  font-weight: 800;
+  line-height: 1.3;
+}
+.doing {
+  font-size: calc(76 * var(--u));
+  font-weight: 900;
+  line-height: 1.25;
+  margin-top: calc(10 * var(--u));
+  padding-top: calc(18 * var(--u));
+  border-top: calc(4 * var(--u)) dashed #c9c5d6;
+}
+.s_asking .doing {
+  background: #fff3c4;
+  margin-left: calc(-20 * var(--u));
+  margin-right: calc(-20 * var(--u));
+  padding: calc(18 * var(--u)) calc(20 * var(--u));
+  border-radius: calc(16 * var(--u));
+  border-top: none;
+}
+
+.caret {
+  display: inline-block;
+  width: calc(8 * var(--u));
+  height: calc(52 * var(--u));
+  margin-left: calc(8 * var(--u));
+  vertical-align: calc(-8 * var(--u));
+  background: var(--accent);
+  animation: lamp 0.9s steps(1) infinite;
+}
+
+/* 確認事項は 1 行の帯。あるときだけ黄色く太く縁取る */
+.asks {
+  display: flex;
+  align-items: baseline;
+  gap: calc(28 * var(--u));
+  background: #fff;
+  border: calc(4 * var(--u)) solid #b9b4c9;
+  border-radius: calc(26 * var(--u));
+  padding: calc(14 * var(--u)) calc(32 * var(--u));
+}
+.asksOn {
+  border-color: #e0a100;
+  border-width: calc(8 * var(--u));
+  background: #fffaf0;
+}
+.asks ul,
+.panel ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: calc(4 * var(--u));
+  min-width: 0;
+}
+.asks h2,
+.panel h2 {
+  font-size: calc(42 * var(--u));
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: calc(16 * var(--u));
+  white-space: nowrap;
+}
+.asks h2 b {
+  background: #e0a100;
+  color: #1d1b26;
+  border-radius: calc(30 * var(--u));
+  padding: 0 calc(20 * var(--u));
+}
+
+.panel {
+  flex: 1;
+  background: #fff;
+  border: calc(4 * var(--u)) solid #b9b4c9;
+  border-radius: calc(26 * var(--u));
+  padding: calc(16 * var(--u)) calc(32 * var(--u));
+  overflow: hidden;
+  min-height: 0;
+}
+.panel h2 { margin-bottom: calc(4 * var(--u)); line-height: 1.3; }
+.count {
+  margin-left: auto;
+  font-size: calc(38 * var(--u));
+  color: #5d5a6b;
+}
+.none {
+  font-size: calc(40 * var(--u));
+  color: #8a8697;
+  font-weight: 700;
+}
+.ask {
+  font-size: calc(42 * var(--u));
+  font-weight: 800;
+  line-height: 1.3;
+}
+.resolved {
+  font-size: calc(40 * var(--u));
+  font-weight: 700;
+  color: #23772d;
+  line-height: 1.3;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: calc(16 * var(--u));
+  font-size: calc(40 * var(--u));
+  font-weight: 700;
+  line-height: 1.25;
+  padding: calc(2 * var(--u)) calc(10 * var(--u));
+  border-radius: calc(12 * var(--u));
+}
+.icon {
+  width: calc(50 * var(--u));
+  height: calc(50 * var(--u));
+  flex: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+}
+.itemName { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.itemState { font-size: calc(34 * var(--u)); color: #5d5a6b; }
+.itemPrice { width: calc(220 * var(--u)); text-align: right; font-variant-numeric: tabular-nums; }
+.i_ok .icon { background: #23772d; color: #fff; }
+.i_working { background: #e3f4ee; }
+.i_working .icon { background: #0f7f65; color: #fff; animation: lamp 1s ease-in-out infinite; }
+.i_ask { background: #fff3c4; }
+.i_ask .icon { background: #e0a100; color: #1d1b26; }
+.i_ask .itemPrice { color: #a05f00; }
+.i_pending { color: #9a96a6; }
+.i_pending .icon { background: #ebe8f0; }
+
+.foot {
+  position: absolute;
+  left: calc(56 * var(--u));
+  bottom: calc(18 * var(--u));
+  font-size: calc(24 * var(--u));
+  color: #8a8697;
+}
+
+.nav {
+  position: absolute;
+  right: calc(56 * var(--u));
+  bottom: calc(14 * var(--u));
+  display: flex;
+  gap: calc(10 * var(--u));
+  font-size: calc(22 * var(--u));
+}
+.nav a {
+  padding: calc(4 * var(--u)) calc(14 * var(--u));
+  border: 1px solid #b9b4c9;
+  border-radius: calc(20 * var(--u));
+  background: #fff;
+}
+.nav a.navOn { background: var(--ink); color: #fff; }
+
+/* ---- 相棒の動き ---- */
+
+.companion {
+  width: 100%;
+  max-height: 100%;
+  overflow: visible;
+}
+.companion g,
+.companion path,
+.companion text {
+  transform-box: fill-box;
+}
+.whole { transform-origin: 50% 100%; }
+.head { transform-origin: 50% 90%; }
+
+/* 待機中: ゆっくり息をする */
+.c_idle .whole { animation: breathe 3.6s ease-in-out infinite; }
+@keyframes breathe {
+  50% { transform: translateY(1.5%) scaleY(0.985); }
+}
+
+/* 聞いている: 耳を傾ける。音の波が広がる */
+.c_listening .head { animation: leanIn 2.4s ease-in-out infinite; }
+@keyframes leanIn {
+  50% { transform: rotate(4deg); }
+}
+.wave1, .wave2 { animation: wave 1.2s ease-out infinite; transform-origin: 0% 50%; }
+.wave2 { animation-delay: 0.3s; }
+@keyframes wave {
+  0% { opacity: 0; transform: translateX(-10%); }
+  40% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(20%); }
+}
+
+/* 考え中: 首をかしげる。点が順に灯る */
+.c_thinking .head { animation: tilt 2.6s ease-in-out infinite; }
+@keyframes tilt {
+  0%, 100% { transform: rotate(-5deg); }
+  50% { transform: rotate(5deg); }
+}
+.dot1, .dot2, .dot3 { animation: dot 1.5s ease-in-out infinite; opacity: 0.2; }
+.dot2 { animation-delay: 0.25s; }
+.dot3 { animation-delay: 0.5s; }
+@keyframes dot { 30%, 60% { opacity: 1; } }
+
+/* 請求書を作っている: ペンを動かす。少し早めに体を揺らす */
+.c_drafting .whole { animation: breathe 1.4s ease-in-out infinite; }
+.scribble { animation: scribble 0.45s ease-in-out infinite alternate; }
+@keyframes scribble {
+  0% { transform: translate(0, 0); }
+  100% { transform: translate(-6%, 4%); }
+}
+.lineGrow { animation: grow 1.8s ease-in-out infinite; transform-origin: 0% 50%; }
+@keyframes grow {
+  0% { transform: scaleX(0); }
+  70%, 100% { transform: scaleX(1); }
+}
+
+/* 確かめたいことがある: 前に乗り出す。？が跳ねる */
+.c_asking .whole { animation: ask 1.8s ease-in-out infinite; }
+@keyframes ask {
+  50% { transform: translateY(-2%) rotate(-2deg); }
+}
+.question { animation: hop 1.1s ease-in-out infinite; transform-origin: 50% 100%; }
+@keyframes hop {
+  0%, 100% { transform: translateY(0) rotate(-8deg); }
+  50% { transform: translateY(-14%) rotate(8deg); }
+}
+
+/* 終わった: 跳ねる。星がまたたく */
+.c_done .whole { animation: jump 1.1s cubic-bezier(0.3, 0, 0.4, 1) infinite; }
+@keyframes jump {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  15% { transform: translateY(0) scaleY(0.94); }
+  45% { transform: translateY(-6%) scaleY(1.02); }
+  75% { transform: translateY(0) scaleY(0.97); }
+}
+.spark1, .spark2, .spark3 { animation: twinkle 1.4s ease-in-out infinite; transform-origin: 50% 50%; }
+.spark2 { animation-delay: 0.45s; }
+.spark3 { animation-delay: 0.9s; }
+@keyframes twinkle {
+  0%, 100% { opacity: 0.2; transform: scale(0.6); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* まばたき */
+.blink { animation: blink 4.5s infinite; transform-origin: 50% 50%; }
+@keyframes blink {
+  0%, 95%, 100% { transform: scaleY(1); }
+  97% { transform: scaleY(0.1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion *, .lamp, .caret { animation: none !important; }
+}

@@ -1,0 +1,171 @@
+/* 模擬の請求書入力画面。一般的な業務ソフトの体裁（灰色の窓・表・合計・確定ボタン）にとどめ、
+   特定の製品の配色や配置は写さない。動画で読めるよう、文字は業務ソフトより大きめ。 */
+
+.page {
+  min-height: 100vh;
+  background: #d9dde3;
+  color: #1c1f24;
+  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  font-size: 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 注釈。動画で必ず映る位置に置く */
+.note {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 32px;
+  background: #1c1f24;
+  color: #fff;
+  font-size: 28px;
+}
+.note strong {
+  background: #ffc400;
+  color: #1c1f24;
+  padding: 2px 14px;
+  border-radius: 6px;
+}
+.noteSpacer { flex: 1; }
+.agent { font-size: 22px; color: #c9ced6; }
+.play {
+  font: inherit;
+  font-size: 22px;
+  padding: 6px 20px;
+  border-radius: 8px;
+  border: none;
+  background: #fff;
+  color: #1c1f24;
+  cursor: pointer;
+}
+.play:disabled { opacity: 0.5; cursor: default; }
+
+.window {
+  margin: 20px auto 24px;
+  width: min(1500px, calc(100vw - 64px));
+  background: #f4f5f7;
+  border: 1px solid #8b939e;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.titlebar {
+  padding: 8px 18px;
+  background: #5b6675;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.form { padding: 18px 28px 22px; display: flex; flex-direction: column; gap: 16px; }
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px 24px;
+}
+.fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 18px;
+  color: #4a525d;
+}
+.fields input,
+.memo textarea {
+  font: inherit;
+  font-size: 22px;
+  color: #1c1f24;
+  padding: 6px 10px;
+  border: 1px solid #9aa2ad;
+  background: #fff;
+  border-radius: 2px;
+}
+.wide { grid-column: span 2; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+.table th,
+.table td {
+  border: 1px solid #aeb5bf;
+  padding: 6px 12px;
+  height: 46px;
+}
+.table th {
+  background: #e6e9ee;
+  font-size: 18px;
+  font-weight: 700;
+  text-align: left;
+}
+.no { width: 70px; text-align: center !important; color: #6b737e; }
+.num { width: 150px; text-align: right !important; font-variant-numeric: tabular-nums; }
+.unit { width: 90px; text-align: center !important; }
+
+.fresh td { animation: fresh 1.4s ease-out; }
+@keyframes fresh {
+  0% { background: #fff1a8; }
+  100% { background: #fff; }
+}
+
+.bottom { display: flex; gap: 32px; align-items: flex-start; }
+.memo {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 18px;
+  color: #4a525d;
+}
+.memo textarea { height: 120px; resize: none; }
+
+.totals {
+  display: grid;
+  grid-template-columns: auto 220px;
+  border: 1px solid #aeb5bf;
+  background: #fff;
+}
+.totals dt,
+.totals dd {
+  padding: 8px 14px;
+  border-bottom: 1px solid #d5d9df;
+}
+.totals dt { background: #e6e9ee; font-size: 18px; font-weight: 700; }
+.totals dd { text-align: right; font-variant-numeric: tabular-nums; }
+.totals .grand { font-size: 28px; font-weight: 800; border-bottom: none; }
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 18px;
+}
+.actions button {
+  font: inherit;
+  font-size: 24px;
+  padding: 12px 40px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.secondary { background: #e6e9ee; border: 1px solid #9aa2ad; color: #6b737e; }
+.confirm {
+  background: #2f6fb5;
+  border: 1px solid #1f4f86;
+  color: #fff;
+  font-weight: 800;
+}
+.confirm:disabled { background: #a9b6c6; border-color: #8f9cad; cursor: default; }
+.waiting { outline: 6px solid #ffc400; outline-offset: 4px; animation: waiting 1.4s ease-in-out infinite; }
+@keyframes waiting { 50% { outline-color: rgba(255, 196, 0, 0.3); } }
+
+.human,
+.done {
+  font-size: 28px;
+  font-weight: 800;
+  padding: 10px 22px;
+  border-radius: 8px;
+}
+.human { background: #1c1f24; color: #ffc400; }
+.human::after { content: " →"; }
+.done { background: #2b8a36; color: #fff; }
