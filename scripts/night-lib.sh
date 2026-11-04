@@ -33,6 +33,19 @@ night_settings() { # <worktree> <出力先>
     < "$ROOT/.claude/night-settings.json" > "$2"
 }
 
+# 決まった node の置き場が sandbox の読み取り禁止の下にあれば、黙って不合格にせず止める。
+night_check_node() { # <node の置き場>
+  local bin=$1 d
+  case "$bin" in
+    "$HOME/.volta"/*|"$HOME/Library/pnpm"/*|/opt/homebrew/*|/usr/*|/bin|/sbin) return 0 ;;
+    "$HOME"/*)
+      d=${bin#"$HOME"/}; d="$HOME/${d%%/*}"
+      echo "node の置き場 $bin は sandbox の読み取り禁止（${d}）の下にあります。Volta の node を使える状態にしてから起動してください。" >&2
+      return 1 ;;
+  esac
+  return 0
+}
+
 # night_claude <秒数> <出力形式 json|stream-json> [追加の引数...] < プロンプト
 night_claude() {
   local limit=$1 format=$2; shift 2
@@ -41,7 +54,13 @@ night_claude() {
   # PATH は最小にする。Volta の pnpm は自分を PATH から外して ~/Library/pnpm に渡すので、
   # 本物の node の置き場を直接入れる（~/.nvm などは sandbox で読めない）。
   local node_bin run_path
-  node_bin=$(dirname "$(volta which node 2>/dev/null || command -v node)")
+  # pnpm 経由の起動では PATH に ~/.volta/bin が無いので、volta を絶対パスで呼ぶ。
+  if [ -x "$HOME/.volta/bin/volta" ]; then
+    node_bin=$(dirname "$("$HOME/.volta/bin/volta" which node 2>/dev/null)")
+  else
+    node_bin=$(dirname "$(command -v node)")
+  fi
+  night_check_node "$node_bin" || return 1
   run_path="$node_bin:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   # timeout が macOS に無いので perl の alarm で打ち切る（SIGALRM で終了）
   env -i PATH="$run_path" HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" LANG="${LANG:-ja_JP.UTF-8}" TMPDIR="${TMPDIR:-/tmp}" \
