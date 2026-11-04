@@ -27,6 +27,8 @@ next-env.d.ts
 data/transcripts/
 data/kartes/
 data/audio/
+# 作業の状態（文字起こし・明細を含む）
+data/sessions/
 # 夜間ループのログ
 .night/
 # 別のエージェントの作業コピーの置き場

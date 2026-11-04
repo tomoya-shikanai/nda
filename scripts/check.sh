@@ -6,7 +6,7 @@ cd "$(git rev-parse --show-toplevel)"
 scan() {
   local bad=0 hits
   # 索引の内容を見る（コミットされる物そのもの）
-  hits=$(git ls-files --cached -z | tr "\0" "\n" | grep -vx "\.env\.example" | grep -E '^data/(audio|transcripts|kartes|private)/|^private/|(^|/)mapping|\.pem$|\.db-journal$|^data/recordings/|(^|/)\.env($|\.)|\.(mov|mp4|wav|m4a|mp3|aac|flac|db)$' -i)
+  hits=$(git ls-files --cached -z | tr "\0" "\n" | grep -vx "\.env\.example" | grep -E '^data/(audio|transcripts|kartes|private|sessions)/|^private/|(^|/)mapping|\.pem$|\.db-journal$|^data/recordings/|(^|/)\.env($|\.)|\.(mov|mp4|wav|m4a|mp3|aac|flac|db)$' -i)
   if [ -n "$hits" ]; then
     echo "NG: 追跡してはいけないファイル:"; echo "$hits"; bad=1
   fi
