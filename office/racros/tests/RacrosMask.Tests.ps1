@@ -167,10 +167,11 @@ Describe '品番' {
         Protect-PartCode 'ab-123.4' -Common $common | Should Be 'AB-123.4'
         Protect-PartCode '16510-81420' -Common $common | Should Be '16510-81420'
     }
-    It '共通でない品番は伏せる（ローマ字の名前などを形だけで残さない）' {
-        Protect-PartCode 'KASO HANAKO' -Common $common | Should Be '<少数>'
+    It '共通でない品番は伏せる' {
+        Protect-PartCode 'AB-124.4' -Common $common | Should Be '<少数>'
         Protect-PartCode 'XY-999' | Should Be '<少数>'
     }
+    It '数字を含まない値は共通でも捨てる（ローマ字の名前など）' { Protect-PartCode 'kaso taro' -Common $common | Should Be '<除外>' }
     It '車台番号の形は共通でも捨てる' { Protect-PartCode 'abc1-1234567' -Common $common | Should Be '<除外>' }
     It '純正の品番の形（5 桁-英数字）は車台番号の検査から外す' {
         [void]$common.Add('90915-YZZD1')
@@ -181,7 +182,7 @@ Describe '品番' {
         $spec = [ordered]@{ hinban = @{ from = 'HINBAN'; as = 'code' } }
         $m = New-PseudonymMap
         (ConvertTo-MaskedRow -Row ([pscustomobject]@{ HINBAN = '16510-81420' }) -Spec $spec -Map $m -CommonSets @{ hinbans = $common }).hinban | Should Be '16510-81420'
-        (ConvertTo-MaskedRow -Row ([pscustomobject]@{ HINBAN = 'KASO JIRO' }) -Spec $spec -Map $m -CommonSets @{ hinbans = $common }).hinban | Should Be '<少数>'
+        (ConvertTo-MaskedRow -Row ([pscustomobject]@{ HINBAN = '16510-81421' }) -Spec $spec -Map $m -CommonSets @{ hinbans = $common }).hinban | Should Be '<少数>'
         (ConvertTo-MaskedRow -Row ([pscustomobject]@{ HINBAN = '16510-81420' }) -Spec $spec -Map $m).hinban | Should Be '<少数>'
     }
     It '電話番号と見分けられない 0 始まりの長い数字は捨てる' {
@@ -202,6 +203,10 @@ Describe '出力の置き場' {
         { Assert-PrivatePath -Path (Join-Path $repo 'office\racros') } | Should Throw '無視されない'
     }
     It '名前が似ているだけの隣のフォルダはリポジトリの外とみなす' { Assert-PrivatePath -Path ($repo.TrimEnd('\') + '-other\x') | Should Not BeNullOrEmpty }
+    It '相対パスは PowerShell の今の場所から解く' {
+        Push-Location $repo
+        try { { Assert-PrivatePath -Path 'map.csv' -OutsideRepo } | Should Throw 'リポジトリの外' } finally { Pop-Location }
+    }
     It '対応表はリポジトリの中なら無視される所でも止める' { { Assert-PrivatePath -Path (Join-Path $repo 'data\private\map.csv') -OutsideRepo } | Should Throw 'リポジトリの外' }
     It 'Save-PseudonymMap も自分で置き場を確かめる' {
         $m = New-PseudonymMap -Path (Join-Path $repo 'data\private\racros\map-test.csv')

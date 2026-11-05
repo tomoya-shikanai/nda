@@ -70,8 +70,9 @@ function Get-Pseudonym {
 function Save-PseudonymMap {
     param([Parameter(Mandatory)][hashtable]$Map)
     if (-not $Map.path) { return }
-    [void](Assert-PrivatePath -Path $Map.path -OutsideRepo)
-    $dir = Split-Path -Parent $Map.path
+    # 確かめた絶対パスに書く（相対パスのまま渡すと、検査と書き込みで基準の場所が違うことがある）
+    $path = Assert-PrivatePath -Path $Map.path -OutsideRepo
+    $dir = Split-Path -Parent $path
     if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $rows = foreach ($k in $Map.entries.Keys) {
         $kind, $src = $k.Split('|', 2)
@@ -87,7 +88,7 @@ function Save-PseudonymMap {
         }
         [pscustomobject]@{ kind = $kind; source_id = $src; pseudonym = $p; index = $idx }
     }
-    $rows | Sort-Object kind, index | Export-Csv -LiteralPath $Map.path -NoTypeInformation -Encoding UTF8
+    $rows | Sort-Object kind, index | Export-Csv -LiteralPath $path -NoTypeInformation -Encoding UTF8
     $Map.dirty = $false
 }
 
@@ -200,6 +201,8 @@ function Protect-PartCode {
     # それ以外（例: ABC1-1234567 は型式に英字を含む車台番号の形）は、共通でも捨てる。
     $isOemNumber = $t -match '^\d{5}-[A-Z0-9]{2,5}(-[A-Z0-9]{2,3})?$'
     if (-not $isOemNumber -and (Test-SuspiciousText $t)) { return '<除外>' }
+    # 数字を含まない値（ローマ字の名前など）は品番とみなさない。担当者の名前のように多くの客に共通しても残さない
+    if ($t -notmatch '\d') { return '<除外>' }
     if ($null -ne $Common -and $Common.Contains($t)) { return $t }
     return '<少数>'
 }
@@ -211,7 +214,8 @@ function Protect-PartCode {
 function Assert-PrivatePath {
     param([Parameter(Mandatory)][string]$Path, [switch]$OutsideRepo)
     $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')).TrimEnd('\')
-    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    # 相対パスは PowerShell の今の場所から解く（.NET のカレントディレクトリとずれることがあるため）
+    $full = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)).TrimEnd('\')
     $inside = $full.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($repoRoot + '\', [StringComparison]::OrdinalIgnoreCase)
     if (-not $inside) { return $full }
     if ($OutsideRepo) { throw "リポジトリの外に置きます: $full" }
