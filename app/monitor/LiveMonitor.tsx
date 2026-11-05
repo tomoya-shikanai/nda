@@ -170,9 +170,8 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<LabelKey,
         <div className={styles.brand}>
           んだ <span>nDa</span>
         </div>
-        <div className={styles.customer}>
-          {view.customer ?? "お客様: 未指定"}
-        </div>
+        {/* 作業が無い待ちの画面では客の札を出さない */}
+        <div className={styles.customer}>{view.id === null ? null : (view.customer ?? "お客様: 未指定")}</div>
         <div className={styles.status}>
           <span className={styles.lamp} />
           {label}
