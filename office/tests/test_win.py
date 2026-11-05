@@ -498,16 +498,19 @@ class DialogButtonsTest(unittest.TestCase):
 
     def test_ダイアログのボタンの名前だけを返す(self):
         kids = [
-            types.SimpleNamespace(ControlTypeName="TextControl", Name="データを保存しますか"),
-            types.SimpleNamespace(ControlTypeName="ButtonControl", Name="はい(Y)"),
-            types.SimpleNamespace(ControlTypeName="ButtonControl", Name="いいえ(N)"),
+            types.SimpleNamespace(ControlTypeName="TextControl", Name="データを保存しますか", ProcessId=PID),
+            types.SimpleNamespace(ControlTypeName="ButtonControl", Name="はい(Y)", ProcessId=PID),
+            types.SimpleNamespace(ControlTypeName="ButtonControl", Name="いいえ(N)", ProcessId=PID),
+            types.SimpleNamespace(ControlTypeName="ButtonControl", Name="他のアプリ", ProcessId=OTHER),
+            types.SimpleNamespace(ControlTypeName="ButtonControl", Name="pid が読めない"),
         ]
         w = types.SimpleNamespace(GetChildren=lambda: kids)
-        self.assertEqual(self.win.dialog_buttons(w), ("はい(Y)", "いいえ(N)"))
+        self.assertEqual(self.win.dialog_buttons(w, PID), ("はい(Y)", "いいえ(N)"))
+        self.assertEqual(self.win.dialog_buttons(w, None), ())
 
     def test_読めなければ空(self):
         w = types.SimpleNamespace(GetChildren=lambda: (_ for _ in ()).throw(RuntimeError("x")))
-        self.assertEqual(self.win.dialog_buttons(w), ())
+        self.assertEqual(self.win.dialog_buttons(w, PID), ())
 
 
 class FindTargetTest(unittest.TestCase):

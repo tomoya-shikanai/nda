@@ -412,7 +412,7 @@ class Reader:
                     class_name = fg.ClassName or ""
                     s.window = Window(
                         handle=fg.NativeWindowHandle, title=fg.Name or "", class_name=class_name, rect=r,
-                        pid=fg_pid, exe=fg_name, buttons=dialog_buttons(fg) if class_name == "#32770" else (),
+                        pid=fg_pid, exe=fg_name, buttons=dialog_buttons(fg, fg_pid) if class_name == "#32770" else (),
                     )
         except Exception as ex:
             fail("window", ex)
@@ -458,10 +458,14 @@ class Reader:
         self.key_listener.stop()
 
 
-def dialog_buttons(w) -> tuple[str, ...]:
-    """確認のダイアログのボタンの名前（はい(Y)・いいえ(N) など）。文面は読まない。"""
+def dialog_buttons(w, pid: int | None) -> tuple[str, ...]:
+    """確認のダイアログのボタンの名前（はい(Y)・いいえ(N) など）。文面は読まない。
+    ダイアログと同じプロセスのボタンだけ（pid が読めない部品は除く）。"""
     try:
-        return tuple((ch.Name or "")[:20] for ch in w.GetChildren() if ch.ControlTypeName == "ButtonControl")
+        return tuple(
+            (ch.Name or "")[:20] for ch in w.GetChildren()
+            if ch.ControlTypeName == "ButtonControl" and pid is not None and _process_id(ch) == pid
+        )
     except Exception:
         return ()
 
