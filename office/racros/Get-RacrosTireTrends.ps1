@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'RacrosTrends.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'RacrosMask.psm1') -Force
-$OutDir = Assert-PrivatePath -Path $OutDir
+$OutDir = Assert-PrivatePath -Path $OutDir -Children 'tire_lines.csv', 'export_meta.json', 'trends', 'trends\tire-ledger.json', 'trends\summary.md', 'trends\history', ('trends\history\tire-ledger-{0}.json' -f (Get-Date -Format 'yyyyMMdd'))
 
 $csv = Join-Path $OutDir 'tire_lines.csv'
 if (-not (Test-Path -LiteralPath $csv)) { throw "先に Export-RacrosTireLines.ps1 を流してください: $csv" }

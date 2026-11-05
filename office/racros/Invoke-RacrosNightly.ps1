@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'RacrosMask.psm1') -Force
 # ログを書く前に置き場を確かめる（リポジトリの中で git に無視されない所には書かない）
-$OutDir = Assert-PrivatePath -Path $OutDir
+$OutDir = Assert-PrivatePath -Path $OutDir -Children 'logs', ('logs\nightly-{0}.log' -f (Get-Date -Format 'yyyyMMdd')), 'nightly.lock'
 $logDir = Join-Path $OutDir 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ("nightly-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))

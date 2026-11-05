@@ -209,27 +209,30 @@ function Protect-PartCode {
 
 # 出力の置き場を確かめる。
 #   OutsideRepo: リポジトリの外だけを許す（対応表）
-#   それ以外: リポジトリの外か、リポジトリの中なら git で無視される所だけを許す（明細・台帳・ログ）
-# 確かめられないとき（git が無い等）は止める。
+#   それ以外: リポジトリの外か、リポジトリの中なら、置き場のフォルダごと git に無視される所だけを許す（明細・台帳・ログ）。
+#     フォルダごと無視されれば、中に書くファイルの名前にかかわらず無視される（ファイルの種類だけの無視には頼らない）。
+#   Children: 置き場の中で実際に読み書きするファイル・フォルダ（相対）。それぞれについてもリンクを確かめる。
+#   パスの途中にリンク（ジャンクション・シンボリックリンク）があると、文字列では外に見えても中に書けるので止める。
+# 確かめられないとき（git が無い等）は止める。返すのは置き場の絶対パス。
 function Assert-PrivatePath {
-    param([Parameter(Mandatory)][string]$Path, [switch]$OutsideRepo)
+    param([Parameter(Mandatory)][string]$Path, [switch]$OutsideRepo, [string[]]$Children = @())
     $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')).TrimEnd('\')
     # 相対パスは PowerShell の今の場所から解く（.NET のカレントディレクトリとずれることがあるため）
     $full = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)).TrimEnd('\')
-    # パスの途中にリンク（ジャンクション・シンボリックリンク）があると、文字列では外に見えても中に書けるので止める
-    $p = $full
-    while ($p) {
-        $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
-        if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "リンク（ジャンクション等）を含む置き場には書きません: $p" }
-        $p = Split-Path -Parent $p
+    foreach ($target in @($full) + @($Children | ForEach-Object { [IO.Path]::GetFullPath((Join-Path $full $_)).TrimEnd('\') })) {
+        $p = $target
+        while ($p) {
+            $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+            if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "リンク（ジャンクション等）を含む置き場には書きません: $p" }
+            $p = Split-Path -Parent $p
+        }
     }
     $inside = $full.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($repoRoot + '\', [StringComparison]::OrdinalIgnoreCase)
     if (-not $inside) { return $full }
     if ($OutsideRepo) { throw "リポジトリの外に置きます: $full" }
-    # 置き場の中に書くファイルが無視されるかを確かめる（置き場がまだ無くても確かめられるよう、中のファイルの名前で聞く）
-    $probe = Join-Path $full 'nda-private-probe.csv'
-    & git -C $repoRoot check-ignore -q -- $probe 2>$null
-    if ($LASTEXITCODE -ne 0) { throw "リポジトリの中で git に無視されない所には書きません: $full" }
+    # 末尾の \ でフォルダとして聞く（置き場がまだ無くても確かめられる）
+    & git -C $repoRoot check-ignore -q -- ($full + '\') 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "リポジトリの中で、フォルダごと git に無視されない所には書きません: $full" }
     return $full
 }
 

@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'RacrosDb.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'RacrosMask.psm1') -Force
-$OutDir = Assert-PrivatePath -Path $OutDir
+$OutDir = Assert-PrivatePath -Path $OutDir -Children (@('schema') + @($Databases | ForEach-Object { "schema\$_.tables.tsv"; "schema\$_.columns.tsv" }))
 
 $dir = Join-Path $OutDir 'schema'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null

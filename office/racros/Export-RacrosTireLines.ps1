@@ -19,7 +19,7 @@ Import-Module (Join-Path $PSScriptRoot 'RacrosMask.psm1') -Force
 
 $started = Get-Date
 $mapFull = Assert-PrivatePath -Path $MapPath -OutsideRepo
-$OutDir = Assert-PrivatePath -Path $OutDir
+$OutDir = Assert-PrivatePath -Path $OutDir -Children 'tire_lines.csv', 'export_meta.json'
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # タイヤの伝票を見分ける条件（工賃コードか品名）

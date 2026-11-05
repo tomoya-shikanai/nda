@@ -211,6 +211,20 @@ Describe '出力の置き場' {
             { Assert-PrivatePath -Path (Join-Path $alias 'pseudonyms.csv') -OutsideRepo } | Should Throw 'リンク'
         } finally { cmd /c rmdir "$alias" | Out-Null }
     }
+    It '置き場の中で書く所（子）にジャンクションがあれば止める' {
+        $out = Join-Path $TestDrive 'out'
+        New-Item -ItemType Directory -Force -Path $out | Out-Null
+        $child = Join-Path $out 'trends'
+        cmd /c mklink /J "$child" "$(Join-Path $repo 'office\racros')" | Out-Null
+        try {
+            Assert-PrivatePath -Path $out | Should Not BeNullOrEmpty
+            { Assert-PrivatePath -Path $out -Children 'trends\tire-ledger.json' } | Should Throw 'リンク'
+        } finally { cmd /c rmdir "$child" | Out-Null }
+    }
+    It 'ファイルの種類だけが無視される所（フォルダは無視されない）は止める' {
+        # data/ のフォルダ自体は無視されない（中の private/ だけが無視される）
+        { Assert-PrivatePath -Path (Join-Path $repo 'data') } | Should Throw '無視されない'
+    }
     It '相対パスは PowerShell の今の場所から解く' {
         Push-Location $repo
         try { { Assert-PrivatePath -Path 'map.csv' -OutsideRepo } | Should Throw 'リポジトリの外' } finally { Pop-Location }
