@@ -203,6 +203,14 @@ Describe '出力の置き場' {
         { Assert-PrivatePath -Path (Join-Path $repo 'office\racros') } | Should Throw '無視されない'
     }
     It '名前が似ているだけの隣のフォルダはリポジトリの外とみなす' { Assert-PrivatePath -Path ($repo.TrimEnd('\') + '-other\x') | Should Not BeNullOrEmpty }
+    It 'ジャンクションを通る置き場は止める（外に見えても中を指していれば書かない）' {
+        $alias = Join-Path $TestDrive 'alias'
+        cmd /c mklink /J "$alias" "$(Join-Path $repo 'office\racros')" | Out-Null
+        try {
+            { Assert-PrivatePath -Path $alias } | Should Throw 'リンク'
+            { Assert-PrivatePath -Path (Join-Path $alias 'pseudonyms.csv') -OutsideRepo } | Should Throw 'リンク'
+        } finally { cmd /c rmdir "$alias" | Out-Null }
+    }
     It '相対パスは PowerShell の今の場所から解く' {
         Push-Location $repo
         try { { Assert-PrivatePath -Path 'map.csv' -OutsideRepo } | Should Throw 'リポジトリの外' } finally { Pop-Location }

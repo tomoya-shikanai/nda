@@ -216,6 +216,13 @@ function Assert-PrivatePath {
     $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')).TrimEnd('\')
     # 相対パスは PowerShell の今の場所から解く（.NET のカレントディレクトリとずれることがあるため）
     $full = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)).TrimEnd('\')
+    # パスの途中にリンク（ジャンクション・シンボリックリンク）があると、文字列では外に見えても中に書けるので止める
+    $p = $full
+    while ($p) {
+        $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+        if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "リンク（ジャンクション等）を含む置き場には書きません: $p" }
+        $p = Split-Path -Parent $p
+    }
     $inside = $full.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($repoRoot + '\', [StringComparison]::OrdinalIgnoreCase)
     if (-not $inside) { return $full }
     if ($OutsideRepo) { throw "リポジトリの外に置きます: $full" }
