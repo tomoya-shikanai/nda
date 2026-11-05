@@ -561,3 +561,37 @@ test("Codex 2: mount の確かめ。受け箱が / と同じ dev なら置かな
   assert.equal(requireMountFromEnv({} as unknown as NodeJS.ProcessEnv), true);
   for (const v of ["0", "false", "no"]) assert.equal(requireMountFromEnv({ NDA_OFFICE_BOX_REQUIRE_MOUNT: v } as unknown as NodeJS.ProcessEnv), false);
 });
+
+test("Codex 3: 同時の見回りでも送り直しは 1 本。.tmp は書き手ごとに別の名前", async () => {
+  const { dir, box, office, s } = await ready();
+  let fail = true;
+  const puts: string[] = [];
+  const counting: OfficeLink = {
+    box: {
+      kind: "counting",
+      async put(name: string, body: string) {
+        if (fail) throw new Error("つながらない");
+        puts.push(name);
+        await new Promise((r) => setTimeout(r, 30)); // 置くのに時間がかかる間に、ほかの見回りが来る
+        await office.box.put(name, body);
+      },
+    },
+    timeoutMs: 1000,
+  };
+  const t0 = new Date();
+  const sending = await replySession({ dir, session: s, utterance: say("請求書頼む"), ledger, office: counting, now: () => t0 });
+  assert.equal(sending.status, "sending");
+  fail = false;
+  const later = new Date(t0.getTime() + RESEND_EVERY_SEC * 1000);
+  const results = await Promise.all([1, 2, 3, 4].map(() => tickOffice(dir, counting, sending, later)));
+  assert.equal(puts.length, 1, "送り直しは 1 回だけ");
+  assert.ok(results.some((r) => r.status === "sent"));
+  assert.equal((await readSession(dir, s.id))?.status, "sent");
+  assert.equal((await boxFiles(box)).length, 1);
+
+  // 同じ名前を 2 本の書き手が同時に置いても、互いの .tmp を消し合わない
+  const b = folderBox(box, NOMOUNT);
+  await Promise.all([b.put("same.json", '{"a":1}'), b.put("same.json", '{"a":2}')]);
+  assert.ok(["{\"a\":1}", "{\"a\":2}"].includes(await readFile(join(box, "same.json"), "utf8")));
+  assert.deepEqual((await readdir(box)).filter((n) => n.endsWith(".tmp")), []);
+});

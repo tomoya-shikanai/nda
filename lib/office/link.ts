@@ -186,16 +186,33 @@ export async function submitInvoice(dir: string, link: OfficeLink, s: Session, n
   return putRequest(dir, link, session, now);
 }
 
+/** 作業ごとの送り直しのロック（同じプロセスの中で 1 本にする）。route ごとにモジュールが分かれても同じ入れ物を使う。 */
+const LOCKS_KEY = Symbol.for("nda.office.resendLocks");
+function resendLocks(): Set<string> {
+  const g = globalThis as unknown as Record<symbol, Set<string> | undefined>;
+  g[LOCKS_KEY] ??= new Set();
+  return g[LOCKS_KEY];
+}
+
 /**
  * 画面の見回り（GET /api/session/current）のついで: 照合の期限切れと、依頼の送り直し（30 秒に 1 回、1 時間まで）。常駐は作らない。
+ * 送り直しは作業ごとのロックで 1 本にし、ロックの中で作業ファイルを読み直して、送る時かを決め直す（同時の見回りで二重に送らない）。
  */
 export async function tickOffice(dir: string, link: OfficeLink | null, s: Session, now = new Date()): Promise<Session> {
   let cur = s;
   const expired = expireQuery(cur, now);
   if (expired !== cur) cur = (await updateSession(dir, cur.id, (x) => expireQuery(x, now))) ?? expired;
-  if (link !== null && shouldResend(cur, now)) {
-    cur = (await updateSession(dir, cur.id, (x) => (shouldResend(x, now) ? markRetrying(x, now) : x))) ?? cur;
-    cur = await putRequest(dir, link, cur, now);
+  if (link === null || !shouldResend(cur, now)) return cur;
+  const locks = resendLocks();
+  if (locks.has(cur.id)) return cur; // ほかの見回りが送っている
+  locks.add(cur.id);
+  try {
+    const fresh = await readSession(dir, cur.id);
+    if (fresh === null || !shouldResend(fresh, now)) return fresh ?? cur;
+    const marked = markRetrying(fresh, now);
+    await writeSession(dir, marked);
+    return await putRequest(dir, link, marked, now);
+  } finally {
+    locks.delete(cur.id);
   }
-  return cur;
 }
