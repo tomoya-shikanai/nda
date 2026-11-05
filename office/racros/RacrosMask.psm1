@@ -224,6 +224,8 @@ function Assert-PrivatePath {
         while ($p) {
             $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
             if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "リンク（ジャンクション等）を含む置き場には書きません: $p" }
+            # ファイルのハードリンク（リンクの数が 2 以上）は属性に出ないので、LinkType で見る
+            if ($null -ne $item -and -not $item.PSIsContainer -and "$($item.LinkType)" -eq 'HardLink') { throw "リンク（ハードリンク）のファイルには書きません: $p" }
             $p = Split-Path -Parent $p
         }
     }

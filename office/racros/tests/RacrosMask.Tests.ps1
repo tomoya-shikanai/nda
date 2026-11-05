@@ -221,6 +221,15 @@ Describe '出力の置き場' {
             { Assert-PrivatePath -Path $out -Children 'trends\tire-ledger.json' } | Should Throw 'リンク'
         } finally { cmd /c rmdir "$child" | Out-Null }
     }
+    It '書く先のファイルがハードリンクなら止める' {
+        $out = Join-Path $TestDrive 'hl'
+        New-Item -ItemType Directory -Force -Path $out | Out-Null
+        'x' | Set-Content (Join-Path $out 'other.csv')
+        cmd /c mklink /H "$(Join-Path $out 'tire_lines.csv')" "$(Join-Path $out 'other.csv')" | Out-Null
+        { Assert-PrivatePath -Path $out -Children 'tire_lines.csv' } | Should Throw 'ハードリンク'
+        { Assert-PrivatePath -Path (Join-Path $out 'tire_lines.csv') -OutsideRepo } | Should Throw 'ハードリンク'
+        Assert-PrivatePath -Path $out -Children 'export_meta.json' | Should Not BeNullOrEmpty
+    }
     It 'ファイルの種類だけが無視される所（フォルダは無視されない）は止める' {
         # data/ のフォルダ自体は無視されない（中の private/ だけが無視される）
         { Assert-PrivatePath -Path (Join-Path $repo 'data') } | Should Throw '無視されない'
