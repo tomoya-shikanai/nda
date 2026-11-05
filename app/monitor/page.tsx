@@ -16,7 +16,7 @@ import { AFTER_LABELS, AWAITING_LABEL, TROUBLE_LABEL, CALL_HINT, type LabelKey, 
 export const metadata: Metadata = { title: "んだ — 工場のモニター" };
 
 const MARK: Record<ItemStatus, { icon: string; text: string }> = {
-  ok: { icon: "✓", text: "入れた" },
+  ok: { icon: "✓", text: "決まり" },
   working: { icon: "…", text: "作っている" },
   ask: { icon: "?", text: "確認待ち" },
   pending: { icon: "・", text: "まだ" },

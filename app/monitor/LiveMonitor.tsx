@@ -74,7 +74,7 @@ function lineState(l: MonitorLine): string {
   const parts: string[] = [];
   if (l.status === "ask") parts.push("確認待ち");
   if (l.answered.length > 0) parts.push("答えてもらった");
-  return parts.length > 0 ? parts.join("・") : "入れた";
+  return parts.length > 0 ? parts.join("・") : "決まり";
 }
 
 /** 台詞の長さで文字の大きさを選ぶ（吹き出しの高さを超えないように）。 */
