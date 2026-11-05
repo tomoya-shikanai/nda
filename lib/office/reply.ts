@@ -6,6 +6,7 @@
  * 応答とログに客の情報を入れない（label はメモリにだけ持つ）。
  */
 import { createHash, timingSafeEqual } from "node:crypto";
+import { withSessionLock } from "../session/lock";
 import { readSession, sessionDir, writeSession } from "../session/store";
 import { applyToFactory } from "./flow";
 import { setLabel } from "./labels";
@@ -37,12 +38,16 @@ export async function handleOfficeReply(request: Request, now = new Date()): Pro
   if (!m.success) return json({ error: "形が違う" }, 400);
 
   const dir = sessionDir();
-  const s = await readSession(dir, m.data.sessionId);
-  if (s === null) return json({ error: "作業が無い" }, 404);
-  const r = applyToFactory(s, m.data, now);
-  if (!r.accepted) return json({ accepted: false, why: r.why });
-  if (r.duplicate) return json({ accepted: true, duplicate: true });
-  await writeSession(dir, r.session);
-  if (m.data.kind === "customer.answer" && m.data.result.status === "found") setLabel(s.id, r.label);
-  return json({ accepted: true });
+  const msg = m.data;
+  // 作業の排他の中で読み直して当てて書く（ほかの経路の書き込みを消さない）
+  return withSessionLock(msg.sessionId, async () => {
+    const s = await readSession(dir, msg.sessionId);
+    if (s === null) return json({ error: "作業が無い" }, 404);
+    const r = applyToFactory(s, msg, now);
+    if (!r.accepted) return json({ accepted: false, why: r.why });
+    if (r.duplicate) return json({ accepted: true, duplicate: true });
+    await writeSession(dir, r.session);
+    if (msg.kind === "customer.answer" && msg.result.status === "found") setLabel(s.id, r.label);
+    return json({ accepted: true });
+  });
 }

@@ -24,6 +24,7 @@ import { type OfficeLink, sendQuery, submitInvoice } from "../office/link";
 import { answerBase, answerSession } from "./answer";
 import { customerPending, withCustomerQuestion } from "./customer";
 import { isApproval } from "./approval";
+import { withSessionLock } from "./lock";
 import { type Answer, type ExtractionCost, newSession, readSession, type Session, transition, writeSession } from "./store";
 
 /** POST の body の文字起こしの形。正は lib/stt/types.ts。 */
@@ -124,18 +125,20 @@ export async function startSession(x: {
   const asking = office !== null && query !== null ? sendQuery(x.dir, office, query) : Promise.resolve(true);
   const r = await extractWithCost(x.extract ?? extractInvoice, transcript, x.ledger);
   await asking;
-  s = await withLatestOffice(x.dir, s);
-  if (!r.ok) {
-    const failed = { ...transition(s, "idle", now()), error: extractionError(r.error), extraction: r.cost };
-    await writeSession(x.dir, failed);
-    throw r.error;
-  }
-  s = { ...transition(s, "drafting", now()), ...draft(r.out, transcript, x.ledger, s), extraction: r.cost };
-  await writeSession(x.dir, s);
-  s = await withLatestOffice(x.dir, s);
-  s = transition({ ...s, questions: withCustomerQuestion(s.questions, s) }, "asking", now());
-  await writeSession(x.dir, s);
-  return s;
+  // 抽出の後は作業の排他の中で読み直して書く（照合の答えが先に当たっていても消さない）
+  return withSessionLock(id, async () => {
+    s = await withLatestOffice(x.dir, s);
+    if (!r.ok) {
+      const failed = { ...transition(s, "idle", now()), error: extractionError(r.error), extraction: r.cost };
+      await writeSession(x.dir, failed);
+      throw r.error;
+    }
+    s = { ...transition(s, "drafting", now()), ...draft(r.out, transcript, x.ledger, s), extraction: r.cost };
+    await writeSession(x.dir, s);
+    s = transition({ ...s, questions: withCustomerQuestion(s.questions, s) }, "asking", now());
+    await writeSession(x.dir, s);
+    return s;
+  });
 }
 
 /** 抽出で 1 行も取れなかった作業が、質問中（asking）か。返事は作業の話の続きとして扱う。答えで行を除いて 0 行になった作業は含めない。 */
@@ -199,7 +202,7 @@ export async function continueSession(x: {
  * 返事は先に名前らしい部分と 4 桁を伏せ字にする。客が未定で事務所がつながっていて、返事に 4 桁を含む文があれば、
  * その文の原文で照合を問い合わせて終わる（答えは reply の route が当てる）。承認したら、すぐ入力の依頼を受け箱に置く（§9-2）。
  */
-export async function replySession(x: {
+type ReplyInput = {
   dir: string;
   session: Session;
   utterance: Segment;
@@ -207,7 +210,17 @@ export async function replySession(x: {
   extract?: Extractor;
   now?: () => Date;
   office?: OfficeLink | null;
-}): Promise<Session> {
+};
+
+/** 作業の排他の中で作業ファイルを読み直してから当てる（同時の答え・承認で片方を消さない、依頼を 2 件出さない）。 */
+export async function replySession(x: ReplyInput): Promise<Session> {
+  return withSessionLock(x.session.id, async () => {
+    const fresh = await readSession(x.dir, x.session.id);
+    return replyLocked({ ...x, session: fresh ?? x.session });
+  });
+}
+
+async function replyLocked(x: ReplyInput): Promise<Session> {
   const now = x.now ?? (() => new Date());
   const office = x.office ?? null;
   const s = x.session;

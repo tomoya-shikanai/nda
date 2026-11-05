@@ -10,6 +10,7 @@ import { officeFromEnv } from "../office/link";
 import { transcribeGemini } from "../stt/gemini";
 import { transcribeScribe } from "../stt/scribe";
 import { type Segment, SegmentSchema, type Transcript } from "../stt/types";
+import { withSessionLock } from "./lock";
 import { replySession, startSession } from "./run";
 import { latestSession, readSession, type Session, sessionDir } from "./store";
 import { toMonitorView } from "./view";
@@ -85,14 +86,19 @@ async function askingSession(id: string) {
 
 /** 答えの 1 発話を作業に当てる。200 と { view }。答えの読み取りに Claude を使わない（明細が 0 行の作業への返事だけは、話の続きとして抽出し直す）。 */
 export async function answerWith(id: string, utterance: Segment, expectedVersion?: string): Promise<Response> {
-  const s = await askingSession(id);
-  if (s instanceof Response) return s;
-  if (expectedVersion !== undefined && sessionVersion(s) !== expectedVersion) {
-    // 聞いている間に作業が変わった（別の答えが入った）。古い音声は当てない。聞き役は「もう一度」と出す
-    return Response.json({ error: "作業が変わりました。もう一度お願いします", stale: true }, { status: 409 });
-  }
-  const next = await replySession({ dir: sessionDir(), session: s, utterance, ledger: await ledger(), office: officeFromEnv() });
-  return Response.json({ view: viewOf(next) }, { headers: NO_STORE });
+  if (!ID_RE.test(id)) return Response.json({ error: "見つからない" }, { status: 404 });
+  const book = await ledger();
+  // 作業の排他の中で読み直してから当てる（同時の承認で依頼を 2 件出さない。同時の答えで片方を消さない）
+  return withSessionLock(id, async () => {
+    const s = await askingSession(id);
+    if (s instanceof Response) return s;
+    if (expectedVersion !== undefined && sessionVersion(s) !== expectedVersion) {
+      // 聞いている間に作業が変わった（別の答えが入った）。古い音声は当てない。聞き役は「もう一度」と出す
+      return Response.json({ error: "作業が変わりました。もう一度お願いします", stale: true }, { status: 409 });
+    }
+    const next = await replySession({ dir: sessionDir(), session: s, utterance, ledger: book, office: officeFromEnv() });
+    return Response.json({ view: viewOf(next) }, { headers: NO_STORE });
+  });
 }
 
 /**

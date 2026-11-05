@@ -430,6 +430,7 @@ test("状態: stopped の理由で札が変わる。置けなければ sending �
   const e2 = await ready();
   const d2 = approvedSession(e2.s);
   const noPut: OfficeLink = { box: { kind: "slow", put: () => Promise.reject(new Error("x")) }, timeoutMs: 100 };
+  await writeSession(e2.dir, d2);
   const sd = await submitInvoice(e2.dir, noPut, d2);
   assert.equal(sd.status, "sending");
   const result: InvoiceResult = {
@@ -458,6 +459,7 @@ test("状態: 依頼を組めない作業（値の欠け）は置かずに stopp
   const { dir, office, s } = await ready();
   const done = approvedSession(s);
   const broken = { ...done, invoice: done.invoice && { ...done.invoice, lines: done.invoice.lines.map((l) => ({ ...l, qty: null })) } };
+  await writeSession(dir, broken as Session);
   const r = await submitInvoice(dir, office, broken as Session);
   assert.equal(r.status, "stopped");
   assert.equal(r.office?.result?.reason, "invalid");
@@ -535,10 +537,13 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
     const decided = { ...s3, customer: { customerNo: "c", carNo: "k" }, questions: [] };
     await writeSession(dir, decided);
     const done = approvedSession(decided);
+    await writeSession(dir, done);
     const sd = await submitInvoice(dir, { box: folderBox(ro, NOMOUNT), timeoutMs: 1000 }, done);
     assert.equal(sd.status, "sending");
     assert.equal(toMonitorView(sd).office, "事務所の PC に届きません（書き込めません）。つながったら送ります");
-    const sm = await submitInvoice(dir, { box: folderBox(missing, NOMOUNT), timeoutMs: 1000 }, approvedSession({ ...decided, id: `m${seq++}` }));
+    const other = approvedSession({ ...decided, id: `m${seq++}` });
+    await writeSession(dir, other);
+    const sm = await submitInvoice(dir, { box: folderBox(missing, NOMOUNT), timeoutMs: 1000 }, other);
     assert.equal(toMonitorView(sm).office, "事務所の PC に届きません（共有フォルダが見えません）。つながったら送ります");
   } finally {
     await chmod(ro, 0o700);
@@ -617,4 +622,34 @@ test("Codex 4: stopped・duplicate は 1 回目の結果を遮らない（状態
   const dup2 = { ...dup, id: randomUUID() };
   assert.deepEqual(await (await reply(dup2)).json(), { accepted: true });
   assert.equal((await readSession(dir, s.id))?.status, "entered");
+});
+
+test("Codex 2 回目 3: 同時 2 本の承認でも依頼は 1 件だけ置かれる（作業ごとの排他）。同時の答えも片方を消さない", async () => {
+  process.env.NDA_LEDGER_PATH = join(ROOT, "tests/fixtures/tire-ledger.json");
+  const { dir, box, s } = await ready();
+  process.env.NDA_OFFICE_BOX = box;
+  process.env.NDA_OFFICE_BOX_REQUIRE_MOUNT = "0";
+  try {
+    const route = await import("../app/api/session/[id]/answer/route");
+    const approve = () =>
+      route.POST(
+        new Request("http://localhost/x", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ utterance: { startSec: 0, endSec: 1, speaker: "father", text: "請求書頼む" } }),
+        }),
+        { params: Promise.resolve({ id: s.id }) },
+      );
+    const [a, b] = await Promise.all([approve(), approve()]);
+    assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+    const reqs = (await readBox(box)).filter((m) => m.kind === "invoice.request");
+    assert.equal(reqs.length, 1, "依頼は 1 件");
+    const end = await readSession(dir, s.id);
+    assert.equal(end?.status, "sent");
+    assert.equal(end?.office?.requestId, reqs[0].id);
+    assert.equal(end?.answers.filter((x) => x.action.kind === "approve").length, 1);
+  } finally {
+    delete process.env.NDA_OFFICE_BOX;
+    delete process.env.NDA_OFFICE_BOX_REQUIRE_MOUNT;
+  }
 });

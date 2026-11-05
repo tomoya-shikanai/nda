@@ -232,6 +232,8 @@ appliedIds: string[];
 
 秘密の置き場: 工場は `/etc/nda/nda.env`（Pi）か `.env`（Mac）。事務所は `box\config.json`。どちらも鹿内さんが書き、Git に入れない。
 
+工場の本体（Next.js）は 1 プロセスで動かす。作業ファイルを読んで書く経路の排他は、そのプロセスの中だけ（`lib/session/lock.ts`、#47）。
+
 ## 7. 11/7 の撮影までに作る最小と、後に回すもの
 
 作る（順に）:
