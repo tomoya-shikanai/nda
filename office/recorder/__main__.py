@@ -97,6 +97,15 @@ def type_error(ex: Exception):
 
 
 def main(argv: list[str]) -> int:
+    """止まるほどの失敗も、文面（部品の名前や値が入り得る）は出さず、型とエラー番号だけを出す。"""
+    try:
+        return _main(argv)
+    except Exception as ex:
+        _stderr(ex)
+        return 1
+
+
+def _main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "run"
     if cmd == "run":
         run()

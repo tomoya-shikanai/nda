@@ -81,6 +81,14 @@ class RunTest(unittest.TestCase):
         self.assertTrue(lines and all("OSError" in x for x in lines), lines)
 
 
+class MainErrorTest(unittest.TestCase):
+    def test_止まる失敗も文面を出さない(self):
+        err = io.StringIO()
+        with mock.patch.object(main, "_main", side_effect=RuntimeError("山田太郎")), redirect_stderr(err):
+            self.assertEqual(main.main(["recorder", "list"]), 1)
+        self.assertEqual(err.getvalue().strip(), "recorder: RuntimeError")
+
+
 class _Root:
     def __init__(self):
         self.pending = []

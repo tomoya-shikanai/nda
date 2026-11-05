@@ -489,7 +489,11 @@ def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"# process {proc.name()} pid={proc.pid} path={exe_path(proc)}\n")
         for i, w in enumerate(windows):
+            if not proc.is_running():  # 書き出す途中で終わった（pid が他のアプリに使い回され得る）
+                break
             for c, depth in auto.WalkControl(w, includeTop=True, maxDepth=max_depth):
+                if _process_id(c) != proc.pid:  # 窓の中に入った他のプロセスの部品（埋め込みの窓など）は書かない
+                    continue
                 e = element_of(c, frozenset(cfg.name_value_classes))
                 if e is None:
                     continue
@@ -508,11 +512,18 @@ def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
                 hwnd = int(w.NativeWindowHandle)
             except Exception:
                 hwnd = 0
-            if hwnd and grab_front(hwnd, proc.pid, out / f"dump-{stamp}-{i}.jpg", 80):
+            if hwnd and proc.is_running() and grab_front(hwnd, proc.pid, out / f"dump-{stamp}-{i}.jpg", 80):
                 f.write(f"# screenshot dump-{stamp}-{i}.jpg\n")
             else:
                 f.write(f"# window {i}: 前面に無いので撮っていない\n")
     return path
+
+
+def _process_id(c) -> int | None:
+    try:
+        return int(c.ProcessId)
+    except Exception:
+        return None
 
 
 def _has(c, pid) -> bool:

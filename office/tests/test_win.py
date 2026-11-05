@@ -851,6 +851,7 @@ class ListAndDumpMaskTest(unittest.TestCase):
         w.GetPattern = lambda pid: None
         label = _Control(control_type="TextControl", value="山田花子")
         label.Name = "山田太郎 様"
+        label.ProcessId = PID
         auto = sys.modules["uiautomation"]
         auto.GetRootControl = lambda: types.SimpleNamespace(GetChildren=lambda: [w])
         auto.WalkControl = lambda w, includeTop=True, maxDepth=25: iter([(w, 0), (label, 1)])
@@ -861,6 +862,24 @@ class ListAndDumpMaskTest(unittest.TestCase):
         self.assertNotIn("山田", text)
         self.assertIn("[ 車検証 ] - RacroSⅢ", text)
         self.assertIn("value=***(4 文字)", text)
+
+    def test_dump_は窓の中の他のプロセスの部品を書かない(self):
+        sys.modules["psutil"].process_iter = lambda attrs=None: [_TargetProcess(PID)]
+        w = _Window(PID, "整備伝票", handle=100)
+        w.ControlTypeName, w.AutomationId, w.IsPassword = "WindowControl", "", False
+        w.GetPattern = lambda pid: None
+        other = _Control(control_type="ButtonControl")
+        other.Name, other.AutomationId, other.ProcessId = "受信トレイ", "inbox", OTHER
+        auto = sys.modules["uiautomation"]
+        auto.GetRootControl = lambda: types.SimpleNamespace(GetChildren=lambda: [w])
+        auto.WalkControl = lambda w, includeTop=True, maxDepth=25: iter([(w, 0), (other, 1)])
+        self.win.foreground_window = lambda: None
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        text = self.win.dump_tree(self.cfg, Path(d.name)).read_text(encoding="utf-8")
+        self.assertIn("整備伝票", text)
+        self.assertNotIn("受信トレイ", text)
+        self.assertNotIn("inbox", text)
 
 
 if __name__ == "__main__":
