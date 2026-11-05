@@ -213,7 +213,7 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<LabelKey,
               )}
               {view.approved && (
                 <li className={styles.resolved}>
-                  ✓ 承認済み{view.office && <span className={styles.more}>{view.office}</span>}
+                  ✓ 承認済み{view.office && <span className={styles.more}>・{view.office}</span>}
                 </li>
               )}
             </ul>

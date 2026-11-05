@@ -380,7 +380,7 @@ test("偽の事務所で一周: 話す → 照合 → 承認 → すぐ依頼を
   assert.equal(end?.status, "entered");
   assert.equal(end?.office?.result?.enteredLines, 1);
   assert.equal(toMonitorView(end).say, SAY.entered(1));
-  assert.equal(toMonitorView(end).office, "1行入れました。保存は人が押してください");
+  assert.equal(toMonitorView(end).office, "業務ソフトに入った");
   // 同じ結果がもう一度届いても変わらない
   const again = answerRequest(req);
   assert.deepEqual(await (await reply({ ...again, id: end?.office?.result?.id ?? "" })).json(), { accepted: true, duplicate: true });
@@ -406,7 +406,7 @@ test("状態: stopped の理由で札が変わる。置けなければ sending �
   assert.equal(sending.status, "sending");
   assert.equal(sending.office?.lastError, "受け箱に置けませんでした（Error）");
   assert.equal(toMonitorView(sending).say, SAY.sendFailed("writeFailed"));
-  assert.equal(toMonitorView(sending).office, "事務所に届きません・つながったら送ります");
+  assert.equal(toMonitorView(sending).office, "未送信");
   assert.equal(toMonitorView(sending).officeTrouble, true);
   // 30 秒たつまでは送り直さない
   fail = false;
@@ -425,7 +425,7 @@ test("状態: stopped の理由で札が変わる。置けなければ sending �
   const st = await readSession(dir, s.id);
   assert.equal(st?.status, "stopped");
   assert.equal(toMonitorView(st).say, "事務所のソフトが使用中でした。人が入れてください");
-  assert.equal(toMonitorView(st).office, "事務所のソフトが使用中です。人が入れてください");
+  assert.equal(toMonitorView(st).office, "止まった: ソフトが使用中");
   assert.throws(() => transition(st as Session, "entered", new Date()), /許されない遷移/);
 
   // 結果が「置けた」より先に着いた（sending のまま）
@@ -543,7 +543,7 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
     await writeSession(dir, done);
     const sd = await submitInvoice(dir, { box: folderBox(ro, NOMOUNT), timeoutMs: 1000 }, done);
     assert.equal(sd.status, "sending");
-    assert.equal(toMonitorView(sd).office, "事務所に届きません・つながったら送ります");
+    assert.equal(toMonitorView(sd).office, "未送信");
     const other = approvedSession({ ...decided, id: `m${seq++}` });
     await writeSession(dir, other);
     const sm = await submitInvoice(dir, { box: folderBox(missing, NOMOUNT), timeoutMs: 1000 }, other);

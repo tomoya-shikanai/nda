@@ -112,24 +112,24 @@ function customerBadge(s: Session | null, label: string | null): string | null {
   return "お客様: 未指定";
 }
 
+/** 確認事項の帯の「✓ 承認済み」の後ろに出す短い札（吹き出しの文と同じことを二重に言わない）。 */
 function officeBadge(s: Session | null): string | null {
   if (s === null) return null;
   switch (s.status) {
     case "done":
-      return s.customerRequired ? "事務所に送ります" : null;
+      return s.customerRequired ? "これから送る" : null;
     case "sending":
-      if (!s.office?.lastError) return "事務所に送っています";
-      return "事務所に届きません・つながったら送ります";
+      return s.office?.lastError ? "未送信" : "送信中";
     case "sent":
-      return "事務所に届きました。入れています";
+      return "事務所に届いた";
     case "entered":
-      return `${s.office?.result?.enteredLines ?? 0}行入れました。保存は人が押してください`;
+      return "業務ソフトに入った";
     case "stopped": {
       const r = s.office?.result?.reason ?? null;
-      if (r === "busy") return "事務所のソフトが使用中です。人が入れてください";
-      if (r === "appNotRunning") return "事務所のソフトが開いていません";
-      if (r === "unknownItem") return "事務所で止まりました: 品目が見つかりません";
-      return "事務所で止まりました。人が入れてください";
+      if (r === "busy") return "止まった: ソフトが使用中";
+      if (r === "appNotRunning") return "止まった: ソフトが開いていない";
+      if (r === "unknownItem") return "止まった: 品目が見つからない";
+      return "止まった";
     }
     default:
       return null;
