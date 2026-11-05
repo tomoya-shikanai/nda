@@ -27,8 +27,8 @@ from inputter import guard
 from inputter import send as sendmod
 from inputter.plan import COLUMNS_PATH, build_plan, load_json
 
-from .inbox import Abort, Hooks, Inbox
-from .message import Reject, check_request, envelope, load_config
+from .inbox import MAX_FILE_BYTES, Abort, Hooks, Inbox
+from .message import Reject, check_request, envelope, load_config, read_message
 
 DEFAULT_ROOT = Path(r"C:\nda\box")
 POLL_S = 0.5
@@ -38,10 +38,15 @@ def log(m: str) -> None:
     print(time.strftime("%H:%M:%S ") + m, flush=True)
 
 
-def _plan(job: dict, cfg: dict):
+def _plan(job: dict, cfg: dict, need_confirmed: bool = False):
     columns = load_json(COLUMNS_PATH)
+    if need_confirmed and not (isinstance(columns, dict) and columns.get("confirmed") is True):
+        # 起動の後に columns.json が書き換わっても、依頼ごとに読み直した方で判定する（Codex の指摘）
+        raise RuntimeError("columns.json が確認済みでない")
     steps = guard.check_plan(build_plan(job, {"items": cfg["item_codes"]}, columns))
     kp = sendmod.load_keypath(load_json(sendmod.KEYPATH_PATH))
+    if need_confirmed and not kp.confirmed:
+        raise RuntimeError("keypath.json が確認済みでない")
     return kp, columns, sendmod.prepare(steps, kp, columns)
 
 
@@ -92,6 +97,20 @@ def ask_operator(job: dict) -> bool:
     return True
 
 
+def wait_closed() -> None:
+    """送り始めた後に止まったら、人が伝票を保存せずに閉じるまで待つ。"""
+    print("", flush=True)
+    print("  入力を途中で止めました。伝票は保存せずに閉じてください（入れかけの行が残っています）。", flush=True)
+    while True:
+        try:
+            typed = input("  閉じたら「閉じた」と打って Enter> ").strip()
+        except EOFError:
+            time.sleep(5)
+            continue
+        if typed == "閉じた":
+            return
+
+
 def real_enter(prepared) -> int:
     from inputter.winsend import WinDesktop
 
@@ -115,7 +134,7 @@ def cmd_check(args) -> int:
     root = Path(args.root)
     try:
         cfg = _load_cfg(root)
-        job = check_request(load_json(args.file), cfg)
+        job = check_request(read_message(Path(args.file), MAX_FILE_BYTES), cfg)
         kp, _, groups = _plan(job, cfg)
     except Reject as ex:
         print(f"入れない（{ex.reason}）: {ex}", file=sys.stderr)
@@ -143,9 +162,14 @@ def cmd_run(args) -> int:
         if not confirmed():
             print("keypath.json と columns.json の confirmed が両方 true でないので、送らない。店で画面を確かめてから人が true にする。", file=sys.stderr)
             return 2
-        hooks = Hooks(prepare=lambda job: _plan(job, cfg), confirm=ask_operator, enter=real_enter,
-                      post=make_post(cfg), log=log)
+        hooks = Hooks(prepare=lambda job: _plan(job, cfg, need_confirmed=True), confirm=ask_operator, enter=real_enter,
+                      post=make_post(cfg), log=log, closed=wait_closed)
         box = Inbox(root, cfg, hooks)
+        try:
+            box.lock()
+        except RuntimeError as ex:
+            print(str(ex), file=sys.stderr)
+            return 2
         box.recover()
         box.resend()
         log(f"受け箱を見ています: {box.inbox}（Ctrl+C で終わる）")
@@ -167,7 +191,7 @@ def cmd_run(args) -> int:
                     continue
                 seen.add(p.name)
                 try:
-                    msg = load_json(p)
+                    msg = read_message(p, MAX_FILE_BYTES)
                     kind, rid, _ = envelope(msg)
                     if kind != "invoice.request":
                         continue
@@ -176,10 +200,11 @@ def cmd_run(args) -> int:
                     log(f"{rid[:8]} 入れてよい形。明細 {len(job['lines'])} 行。送るはずのキー:")
                     for line in sendmod.dry_run_lines(groups, kp):
                         print("    " + line, flush=True)
+                # ファイル名は工場（か誰か）が付けたもので、値が入り得るので出さない（Codex の指摘）
                 except Reject as ex:
-                    log(f"{p.name}: 入れない（{ex.reason}）: {ex}")
+                    log(f"受け箱のファイル: 入れない（{ex.reason}）: {ex}")
                 except Exception as ex:
-                    log(f"{p.name}: 確かめられない: {type(ex).__name__}")
+                    log(f"受け箱のファイル: 確かめられない: {type(ex).__name__}")
             time.sleep(POLL_S)
     except KeyboardInterrupt:
         return 0

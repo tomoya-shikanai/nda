@@ -10,11 +10,15 @@ item が item_codes にある、customerNo が allowed_customers にある。
 
 from __future__ import annotations
 
+import json
+import math
 import re
 import uuid
+from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
-from inputter.plan import PlanError, qty_tenths
+from inputter.plan import PlanError, _no_duplicate_keys, qty_tenths
 
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 NUM_RE = re.compile(r"^[0-9]{1,9}$")
@@ -57,7 +61,13 @@ def _uuid(v: object) -> bool:
 
 
 def _datetime(v: object) -> bool:
-    return isinstance(v, str) and re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$", v) is not None
+    if not isinstance(v, str) or re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$", v) is None:
+        return False
+    try:
+        datetime.fromisoformat(v.replace("Z", "+00:00"))  # 2026-99-99 のような、形だけ合う日時を止める（Codex の指摘）
+    except ValueError:
+        return False
+    return True
 
 
 def _quoted(v: object) -> bool:
@@ -67,11 +77,29 @@ def _quoted(v: object) -> bool:
 
 def _sec(v: object) -> bool:
     # 秒は金額でないので float も受ける（ファイルから読むと Decimal、手で組むと float）
-    return _num(v) or isinstance(v, float)
+    if isinstance(v, float):
+        return math.isfinite(v) and v >= 0
+    return _num(v) and Decimal(v).is_finite() and v >= 0
 
 
 def _bad(why: str) -> Reject:
     return Reject("invalid", why)
+
+
+def _no_constant(name: str) -> object:
+    raise ValueError("NaN・Infinity は受けない")
+
+
+def read_message(path: Path, max_bytes: int) -> object:
+    """受け箱のファイルを読む。読めないもの（大きすぎる・JSON でない・重複キー・NaN・深すぎる入れ子）は Reject。"""
+    if path.stat().st_size > max_bytes:
+        raise _bad("ファイルが大きすぎる")
+    try:
+        text = path.read_text(encoding="utf-8")
+        return json.loads(text, parse_float=Decimal, parse_constant=_no_constant, object_pairs_hook=_no_duplicate_keys)
+    except (PlanError, ValueError, UnicodeDecodeError, RecursionError):
+        # RecursionError: [ を 1 万個並べたファイルで見回りが落ちないように（Codex の指摘）
+        raise _bad("JSON として読めない") from None
 
 
 ENVELOPE_KEYS = {"v", "id", "sessionId", "sentAt", "kind"}

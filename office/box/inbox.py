@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -21,11 +22,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from inputter.plan import PlanError, load_json
-
-from .message import Reject, check_request, envelope
+from .message import Reject, check_request, envelope, read_message
 
 MAX_FILE_BYTES = 256 * 1024
+RESEND_EVERY_S = 30  # 工場に返せていない答えを送り直す間隔（24 時間まで）
 
 
 def now_iso() -> str:
@@ -73,6 +73,8 @@ class Hooks:
     enter: Callable[[object], int]  # 手順を送り、入れた行の数を返す。止まれば Abort か例外
     post: Callable[[dict], str]  # 工場に返す。"posted" / "noPi" / "failed" / "unauthorized"
     log: Callable[[str], None]
+    # 送り始めた後に止まったとき、人が伝票を保存せずに閉じるまで待つ。閉じてから stopped を返す（pi-office.md §3）
+    closed: Callable[[], None] = lambda: None
 
 
 class Inbox:
@@ -87,6 +89,8 @@ class Inbox:
             raise FileNotFoundError(f"受け箱が無い: {self.inbox}")
         self.work.mkdir(exist_ok=True)
         self.done.mkdir(exist_ok=True)
+        self.broken: set[str] = set()
+        self.last_resend = time.time()
 
     # --- 拾う ---------------------------------------------------------------
 
@@ -99,12 +103,7 @@ class Inbox:
         return out
 
     def _read(self, p: Path) -> object:
-        if p.stat().st_size > MAX_FILE_BYTES:
-            raise Reject("invalid", "ファイルが大きすぎる")
-        try:
-            return load_json(p)
-        except (PlanError, ValueError, UnicodeDecodeError):
-            raise Reject("invalid", "JSON として読めない") from None
+        return read_message(p, MAX_FILE_BYTES)
 
     def _set_aside(self, p: Path, why: str) -> None:
         """id の分からないファイルは、工場に返せないので、done に脇へ寄せて残すだけ。"""
@@ -134,7 +133,7 @@ class Inbox:
         """work に残っているもの（途中で落ちた）は、続きを入れずに stopped: other にする。"""
         for p in sorted(self.work.glob("*.json")):
             try:
-                msg = load_json(p)
+                msg = read_message(p, MAX_FILE_BYTES)
                 kind, rid, sid = envelope(msg)
             except Exception:
                 self._set_aside(p, "work に残っていた読めないファイル")
@@ -227,21 +226,58 @@ class Inbox:
             self._set_state(sid, status="stopped", attempt=attempt, requestId=rid)
             return self._finish(w, sid, rid, "stopped", 0, "invalid", f"入れる手順を作れない（{type(ex).__name__}）")
         try:
-            if not self.h.confirm(job):
-                raise Abort("other", "人が入力をやめた")
+            ok = self.h.confirm(job)
+        except Exception as ex:
+            ok = False
+            self.h.log(f"人の確かめを読めなかった（{type(ex).__name__}）")
+        if not ok:
+            self._set_state(sid, status="stopped", attempt=attempt, requestId=rid)
+            return self._finish(w, sid, rid, "stopped", 0, "other", "人が入力をやめた（何も送っていない）")
+        try:
             entered = self.h.enter(prepared)
-        except Abort as ex:
+        except BaseException as ex:  # 送っている途中で止まった（Ctrl+C も）。文は出さない（値が入り得る）
+            reason = ex.reason if isinstance(ex, Abort) else "other"
+            why = str(ex) if isinstance(ex, Abort) else f"入力が途中で止まった（{type(ex).__name__}）"
+            # 入れかけの伝票が開いたまま stopped を返すと、次の attempt が同じ伝票に重なる（Codex の指摘）。
+            # 人が保存せずに閉じるまで、状態は entering のまま待つ。待つ間に落ちても、work に残るので入れ直さない
+            self.h.closed()
             self._set_state(sid, status="stopped", attempt=attempt, requestId=rid)
-            return self._finish(w, sid, rid, "stopped", 0, ex.reason, str(ex))
-        except Exception as ex:  # 送っている途中で止まった。文は出さない（値が入り得る）
-            self._set_state(sid, status="stopped", attempt=attempt, requestId=rid)
-            return self._finish(w, sid, rid, "stopped", 0, "other", f"入力が途中で止まった（{type(ex).__name__}）。画面は人が確かめて閉じる")
+            self._finish(w, sid, rid, "stopped", 0, reason, why + "。伝票は保存せずに閉じた")
+            if not isinstance(ex, Exception):
+                raise
+            return self.record(rid)
         self._set_state(sid, status="entered", attempt=attempt, requestId=rid)
         return self._finish(w, sid, rid, "entered", entered, None, "保存の手前まで入れた。保存は人が押す")
 
     def run_once(self) -> int:
         n = 0
         for p in self.pending():
-            if self.handle(p) is not None:
-                n += 1
+            if p.name in self.broken:
+                continue
+            try:
+                if self.handle(p) is not None:
+                    n += 1
+            except Exception as ex:  # 1 ファイルの思わぬ失敗で見回りを止めない。ファイル名・文は出さない（値が入り得る）
+                self.broken.add(p.name)
+                self.h.log(f"受け箱のファイルを処理できなかった（{type(ex).__name__}）。人が見てください")
+        if time.time() - self.last_resend >= RESEND_EVERY_S:
+            self.last_resend = time.time()
+            self.resend()
         return n
+
+    def lock(self) -> None:
+        """同じ受け箱を 2 つの見回りが扱うと、同じ作業を 2 回入れ得る（Codex の指摘）。1 つだけにする。"""
+        self._lockf = open(self.root / ".box.lock", "a+b")
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                self._lockf.seek(0)
+                msvcrt.locking(self._lockf.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._lockf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self._lockf.close()
+            raise RuntimeError("ほかの見回りがこの受け箱を使っている") from None

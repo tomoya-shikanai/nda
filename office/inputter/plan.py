@@ -107,6 +107,9 @@ def qty_tenths(qty: object) -> int:
         exp += 1
     if sign or exp < -1 or len(digits) > 6:
         raise PlanError(f"数量が 0.1 刻みでない: {qty!r}")
+    if exp > 4:
+        # 1e999999999 のような数で、下の 10 ** (exp + 1) が巨大な計算にならないよう先に止める（Codex の指摘）
+        raise PlanError(f"数量が 0.1〜{MAX_QTY} の範囲にない: {qty!r}")
     n = int("".join(map(str, digits)))
     tenths = n * (10 ** (exp + 1))
     if tenths <= 0 or tenths > MAX_QTY * 10:

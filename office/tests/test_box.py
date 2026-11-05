@@ -257,6 +257,95 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(len(fails), 2)
 
 
+class CodexFixTest(unittest.TestCase):
+    """Codex の 1 回目の指摘の再現。"""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "in").mkdir()
+        self.fh = FakeHooks()
+        self.closed = []
+        hooks = self.fh.hooks()
+        hooks.closed = lambda: self.closed.append(1)
+        self.hooks = hooks
+        self.box = Inbox(self.root, CFG, hooks)
+
+    def tearDown(self):
+        if getattr(self.box, "_lockf", None):
+            self.box._lockf.close()
+        shutil.rmtree(self.root)
+
+    def write(self, text, name="r.json"):
+        p = self.root / "in" / name
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_bad_datetime_and_nan(self):
+        with self.assertRaises(Reject):
+            check_request(request(approvedAt="2026-99-99T99:99:99Z"), CFG)
+        bad = json.dumps(request(), default=float).replace('"startSec": 1.0', '"startSec": NaN', 1)
+        self.write(bad)
+        self.box.run_once()
+        self.assertEqual(self.fh.entered, [])
+        self.assertEqual(len(list((self.root / "done").glob("unreadable-*.json"))), 1)
+
+    def test_huge_exponent_qty_is_rejected_fast(self):
+        m = json.dumps(request(), default=float).replace('"qty": 4,', '"qty": 1e999999999,', 1)
+        self.write(m)
+        self.box.run_once()
+        self.assertEqual(self.fh.entered, [])
+        self.assertEqual(self.fh.posted[-1]["reason"], "invalid")
+
+    def test_deep_nesting_does_not_kill_loop(self):
+        self.write("[" * 100000 + "0" + "]" * 100000, "a.json")
+        self.write(json.dumps(request(), default=float), "b.json")
+        self.box.run_once()
+        self.assertEqual(len(self.fh.entered), 1)
+
+    def test_second_watcher_refused(self):
+        self.box.lock()
+        other = Inbox(self.root, CFG, self.fh.hooks())
+        with self.assertRaises(RuntimeError):
+            other.lock()
+
+    def test_closed_waited_before_stopped_after_send_began(self):
+        order = []
+
+        def boom(job):
+            raise RuntimeError("x")
+
+        self.fh._enter = boom
+        self.hooks.closed = lambda: order.append("closed")
+        post = self.hooks.post
+        self.hooks.post = lambda r: order.append(r["outcome"]) or post(r)
+        self.write(json.dumps(request(), default=float))
+        self.box.run_once()
+        self.assertEqual(order, ["closed", "stopped"])
+
+    def test_decline_does_not_wait_closed(self):
+        self.fh._confirm = False
+        self.write(json.dumps(request(), default=float))
+        self.box.run_once()
+        self.assertEqual(self.closed, [])
+
+    def test_failed_post_is_resent_while_running(self):
+        import box.inbox as inbox_mod
+
+        calls = []
+        self.hooks.post = lambda r: calls.append(r) or "failed"
+        self.write(json.dumps(request(), default=float))
+        self.box.run_once()
+        self.hooks.post = lambda r: calls.append(r) or "posted"
+        self.box.last_resend -= inbox_mod.RESEND_EVERY_S
+        self.box.run_once()
+        self.assertEqual(len(calls), 2)
+
+    def test_send_needs_confirmed_per_request(self):
+        # リポジトリの keypath・columns は未確認なので、送る形の手順は作らない
+        with self.assertRaises(RuntimeError):
+            boxmain._plan(check_request(request(), CFG), CFG, need_confirmed=True)
+
+
 class EndToEndTest(unittest.TestCase):
     """受け箱 → 確かめ → 手順 → 偽の伝票の画面に送る、の一周。"""
 
