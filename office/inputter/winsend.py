@@ -173,15 +173,15 @@ class WinDesktop:
 
             h = self._win.foreground_window()
             pid = self._win.pid_of_window(h)
-            if not h or not pid:
-                return None
-            # 窓の位置は、記録と同じ UI Automation の枠で取る（keypath の位置は記録から測った）
-            rect = _rect(auto.ControlFromHandle(h).BoundingRectangle)
-            if rect is None:
-                return None
-            return WindowInfo(hwnd=h, pid=pid, exe=psutil.Process(pid).name(), class_name=_class_name(h), title=_title(h), rect=rect)
-        except Exception:
-            return None
+        except Exception as ex:
+            raise OSError("前面の窓を読めなかった") from ex
+        if not h or not pid:
+            return None  # 前面の窓が無い（切り替えの間など）。待ってよい
+        # ここから先の読み取りの失敗は例外のまま上げる（send が止める）。窓の位置は記録と同じ UI Automation の枠で取る
+        rect = _rect(auto.ControlFromHandle(h).BoundingRectangle)
+        if rect is None:
+            raise OSError("前面の窓の位置を読めなかった")
+        return WindowInfo(hwnd=h, pid=pid, exe=psutil.Process(pid).name(), class_name=_class_name(h), title=_title(h), rect=rect)
 
     def focused(self) -> FocusInfo | None:
         try:

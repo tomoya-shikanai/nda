@@ -61,6 +61,8 @@ class FakeDesktop:
 
     # -- Desktop --
     def foreground(self):
+        if getattr(self, "fg_raise", False):
+            raise OSError("読めない")
         return self.window
 
     def _rect(self, row, f):
@@ -290,6 +292,16 @@ class RunTest(unittest.TestCase):
             self.desk.window = WindowInfo(**{**self.desk.window.__dict__, **change})
             with self.subTest(change=change):
                 self.assertStops("来ない", sent_max=0)
+
+    def test_dialog_during_start_wait_stops_even_if_closed_later(self):
+        # 始める前の待ちでダイアログが出たら、消えても始めない（Codex 6 回目）
+        self.desk.pos = 1  # まだ最初の欄に来ていない
+        self.desk.extra_windows.append(TopWindow(hwnd=300, class_name="#32770", title="確認"))
+        self.assertStops("ダイアログ", sent_max=0)
+
+    def test_foreground_read_failure_during_start_stops(self):
+        self.desk.fg_raise = True
+        self.assertStops("前面の窓を読めなかった", sent_max=0)
 
     def test_start_needs_first_field_and_quiet(self):
         self.desk.pos = 1  # 作業内容にフォーカス

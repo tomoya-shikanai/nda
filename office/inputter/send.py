@@ -395,8 +395,20 @@ class Sender:
             return "前面の窓が、始めたときの伝票の画面と違う"
         return None
 
+    def _foreground(self) -> WindowInfo | None:
+        """前面の窓を読む。読み取りが失敗したら（例外）止める（Codex 6 回目）。None は「前面の窓が無い」。"""
+        try:
+            return self.desk.foreground()
+        except Exception as ex:
+            raise Stop(f"前面の窓を読めなかった（{type(ex).__name__}）") from None
+
+    def _check_dialogs(self) -> None:
+        for top in self.desk.visible_windows():
+            if top.class_name == DIALOG_CLASS:
+                raise Stop("ダイアログ（#32770）が出ている")
+
     def _check_window(self) -> WindowInfo:
-        w = self.desk.foreground()
+        w = self._foreground()
         problem = self._window_ok(w)
         if problem:
             raise Stop(problem)
@@ -522,13 +534,16 @@ class Sender:
         first = self.groups[0].target
         waited = 0.0
         while True:
-            w = self.desk.foreground()
+            # 始める前の待ちでも、ダイアログが出たら止める（出て消えた後に始めない。Codex 6 回目）
+            self._check_dialogs()
+            w = self._foreground()
             ready = False
             if self._window_ok(w) is None:
                 f = self._focused()
                 idle = _tick_after(self.desk.tick_now(), self.desk.last_input_tick())
                 ready = self._focus_problem(w, f, first) is None and idle >= START_QUIET_MS and not self.desk.keys_held()
             if ready:
+                self._check_window()  # 小窓・ダイアログも含めて、始める直前にもう一度すべて確かめる
                 self.desk.reset_human_input()  # 人が欄をクリックした分は数えない。ここから後の人の入力で止める
                 self.hwnd, self.pid = w.hwnd, w.pid
                 self.tick = self.desk.last_input_tick()
