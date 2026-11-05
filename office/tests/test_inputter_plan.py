@@ -153,3 +153,31 @@ class BuildPlanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QtyPrecisionTest(unittest.TestCase):
+    """Codex の指摘: 浮動小数の丸めで、承認した数と違う数を打たない。"""
+
+    def test_tiny_qty_is_rejected_not_zero(self):
+        with self.assertRaises(PlanError):
+            build_plan(_job(qty=1e-12), ITEMS, COLUMNS)
+
+    def test_almost_integer_is_rejected(self):
+        with self.assertRaises(PlanError):
+            build_plan(_job(qty=1.00000000001), ITEMS, COLUMNS)
+
+    def test_huge_qty_is_rejected(self):
+        with self.assertRaises(PlanError):
+            build_plan(_job(qty=1000000000000000.1), ITEMS, COLUMNS)
+
+    def test_nan_and_inf_are_rejected(self):
+        for q in (float("nan"), float("inf")):
+            with self.assertRaises(PlanError):
+                build_plan(_job(qty=q), ITEMS, COLUMNS)
+
+    def test_expected_lines_rejects_quarter(self):
+        with self.assertRaises(PlanError):
+            expected_lines(_job(qty=1.25), ITEMS["items"])
+
+    def test_tenths_still_ok(self):
+        self.assertIn({"field": "明細1.数量", "action": "type", "value": "0.1"}, build_plan(_job(qty=0.1), ITEMS, COLUMNS))

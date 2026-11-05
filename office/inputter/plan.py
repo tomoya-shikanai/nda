@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 from . import guard
@@ -72,12 +73,29 @@ def load_columns(data: object) -> dict:
     return data
 
 
+MAX_QTY = 9999
+
+
+def qty_tenths(qty: object) -> int:
+    """数量を 10 倍の整数にする（DB の持ち方）。0.1 刻みでぴったり表せないもの・範囲外は止める。
+
+    浮動小数の掛け算と許容誤差は使わない（1e-12 を 0 に、大きな数を別の数に丸めてしまう。Codex の指摘）。
+    repr で書いた 10 進の値を Decimal でそのまま扱う。
+    """
+    if not _is_num(qty):
+        raise PlanError(f"数量が数でない: {qty!r}")
+    d = Decimal(repr(qty)) * 10
+    if not d.is_finite() or d != d.to_integral_value():
+        raise PlanError(f"数量が 0.1 刻みでない: {qty!r}")
+    tenths = int(d)
+    if tenths <= 0 or tenths > MAX_QTY * 10:
+        raise PlanError(f"数量が 0.1〜{MAX_QTY} の範囲にない: {qty!r}")
+    return tenths
+
+
 def _qty_text(qty: float) -> str:
     # DB は数量を 10 倍で持つ（0.1 刻み）。画面には元の数（4 なら 4）を打つ
-    tenths = qty * 10
-    if abs(tenths - round(tenths)) > 1e-9:
-        raise PlanError(f"数量が 0.1 刻みでない: {qty}")
-    tenths = round(tenths)
+    tenths = qty_tenths(qty)
     return str(tenths // 10) if tenths % 10 == 0 else f"{tenths // 10}.{tenths % 10}"
 
 
@@ -94,6 +112,10 @@ def _line_values(i: int, line: object, items: dict[str, int]) -> dict:
         raise PlanError(f"{where}: 数量か単価が null。推測で埋めないので手順を作らない")
     if not _is_num(qty) or qty <= 0:
         raise PlanError(f"{where}: 数量が正の数でない: {qty!r}")
+    try:
+        qty_tenths(qty)
+    except PlanError as e:
+        raise PlanError(f"{where}: {e}") from None
     if not _is_num(price) or price < 0 or price != int(price):
         raise PlanError(f"{where}: 単価が 0 以上の整数（円）でない: {price!r}")
     if item not in items:

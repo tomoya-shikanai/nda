@@ -55,3 +55,20 @@ class ReadbackTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReadbackStrictTest(unittest.TestCase):
+    """Codex の指摘: 丸めや空白の除き方で、違いを一致にしない。"""
+
+    def test_quarter_qty_is_not_equal_to_rounded_db(self):
+        r = compare([{"code": 101, "name": "A", "qty": 1.25, "unit_price": 1}], [{"code": 101, "name": "A", "qty": 12, "unit_price": 1}])
+        self.assertEqual([m["field"] for m in r], ["qty"])
+
+    def test_leading_space_tab_newline_are_differences(self):
+        for name in ("\tA\n", " A", "A\n"):
+            r = compare([{"code": 101, "name": "A", "qty": 1, "unit_price": 1}], [{"code": 101, "name": name, "qty": 10, "unit_price": 1}])
+            self.assertEqual([m["field"] for m in r], ["name"], name)
+
+    def test_trailing_padding_is_ignored(self):
+        for name in ("A  ", "A　"):
+            self.assertEqual(compare([{"code": 101, "name": "A", "qty": 1, "unit_price": 1}], [{"code": 101, "name": name, "qty": 10, "unit_price": 1}]), [])
