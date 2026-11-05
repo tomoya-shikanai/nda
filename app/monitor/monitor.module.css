@@ -27,6 +27,8 @@
 .s_asking { --accent: #ffc400; --accent-ink: #1d1b26; }
 .s_done { --accent: #23772d; }
 .s_awaiting { --accent: #0f7f65; }
+/* 依頼を事務所の受け箱に置けていない（送り直し中）。成功の緑と分ける */
+.s_trouble { --accent: #c2410c; --accent-ink: #fff; }
 
 .top {
   height: calc(120 * var(--u));

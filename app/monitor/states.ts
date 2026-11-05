@@ -27,8 +27,10 @@ export function faceOf(state: SessionStatus, awaiting: boolean): FaceKey {
   return (STATE_KEYS as readonly string[]).includes(state) ? (state as StateKey) : FACE_OF[state as Exclude<SessionStatus, StateKey>];
 }
 
-/** 作業の状態（と承認待ち）の札。 */
-export type LabelKey = SessionStatus | "awaiting";
+/** 作業の状態（と承認待ち・依頼を置けていない）の札。 */
+export type LabelKey = SessionStatus | "awaiting" | "trouble";
+/** 依頼を受け箱に置けていない（送り直し中）ときの状態の札。 */
+export const TROUBLE_LABEL = "事務所に届きません・つながったら送ります";
 
 /**
  * 画面の札と相棒の表情の種類。作業の状態に、asking のうち確認事項が 0 件の「承認待ち」を足したもの

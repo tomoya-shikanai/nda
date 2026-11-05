@@ -407,12 +407,14 @@ test("状態: stopped の理由で札が変わる。置けなければ sending �
   assert.equal(sending.office?.lastError, "受け箱に置けませんでした（Error）");
   assert.equal(toMonitorView(sending).say, SAY.sendFailed("writeFailed"));
   assert.equal(toMonitorView(sending).office, "事務所に届きません・つながったら送ります");
+  assert.equal(toMonitorView(sending).officeTrouble, true);
   // 30 秒たつまでは送り直さない
   fail = false;
   const early = await tickOffice(dir, flaky, sending, new Date(t0.getTime() + (RESEND_EVERY_SEC - 1) * 1000));
   assert.equal(early.status, "sending");
   const later = await tickOffice(dir, flaky, early, new Date(t0.getTime() + RESEND_EVERY_SEC * 1000));
   assert.equal(later.status, "sent");
+  assert.equal(toMonitorView(later).officeTrouble, false);
   const [req] = await readBox(box);
   assert.equal(req.id, sending.office?.requestId, "送り直しても同じ id");
 

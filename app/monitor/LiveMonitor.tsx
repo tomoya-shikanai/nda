@@ -152,15 +152,20 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<LabelKey,
     ul.scrollTop = Math.max(0, bottom - ul.clientHeight);
   }, [view.lines]);
 
-  const face: FaceKey = view.awaitingApproval ? "awaiting" : (AFTER_FACE[view.state] ?? (view.state as FaceKey));
-  const label = labels[view.awaitingApproval ? "awaiting" : view.state];
+  // 依頼を置けていないときは、表情は困った顔（asking）、札は失敗の色と言葉
+  const face: FaceKey = view.awaitingApproval
+    ? "awaiting"
+    : view.officeTrouble
+      ? "asking"
+      : (AFTER_FACE[view.state] ?? (view.state as FaceKey));
+  const label = labels[view.awaitingApproval ? "awaiting" : view.officeTrouble ? "trouble" : view.state];
   const asks = view.questions.length;
   const okCount = view.lines.filter((l) => l.status === "ok").length;
   const total = yenText(view.total);
   const dense = view.lines.length > DENSE_LINES;
 
   return (
-    <main className={`${styles.screen} ${styles[`s_${face}`]}`}>
+    <main className={`${styles.screen} ${styles[`s_${face}`]} ${view.officeTrouble ? styles.s_trouble : ""}`}>
       <header className={styles.top}>
         <div className={styles.brand}>
           んだ <span>nDa</span>

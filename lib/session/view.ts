@@ -43,6 +43,8 @@ export type MonitorView = {
   customer: string | null;
   /** 承認の後の事務所への入力の札（§4・§5）。承認の前は null。 */
   office: string | null;
+  /** 依頼を受け箱に置けていない（送り直し中）。画面は状態の札を失敗の色と言葉にする（成功と同じ緑にしない）。 */
+  officeTrouble: boolean;
   credit: typeof VOICE_CREDIT;
 };
 
@@ -211,6 +213,7 @@ export function toMonitorView(s: Session | null, label: string | null = null): M
     approved: s?.approved ?? false,
     customer: customerBadge(s, label),
     office: officeBadge(s),
+    officeTrouble: s?.status === "sending" && Boolean(s.office?.lastError),
     credit: VOICE_CREDIT,
   };
 }
