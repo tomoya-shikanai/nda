@@ -1,6 +1,7 @@
 /**
  * 偽の事務所を起動する（Mac の中だけで「話す → 照合 → 承認 → entered」を一周させる。lib/office/fake.ts）。
  * 使い方: NDA_OFFICE_BOX=<受け箱> NDA_OFFICE_TOKEN=<合言葉> NDA_FACTORY_URL=http://127.0.0.1:3100 pnpm office:fake
+ * 工場（next）の側は同じ NDA_OFFICE_BOX・NDA_OFFICE_TOKEN と NDA_OFFICE_BOX_REQUIRE_MOUNT=0 で起動する（Mac のフォルダは mount した先でないため）。
  * 客の一覧は架空の tests/fixtures/customers.json（NDA_FAKE_CUSTOMERS で変えられる）。実の一覧は渡さない。
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";

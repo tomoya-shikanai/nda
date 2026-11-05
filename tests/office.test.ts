@@ -16,7 +16,7 @@ import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { answerQuery, answerRequest, processBox } from "../lib/office/fake";
 import { applyToFactory, buildCustomerQuery, expireQuery, QUERY_TIMEOUT_SEC, RESEND_EVERY_SEC } from "../lib/office/flow";
 import { clearLabels, getLabel } from "../lib/office/labels";
-import { BOX_MARKER, type BoxWriter, folderBox, type OfficeLink, officeFromEnv, submitInvoice, tickOffice } from "../lib/office/link";
+import { BOX_MARKER, BoxMissingError, type BoxWriter, folderBox, requireMountFromEnv, type OfficeLink, officeFromEnv, submitInvoice, tickOffice } from "../lib/office/link";
 import { handleOfficeReply, tokenMatches } from "../lib/office/reply";
 import {
   CustomerAnswer,
@@ -107,7 +107,7 @@ async function env() {
   await mkdir(box, { recursive: true });
   await writeFile(join(box, BOX_MARKER), "");
   process.env.NDA_SESSION_DIR = dir;
-  const office: OfficeLink = { box: folderBox(box), timeoutMs: 1000 };
+  const office: OfficeLink = { box: folderBox(box, NOMOUNT), timeoutMs: 1000 };
   return { dir, box, office };
 }
 
@@ -126,6 +126,8 @@ const answer = (q: { id: string; sessionId: string }, result: CustomerAnswer["re
 });
 /** 作業の話の後に、2 文あけて客を言う（ナンバーの文と前後の文は伏せるので、作業の文を離す）。 */
 const TALK = "脱着4本。お願いします。えっと。仮田さんの1111。";
+/** 試験の一時フォルダは mount した先でないので、mount の確かめを外す（本番の既定は確かめる）。 */
+const NOMOUNT = { requireMount: false };
 const FOUND = { status: "found" as const, customerNo: "cust-001", carNo: "car-cust-001", label: "仮田 様・架空の軽トラ" };
 
 // --- 型 ---
@@ -499,7 +501,7 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
       transcript: fict([TALK]),
       ledger,
       extract: extractor(),
-      office: { box: folderBox(box), timeoutMs: 1000 },
+      office: { box: folderBox(box, NOMOUNT), timeoutMs: 1000 },
       id: `m${seq++}`,
     });
 
@@ -533,12 +535,29 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
     const decided = { ...s3, customer: { customerNo: "c", carNo: "k" }, questions: [] };
     await writeSession(dir, decided);
     const done = approvedSession(decided);
-    const sd = await submitInvoice(dir, { box: folderBox(ro), timeoutMs: 1000 }, done);
+    const sd = await submitInvoice(dir, { box: folderBox(ro, NOMOUNT), timeoutMs: 1000 }, done);
     assert.equal(sd.status, "sending");
     assert.equal(toMonitorView(sd).office, "事務所の PC に届きません（書き込めません）。つながったら送ります");
-    const sm = await submitInvoice(dir, { box: folderBox(missing), timeoutMs: 1000 }, approvedSession({ ...decided, id: `m${seq++}` }));
+    const sm = await submitInvoice(dir, { box: folderBox(missing, NOMOUNT), timeoutMs: 1000 }, approvedSession({ ...decided, id: `m${seq++}` }));
     assert.equal(toMonitorView(sm).office, "事務所の PC に届きません（共有フォルダが見えません）。つながったら送ります");
   } finally {
     await chmod(ro, 0o700);
   }
+});
+
+test("Codex 2: mount の確かめ。受け箱が / と同じ dev なら置かない。書いている間に目印が消えたら（unmount）置いたファイルを消して見えない扱い", async () => {
+  const root = await tmp();
+  const box = join(root, "in");
+  await mkdir(box);
+  await writeFile(join(box, BOX_MARKER), "");
+  // 受け箱が rootDir と同じ dev（mount した先でない）
+  await assert.rejects(folderBox(box, { rootDir: root }).put("a.json", "{}"), BoxMissingError);
+  assert.deepEqual(await readdir(box), [BOX_MARKER]);
+  // 書いている間に unmount された（目印が見えなくなった）
+  const gone = folderBox(box, { requireMount: false, beforeCommit: () => rm(join(box, BOX_MARKER)) });
+  await assert.rejects(gone.put("b.json", "{}"), BoxMissingError);
+  assert.deepEqual(await readdir(box), [], "置いたファイルも .tmp も残さない");
+  // 環境変数: 既定は確かめる。0・false・no で外す
+  assert.equal(requireMountFromEnv({} as unknown as NodeJS.ProcessEnv), true);
+  for (const v of ["0", "false", "no"]) assert.equal(requireMountFromEnv({ NDA_OFFICE_BOX_REQUIRE_MOUNT: v } as unknown as NodeJS.ProcessEnv), false);
 });

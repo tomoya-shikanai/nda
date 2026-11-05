@@ -9,7 +9,7 @@
  * 問い合わせの said（原文）は、受け箱に書くためのメモリの上だけに置く。作業ファイルにもログにも書かない。
  * 作業ファイルの読み書きは「読む → 当てる → 書く」で、同時の書き込みのロックはまだ無い（#47）。
  */
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { access, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readSession, type Session, writeSession } from "../session/store";
@@ -40,28 +40,63 @@ export class BoxMissingError extends Error {}
 /** 受け箱は見えるが書けない（権限・容量・共有の切断など）。 */
 export class BoxWriteError extends Error {}
 
-/** ローカルのフォルダ（本番は SMB の共有を mount した先。Mac の中の偽の事務所・試験も同じ）。.<名前>.tmp に書いて rename。 */
-export function folderBox(dir: string): BoxWriter {
+export type FolderBoxOptions = {
+  /**
+   * 受け箱が mount した先にあることを確かめる（既定は真。本番）。偽の事務所・試験の一時フォルダは mount した先でないので偽にする
+   * （NDA_OFFICE_BOX_REQUIRE_MOUNT=0）。確かめ方: 受け箱の dev が rootDir（既定 /）の dev と違う。
+   */
+  requireMount?: boolean;
+  rootDir?: string;
+  /** 試験用: .tmp を書いた後、rename の前に呼ぶ（その間に unmount された場合を作る）。 */
+  beforeCommit?: () => Promise<void>;
+};
+
+/**
+ * ローカルのフォルダ（本番は SMB の共有を mount した先。Mac の中の偽の事務所・試験も同じ）。.<名前>.<乱数>.tmp に書いて rename。
+ * 書く前に、フォルダ・目印・mount を確かめる。書いて rename した後にも、置いたファイルが目印と同じ dev にあり目印がまだあることを
+ * 確かめ、違えば（途中で unmount されてローカルに書いた）置いたファイルを消して BoxMissingError。.tmp の名前は書き手ごとに違う。
+ */
+export function folderBox(dir: string, opts: FolderBoxOptions = {}): BoxWriter {
+  const requireMount = opts.requireMount ?? true;
+  const rootDir = opts.rootDir ?? "/";
+  const marker = join(dir, BOX_MARKER);
   return {
     kind: "folder",
     async put(name, body) {
+      let rootDev: number | null = null;
       try {
         if (!(await stat(dir)).isDirectory()) throw new Error("not a directory");
-        await access(join(dir, BOX_MARKER));
+        await access(marker);
+        if (requireMount) {
+          rootDev = (await stat(rootDir)).dev;
+          if ((await stat(dir)).dev === rootDev) throw new Error("not mounted");
+        }
       } catch {
         throw new BoxMissingError("受け箱が見えない");
       }
-      const tmp = join(dir, `.${name}.tmp`);
+      const tmp = join(dir, `.${name}.${randomBytes(6).toString("hex")}.tmp`);
+      const final = join(dir, name);
       try {
         await writeFile(tmp, body, { encoding: "utf8", mode: 0o600 });
-        await rename(tmp, join(dir, name));
+        await opts.beforeCommit?.();
+        await rename(tmp, final);
       } catch {
         await rm(tmp, { force: true }).catch(() => {});
         throw new BoxWriteError("受け箱に書けない");
       }
+      try {
+        const [f, m] = await Promise.all([stat(final), stat(marker)]);
+        if (f.dev !== m.dev || (rootDev !== null && f.dev === rootDev)) throw new Error("moved");
+      } catch {
+        await rm(final, { force: true }).catch(() => {});
+        throw new BoxMissingError("書いている間に受け箱が見えなくなった");
+      }
     },
   };
 }
+
+/** NDA_OFFICE_BOX_REQUIRE_MOUNT が 0・false・no なら mount を確かめない（偽の事務所・試験）。既定は確かめる。 */
+export const requireMountFromEnv = (env: NodeJS.ProcessEnv) => !/^(0|false|no)$/i.test(env.NDA_OFFICE_BOX_REQUIRE_MOUNT ?? "");
 
 /** 置けなかった理由の種類（画面の札を分ける）。 */
 export const unreachableReason = (e: unknown): "boxMissing" | "writeFailed" =>
@@ -84,7 +119,9 @@ export type OfficeLink = { box: BoxWriter; timeoutMs: number };
 
 /** 環境変数から。NDA_OFFICE_BOX（フォルダ）か NDA_OFFICE_SFTP。どちらも無ければ null（事務所なし。客の照合もしない）。 */
 export function officeFromEnv(env: NodeJS.ProcessEnv = process.env): OfficeLink | null {
-  if (env.NDA_OFFICE_BOX) return { box: folderBox(env.NDA_OFFICE_BOX), timeoutMs: PUT_TIMEOUT_MS }; // 既定（§9-4）
+  if (env.NDA_OFFICE_BOX) {
+    return { box: folderBox(env.NDA_OFFICE_BOX, { requireMount: requireMountFromEnv(env) }), timeoutMs: PUT_TIMEOUT_MS }; // 既定（§9-4）
+  }
   if (env.NDA_OFFICE_SFTP) return { box: sftpBox(env.NDA_OFFICE_SFTP), timeoutMs: PUT_TIMEOUT_MS };
   return null;
 }
