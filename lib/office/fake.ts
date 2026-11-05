@@ -17,7 +17,7 @@ export function answerQuery(q: CustomerQuery, customers: Customer[], now = new D
   const base = { v: 1 as const, id: randomUUID(), sessionId: q.sessionId, sentAt: now.toISOString(), kind: "customer.answer" as const, queryId: q.id };
   if (c === undefined) return { ...base, result: { status: "retry", reason: "none" } };
   const surname = c.name.split(/\s+/)[0];
-  return { ...base, result: { status: "found", customerNo: c.id, carNo: `car-${c.id}`, label: `${surname} 様・${c.car}` } };
+  return { ...base, result: { status: "found", customerNo: c.id, carNo: `car-${c.id}`, label: `${surname}様・${c.car}` } };
 }
 
 /** 入力の結果。偽物は業務ソフトに触らず、全行を入れたことにする。 */

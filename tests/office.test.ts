@@ -128,7 +128,7 @@ const answer = (q: { id: string; sessionId: string }, result: CustomerAnswer["re
 const TALK = "脱着4本。お願いします。えっと。仮田さんの1111。";
 /** 試験の一時フォルダは mount した先でないので、mount の確かめを外す（本番の既定は確かめる）。 */
 const NOMOUNT = { requireMount: false };
-const FOUND = { status: "found" as const, customerNo: "cust-001", carNo: "car-cust-001", label: "仮田 様・架空の軽トラ" };
+const FOUND = { status: "found" as const, customerNo: "cust-001", carNo: "car-cust-001", label: "仮田様・架空の軽トラ" };
 
 // --- 型 ---
 
@@ -206,7 +206,7 @@ test("照合は抽出を待たずに置く。抽出より先に答えが返っ�
   assert.deepEqual(s.questions, [], "客の質問は消えている");
   const v = toMonitorView(s, getLabel(s.id));
   assert.equal(v.awaitingApproval, true);
-  assert.equal(v.customer, "お客様: 仮田 様・架空の軽トラ");
+  assert.equal(v.customer, "お客様: 仮田様・架空の軽トラ");
   assert.equal(toMonitorView(s).customer, "お客様: 決まりました", "label が無ければ（再起動の後など）");
 });
 
