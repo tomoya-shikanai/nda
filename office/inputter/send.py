@@ -336,6 +336,17 @@ def readback_matches(t: Target, sent: str, name: str) -> bool:
     return a == b and a == a.to_integral_value()
 
 
+def prefix_matches(t: Target, prefix: str, name: str) -> bool:
+    """打っている途中の Name が、ここまで打った文字と合うか。数の欄は桁区切りのカンマを除いて比べる。"""
+    if not t.numeric:
+        return name == prefix
+    n = name.strip(" ")
+    if _NUM_COMMA.fullmatch(n.rstrip(".")):
+        n = n.replace(",", "")
+    # 小数点を打った直後は、欄が「1.」と出すか「1」と出すか分からないので、どちらも認める
+    return n == prefix or (prefix.endswith(".") and n == prefix[:-1])
+
+
 # ---- 送る ----
 
 
@@ -515,7 +526,11 @@ class Sender:
             if g.text is not None:
                 if f.name != "":
                     raise Stop(f"{t.field}: 打つ前の欄が空でない（読み返し {mask(f.name)}）")
-                for ch in g.text:
+                for i, ch in enumerate(g.text):
+                    if i:
+                        # 前の文字までが欄に入ったのを確かめてから次の文字を送る（Codex の指摘）
+                        prefix = g.text[:i]
+                        self._wait_name(t, lambda name: prefix_matches(t, prefix, name), "打っている途中の読み返しが合わない")
                     self._send_char(t, ch)
                 self._wait_name(t, lambda name: readback_matches(t, g.text, name), "打った値と読み返しが合わない")
                 self.log(f"{t.field}: 打った {mask(g.text)}、読み返し一致")

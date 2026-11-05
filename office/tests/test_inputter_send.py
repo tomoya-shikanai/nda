@@ -417,6 +417,20 @@ class RunTest(unittest.TestCase):
         self.assertNotIn(("key", "Enter"), self.desk.sent)
         self.assertIn("***(2 文字)", str(e))
 
+    def test_dropped_first_char_stops_before_rest(self):
+        # 最初の文字が欄に入らなければ、残りの文字を送らない
+        self.desk.drop_chars = True
+        self.assertStops("途中の読み返し", sent_max=1)
+        self.assertEqual(self.desk.sent, [("char", "1")])
+
+    def test_prefix_forms(self):
+        t = send.Target("x", "NumEdit", 0, 0, None, "qty", False, False)
+        self.assertTrue(send.prefix_matches(t, "1.", "1"))
+        self.assertTrue(send.prefix_matches(t, "1.", "1."))
+        self.assertTrue(send.prefix_matches(t, "1234", "1,234"))
+        self.assertFalse(send.prefix_matches(t, "12", "1"))
+        self.assertFalse(send.prefix_matches(t, "1", "11"))
+
     def test_prefilled_field_stops(self):
         self.desk.names[0] = "9"
         self.assertStops("空でない", sent_max=0)
