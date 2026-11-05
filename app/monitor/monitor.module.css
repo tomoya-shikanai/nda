@@ -2,6 +2,8 @@
    文字の大きさの決め方は docs/design/companion.md。最小は 34u（3m で読める下限の目安）。 */
 
 .screen {
+  /* 日本語を文節で折る（「脱着で／すか」と切らない）。html の lang="ja" が要る */
+  word-break: auto-phrase;
   --u: min(calc(100vw / 1920), calc(100vh / 1080));
   --ink: #1d1b26;
   --paper: #f4f1e8;
