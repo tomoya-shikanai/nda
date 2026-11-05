@@ -68,7 +68,7 @@ function candidateLine(c: Candidate): string {
 export async function extractInvoice(
   t: Transcript,
   ledger: LedgerEntry[],
-): Promise<{ candidates: Candidate[] } & InvoiceRefs> {
+): Promise<{ candidates: Candidate[] } & InvoiceRefs & { usage: { inputTokens: number; outputTokens: number } }> {
   const candidates = enumerateCandidates(t, ledger);
   const segs = t.segments.map((s, i) => `[#${i} ${s.startSec}-${s.endSec} ${s.speaker ?? "?"}] ${s.text}`);
   const text = [
@@ -88,5 +88,6 @@ export async function extractInvoice(
   });
   if (!res.parsed_output) throw new Error(`参照の出力を解釈できない (stop_reason=${res.stop_reason})`);
   const out = res.parsed_output;
-  return { candidates, lines: out.lines, negations: out.negations };
+  const usage = { inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens };
+  return { candidates, lines: out.lines, negations: out.negations, usage };
 }

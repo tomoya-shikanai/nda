@@ -4,7 +4,7 @@
  * 行（lineIndex 0 以上）は 1 行につき 1 問、行に付かない事項（lineIndex -1）は理由ごとに 1 問。
  * 同じ質問の確認事項は理由の種類にまとめ、優先度の最上位の理由で 1 文の質問を作る。数は候補の文字列だけを使う。
  */
-import { type LedgerEntry, findEntry, itemKey } from "../ledger/lookup";
+import { choicesOf, type LedgerEntry, findEntry, itemKey, shortName } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 import type { Candidate } from "./candidates";
 import type { Confirmation, PricedInvoice } from "./price";
@@ -12,6 +12,7 @@ import type { Confirmation, PricedInvoice } from "./price";
 /** 聞き返す理由の種類。並びは優先度の順（最後の other は、どれにも当たらないもの）。 */
 export const QUESTION_REASONS = [
   "negation", // 否定
+  "choice", // 言い換えの言葉で、料金表のどの品目か分からない（「タイヤ交換」→ 脱着か組替か）
   "correction", // 言い直し（使われない数を含む）
   "unparsed", // 読めない数
   "qty", // 数量
@@ -20,6 +21,7 @@ export const QUESTION_REASONS = [
   "ledger", // 料金表
   "total", // 合計
   "other", // その他（同じ根拠・20 秒・参照が不正・確かでない など）
+  "customer", // 客（名前とナンバーの下 4 桁）。確認事項からは作らず、作業が足す（lib/session/customer.ts）
 ] as const;
 export type QuestionReason = (typeof QUESTION_REASONS)[number];
 
@@ -42,6 +44,7 @@ export type Question = {
 export function reasonOf(c: Confirmation): QuestionReason {
   if (c.message.includes("（否定）")) return "negation";
   if (c.message.includes("言い直し")) return "correction";
+  if (c.message.includes("（別名があいまい）")) return "choice";
   if (c.message.includes("読めない）")) return "unparsed";
   if (c.field === "total") return "total";
   if (c.field === "qty") return "qty";
@@ -66,18 +69,37 @@ function listed(vals: string[], build: (s: string) => string): string {
 type Result = Pick<PricedInvoice, "lines" | "confirmations">;
 type Line = Result["lines"][number];
 
+/** 確認事項たちが指す候補（発話の順、重複なし）。 */
+export function relatedCandidates(cs: Confirmation[], candidates: Candidate[]): Candidate[] {
+  const byId = new Map(candidates.map((c) => [c.id, c]));
+  const order = new Map(candidates.map((c, i) => [c.id, i]));
+  return [...new Set(cs.flatMap((c) => c.candidates ?? []))]
+    .filter((id) => byId.has(id))
+    .sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+    .map((id) => byId.get(id) as Candidate);
+}
+
+const distinctTexts = (cs: Candidate[]) => [...new Set(cs.map((c) => c.text))];
+const qtyText = (line: Pick<Line, "qty" | "unit">) => (line.qty === null ? null : `${line.qty}${line.unit ?? ""}`);
+
+/** 使われない数の確認事項か（resolve.ts の条件 3 の文言の印）。 */
+export const isUnusedNumber = (c: Confirmation) => c.message.includes("使われない数");
+
+/**
+ * 言い直しの質問が「脱着は4本ですか。2個は何の数ですか」の形（使われない数だけで、行に数量がある）なら、
+ * 「何の数」と聞く数の文字列。その形でなければ空。cs は質問に入る言い直しの確認事項。答えの読み取り（answer.ts）も使う。
+ */
+export function unusedNumberTexts(line: Pick<Line, "qty" | "unit">, cs: Confirmation[], candidates: Candidate[]): string[] {
+  const q = qtyText(line);
+  if (q === null || cs.some((c) => !isUnusedNumber(c))) return [];
+  return distinctTexts(relatedCandidates(cs, candidates)).filter((x) => x !== q);
+}
+
 export function toQuestions(result: Result, candidates: Candidate[], t: Transcript, ledger: LedgerEntry[]): Question[] {
   /** 品目の比べ方。price.ts の二重の行と同じく、料金表の正式名にそろえる。 */
   const itemName = (item: string) => itemKey(findEntry(ledger, item)?.item ?? item);
   const byId = new Map(candidates.map((c) => [c.id, c]));
-  const order = new Map(candidates.map((c, i) => [c.id, i]));
-  /** 確認事項たちが指す候補（発話の順、重複なし）。 */
-  const related = (cs: Confirmation[]): Candidate[] =>
-    [...new Set(cs.flatMap((c) => c.candidates ?? []))]
-      .filter((id) => byId.has(id))
-      .sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
-      .map((id) => byId.get(id) as Candidate);
-  const distinctTexts = (cs: Candidate[]) => [...new Set(cs.map((c) => c.text))];
+  const related = (cs: Confirmation[]): Candidate[] => relatedCandidates(cs, candidates);
 
   /**
    * 行の品目を、父が言った語で呼ぶ（行の根拠の時間にある、その品目の候補）。無ければ行の品目名。
@@ -100,7 +122,6 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
     const best = hits.reduce<Candidate | null>((b, c) => (b === null || distance(c) < distance(b) ? c : b), null);
     return best?.text ?? line.item;
   };
-  const qtyText = (line: Line) => (line.qty === null ? null : `${line.qty}${line.unit ?? ""}`);
 
   const lineText = (line: Line, reason: QuestionReason, cs: Confirmation[]): string => {
     const name = spoken(line);
@@ -112,18 +133,20 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return `${name}${v ? `の${v}` : ""}は${verb}のですか`;
       }
       case "correction": {
-        const explicit = mine.filter((c) => !c.message.includes("使われない数"));
         const q = qtyText(line);
-        if (explicit.length === 0 && q !== null) {
-          const others = distinctTexts(related(mine)).filter((x) => x !== q);
-          if (others.length) return listed(others, (x) => `${name}は${q}ですか。${x}は何の数ですか`);
-        }
+        const others = unusedNumberTexts(line, mine, candidates);
+        if (others.length) return listed(others, (x) => `${name}は${q}ですか。${x}は何の数ですか`);
         const vals = distinctTexts(related(mine));
         if (vals.length === 0 && q !== null) vals.push(q);
         if (vals.length === 0) return `${name}の数はいくつですか`;
         if (vals.length === 1) return `${name}は${vals[0]}で合っていますか`;
         if (vals.length === 2) return `${name}は${vals[0]}と${vals[1]}のどちらですか`;
         return listed(vals, (x) => `${name}は${x}のどれですか`);
+      }
+      case "choice": {
+        // 「タイヤ交換は、脱着ですか、組替ですか」。選択肢は料金表の順、短い名前（ほかの品目と共有しない別名）で呼ぶ
+        const names = choicesOf(ledger, line.item).map((e) => `${shortName(ledger, e)}ですか`);
+        return names.length >= 2 ? `${name}は、${names.join("、")}` : `${name}は料金表のどの品目ですか`;
       }
       case "unparsed":
         return `${name}の数が聞き取れません。いくつですか`;
@@ -143,6 +166,7 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
         return `${name}は料金表のどの品目ですか`;
       case "total":
       case "other":
+      case "customer":
         return `${name}は、言ったとおりで合っていますか`;
     }
   };
