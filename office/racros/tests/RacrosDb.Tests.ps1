@@ -6,6 +6,7 @@ Describe 'Assert-ReadOnlySql: 通す文' {
     It '小文字・前後の空白・末尾の ; を通す' { Assert-ReadOnlySql -Sql "  select a from T ;  " | Should Be $true }
     It 'WITH（CTE）を通す' { Assert-ReadOnlySql -Sql "WITH x AS (SELECT 1 a) SELECT a FROM x" | Should Be $true }
     It '文字列の中の禁止語は気にしない' { Assert-ReadOnlySql -Sql "SELECT a FROM T WHERE nm = N'DELETE; DROP TABLE x'" | Should Be $true }
+    It '2 部名・3 部名と小数は通す' { Assert-ReadOnlySql -Sql "SELECT t.a, 1.5 FROM dbo.T t JOIN RS3_DATA.dbo.U u ON u.k = t.k" | Should Be $true }
     It '[ ] の中の禁止語は気にしない' { Assert-ReadOnlySql -Sql "SELECT [UPDATE], [SET] FROM T" | Should Be $true }
     It '禁止語を含む列名（UPDSTAMP・INSYMD）は通す' { Assert-ReadOnlySql -Sql "SELECT X_UPDSTAMP, X_INSYMD, X_DEL FROM T" | Should Be $true }
     It "文字列の '' のエスケープを扱える" { Assert-ReadOnlySql -Sql "SELECT 'it''s' a" | Should Be $true }
@@ -48,7 +49,13 @@ Describe 'Assert-ReadOnlySql: 拒否する文' {
         "SELECT `"a`" FROM T",
         "/* SELECT */ DELETE FROM T",
         "BEGIN TRAN SELECT 1",
-        "SELECT 1 COMMIT"
+        "SELECT 1 COMMIT",
+        "SELECT * FROM [REMOTE].[db].[dbo].[t]",
+        "SELECT * FROM REMOTE.db.dbo.t",
+        "SELECT * FROM REMOTE...t",
+        "SELECT * FROM REMOTE . db . dbo . t",
+        "SELECT 1 --`rWAITFOR DELAY '00:00:05'",
+        "SELECT 1 --`rCOMMIT"
     )
     foreach ($s in $bad) {
         It "拒否: $($s -replace "`n",' ')" { { Assert-ReadOnlySql -Sql $s } | Should Throw }

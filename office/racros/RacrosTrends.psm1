@@ -28,6 +28,37 @@ function Get-Stats {
     }
 }
 
+# 行の束から値を取り、数に入った車が MinVehicles 台未満なら出さない（n = 0、hidden）。
+#   Value: 行 → 値（数に入れない行は $null を返す）
+function Get-VehicleStats {
+    param([AllowEmptyCollection()][object[]]$Lines, [Parameter(Mandatory)][scriptblock]$Value, [int]$MinVehicles = 3)
+    $vals = New-Object System.Collections.Generic.List[object]
+    $veh = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($l in @($Lines)) {
+        $v = & $Value $l
+        if ($null -eq $v -or "$v" -eq '') { continue }
+        $vals.Add($v); [void]$veh.Add("$($l.vehicle)")
+    }
+    if ($vals.Count -eq 0) { return [ordered]@{ n = 0 } }
+    if ($veh.Count -lt $MinVehicles) { return [ordered]@{ n = 0; hidden = $true } }
+    return Get-Stats $vals.ToArray()
+}
+
+# よく使う品名。MinVehicles 台未満の車にしか使われていない品名は出さない。
+function Get-TopItems {
+    param([AllowEmptyCollection()][object[]]$Lines, [int]$MinVehicles = 3, [int]$First = 5)
+    $items = foreach ($g in (@($Lines) | Group-Object item | Sort-Object Count -Descending)) {
+        if (@($g.Group | Select-Object -ExpandProperty vehicle -Unique).Count -lt $MinVehicles) { continue }
+        [ordered]@{ item = $g.Name; n = $g.Count }
+    }
+    return , @($items | Select-Object -First $First)
+}
+
+# 行の金額・1 本あたり・数量を取り出す（数に入れない行は $null）
+$script:AmountOf = { param($l) $a = Get-LineAmount $l; if ($a -gt 0) { $a } }
+$script:PerUnitOf = { param($l) $q = Get-LineQty $l; $a = Get-LineAmount $l; if ($q -gt 0 -and $a -gt 0) { $a / $q } }
+$script:QtyOf = { param($l) $q = Get-LineQty $l; if ($q -gt 0) { $q } }
+
 # 値 → 件数（多い順）
 function ConvertTo-CountMap {
     param([AllowEmptyCollection()][object[]]$Values)
@@ -86,20 +117,19 @@ function Group-TireSlips {
 
 # 行の束の金額の傾向（行単位）。代表の品名は最も多いもの。
 function Get-LineSummary {
-    param([AllowEmptyCollection()][object[]]$Lines, [int]$SlipCount)
+    param([AllowEmptyCollection()][object[]]$Lines, [int]$SlipCount, [int]$MinVehicles = 3)
     $byCat = $Lines | Group-Object category
     $out = foreach ($g in $byCat) {
         $ls = @($g.Group)
         $slipsWith = @($ls | Select-Object -ExpandProperty slip -Unique).Count
-        $topItem = $ls | Group-Object item | Sort-Object Count -Descending | Select-Object -First 1
-        $perUnit = @($ls | Where-Object { (Get-LineQty $_) -gt 0 -and (Get-LineAmount $_) -gt 0 } | ForEach-Object { (Get-LineAmount $_) / (Get-LineQty $_) })
+        $topItem = Get-TopItems -Lines $ls -MinVehicles $MinVehicles -First 1
         [ordered]@{
             category = $g.Name
             share_of_slips = if ($SlipCount) { [Math]::Round($slipsWith / $SlipCount, 2) } else { $null }
-            top_item = $topItem.Name
-            qty = Get-Stats @($ls | Where-Object { (Get-LineQty $_) -gt 0 } | ForEach-Object { Get-LineQty $_ })
-            amount = Get-Stats @($ls | Where-Object { (Get-LineAmount $_) -gt 0 } | ForEach-Object { Get-LineAmount $_ })
-            per_unit = Get-Stats $perUnit
+            top_item = if ($topItem.Count) { $topItem[0].item } else { $null }
+            qty = Get-VehicleStats -Lines $ls -Value $script:QtyOf -MinVehicles $MinVehicles
+            amount = Get-VehicleStats -Lines $ls -Value $script:AmountOf -MinVehicles $MinVehicles
+            per_unit = Get-VehicleStats -Lines $ls -Value $script:PerUnitOf -MinVehicles $MinVehicles
         }
     }
     return , @($out | Sort-Object { - $_.share_of_slips })
@@ -149,15 +179,15 @@ function New-TireLedger {
         if ($all.Count -eq 0) { continue }
         $yearly = [ordered]@{}
         foreach ($g in ($all | Group-Object { [int][Math]::Floor([int]$_.date / 10000) } | Sort-Object { [int]$_.Name })) {
-            $yearly[$g.Name] = Get-Stats @($g.Group | Where-Object { (Get-LineAmount $_) -gt 0 } | ForEach-Object { Get-LineAmount $_ })
+            $yearly[$g.Name] = Get-VehicleStats -Lines @($g.Group) -Value $script:AmountOf -MinVehicles $MinVehicles
         }
         $rc = @($recentLines | Where-Object category -eq $cat)
         $work[$cat] = [ordered]@{
             lines = $all.Count
-            recent_amount = Get-Stats @($rc | Where-Object { (Get-LineAmount $_) -gt 0 } | ForEach-Object { Get-LineAmount $_ })
-            recent_per_unit = Get-Stats @($rc | Where-Object { (Get-LineQty $_) -gt 0 -and (Get-LineAmount $_) -gt 0 } | ForEach-Object { (Get-LineAmount $_) / (Get-LineQty $_) })
-            recent_qty = Get-Stats @($rc | Where-Object { (Get-LineQty $_) -gt 0 } | ForEach-Object { Get-LineQty $_ })
-            recent_top_items = @($rc | Group-Object item | Sort-Object Count -Descending | Select-Object -First 5 | ForEach-Object { [ordered]@{ item = $_.Name; n = $_.Count } })
+            recent_amount = Get-VehicleStats -Lines $rc -Value $script:AmountOf -MinVehicles $MinVehicles
+            recent_per_unit = Get-VehicleStats -Lines $rc -Value $script:PerUnitOf -MinVehicles $MinVehicles
+            recent_qty = Get-VehicleStats -Lines $rc -Value $script:QtyOf -MinVehicles $MinVehicles
+            recent_top_items = Get-TopItems -Lines $rc -MinVehicles $MinVehicles -First 5
             amount_by_year = $yearly
         }
     }
@@ -211,7 +241,7 @@ function New-TireLedger {
                     slips = $ss.Count
                     vehicles = $veh
                     slip_total = Get-Stats @($ss | ForEach-Object { ($_.lines | Where-Object { $_.category -in $tireCats } | ForEach-Object { Get-LineAmount $_ } | Measure-Object -Sum).Sum })
-                    lines = Get-LineSummary -Lines $lines -SlipCount $ss.Count
+                    lines = Get-LineSummary -Lines $lines -SlipCount $ss.Count -MinVehicles $MinVehicles
                 })
             }
         }
@@ -256,4 +286,4 @@ function New-TireLedger {
     }
 }
 
-Export-ModuleMember -Function Get-Quantile, Get-Stats, Get-SlipKind, Get-SlipSize, Group-TireSlips, Get-LineSummary, New-TireLedger
+Export-ModuleMember -Function Get-Quantile, Get-Stats, Get-VehicleStats, Get-TopItems, Get-SlipKind, Get-SlipSize, Group-TireSlips, Get-LineSummary, New-TireLedger

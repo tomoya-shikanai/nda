@@ -70,7 +70,22 @@ Describe '台帳' {
         $w.recent_amount.median | Should Be 2400
         $w.recent_amount.max | Should Be 2400
         $w.recent_per_unit.median | Should Be 600
-        $w.amount_by_year['2018'].median | Should Be 2000
+        $w.amount_by_year['2025'].n | Should Be 4
+    }
+    It '3 台未満の年の金額は出さない（2018 年は 1 台）' {
+        $y = $l.work_prices['tire_swap'].amount_by_year['2018']
+        $y.n | Should Be 0
+        $y.hidden | Should Be $true
+        $y.Contains('median') | Should Be $false
+    }
+    It '3 台未満の作業の金額・品名は出さない（廃タイヤは 1 台、組み替えは 1 台）' {
+        $d = $l.work_prices['disposal']
+        $d.recent_amount.n | Should Be 0
+        $d.recent_per_unit.n | Should Be 0
+        $d.recent_qty.n | Should Be 0
+        @($d.recent_top_items).Count | Should Be 0
+        $l.work_prices['tire_mount'].recent_amount.n | Should Be 0
+        @($l.work_prices['tire_swap'].recent_top_items)[0].item | Should Be 'タイヤ・履き替え'
     }
     It 'タイヤ本体は台数が足りないサイズを出さない' { $l.tire_price_by_size.Count | Should Be 0 }
     It '品名にサイズが無いタイヤは、伝票のサイズで数える' {
@@ -92,6 +107,11 @@ Describe '台帳' {
         $e.vehicles | Should Be 3
         ($e.lines | Where-Object category -eq 'tire_swap').share_of_slips | Should Be 1
         ($e.lines | Where-Object category -eq 'disposal').share_of_slips | Should Be 0.33
+        # 区分は 3 台でも、行の種類ごとの金額は、その行が載った車の台数で決める
+        $disp = $e.lines | Where-Object category -eq 'disposal'
+        $disp.amount.n | Should Be 0
+        $disp.top_item | Should Be $null
+        ($e.lines | Where-Object category -eq 'tire_swap').amount.median | Should Be 2400
     }
     It '伏せた車種（<少数>）は車種の区分に入れない' {
         @($l.invoice_ledger | Where-Object { $_.model -like '<*' }).Count | Should Be 0

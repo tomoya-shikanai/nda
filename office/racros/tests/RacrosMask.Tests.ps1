@@ -161,9 +161,28 @@ Describe '明細の行の分類' {
 }
 
 Describe '品番' {
-    It '英数字の品番は残す' {
-        Protect-PartCode 'ab-123.4' | Should Be 'AB-123.4'
-        Protect-PartCode '16510-81420' | Should Be '16510-81420'
+    $common = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($x in @('AB-123.4', '16510-81420', 'ABC1-1234567', 'KASO TARO')) { [void]$common.Add($x) }
+    It '多くの客に共通する英数字の品番は残す' {
+        Protect-PartCode 'ab-123.4' -Common $common | Should Be 'AB-123.4'
+        Protect-PartCode '16510-81420' -Common $common | Should Be '16510-81420'
+    }
+    It '共通でない品番は伏せる（ローマ字の名前などを形だけで残さない）' {
+        Protect-PartCode 'KASO HANAKO' -Common $common | Should Be '<少数>'
+        Protect-PartCode 'XY-999' | Should Be '<少数>'
+    }
+    It '車台番号の形は共通でも捨てる' { Protect-PartCode 'abc1-1234567' -Common $common | Should Be '<除外>' }
+    It '純正の品番の形（5 桁-英数字）は車台番号の検査から外す' {
+        [void]$common.Add('90915-YZZD1')
+        Protect-PartCode '90915-yzzd1' -Common $common | Should Be '90915-YZZD1'
+        Protect-PartCode '90915-YZZD2' -Common $common | Should Be '<少数>'
+    }
+    It 'ConvertTo-MaskedRow の code は品番の共通集合を使う' {
+        $spec = [ordered]@{ hinban = @{ from = 'HINBAN'; as = 'code' } }
+        $m = New-PseudonymMap
+        (ConvertTo-MaskedRow -Row ([pscustomobject]@{ HINBAN = '16510-81420' }) -Spec $spec -Map $m -CommonSets @{ hinbans = $common }).hinban | Should Be '16510-81420'
+        (ConvertTo-MaskedRow -Row ([pscustomobject]@{ HINBAN = 'KASO JIRO' }) -Spec $spec -Map $m -CommonSets @{ hinbans = $common }).hinban | Should Be '<少数>'
+        (ConvertTo-MaskedRow -Row ([pscustomobject]@{ HINBAN = '16510-81420' }) -Spec $spec -Map $m).hinban | Should Be '<少数>'
     }
     It '電話番号と見分けられない 0 始まりの長い数字は捨てる' {
         Protect-PartCode '09000000000' | Should Be '<除外>'
@@ -171,4 +190,23 @@ Describe '品番' {
         Protect-PartCode '0888380016' | Should Be '<除外>'
     }
     It 'かな・漢字の書き込みは捨てる' { Protect-PartCode '架空さん取り置き' | Should Be '<除外>' }
+}
+
+
+Describe '出力の置き場' {
+    $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+    It 'リポジトリの外は通す' { Assert-PrivatePath -Path $TestDrive | Should Not BeNullOrEmpty }
+    It 'リポジトリの中で git に無視される所は通す' { Assert-PrivatePath -Path (Join-Path $repo 'data\private\racros') | Should Not BeNullOrEmpty }
+    It 'リポジトリの中で無視されない所は止める' {
+        { Assert-PrivatePath -Path $repo } | Should Throw '無視されない'
+        { Assert-PrivatePath -Path (Join-Path $repo 'office\racros') } | Should Throw '無視されない'
+    }
+    It '名前が似ているだけの隣のフォルダはリポジトリの外とみなす' { Assert-PrivatePath -Path ($repo.TrimEnd('\') + '-other\x') | Should Not BeNullOrEmpty }
+    It '対応表はリポジトリの中なら無視される所でも止める' { { Assert-PrivatePath -Path (Join-Path $repo 'data\private\map.csv') -OutsideRepo } | Should Throw 'リポジトリの外' }
+    It 'Save-PseudonymMap も自分で置き場を確かめる' {
+        $m = New-PseudonymMap -Path (Join-Path $repo 'data\private\racros\map-test.csv')
+        [void](Get-Pseudonym -Map $m -Kind customer -SourceId 1)
+        { Save-PseudonymMap -Map $m } | Should Throw 'リポジトリの外'
+        Test-Path (Join-Path $repo 'data\private\racros\map-test.csv') | Should Be $false
+    }
 }

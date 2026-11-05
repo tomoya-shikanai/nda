@@ -6,6 +6,9 @@ param(
     [string]$MapPath = 'C:\Users\PRS\nda-private\racros\pseudonyms.csv'
 )
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'RacrosMask.psm1') -Force
+# ログを書く前に置き場を確かめる（リポジトリの中で git に無視されない所には書かない）
+$OutDir = Assert-PrivatePath -Path $OutDir
 $logDir = Join-Path $OutDir 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ("nightly-{0}.log" -f (Get-Date -Format 'yyyyMMdd'))

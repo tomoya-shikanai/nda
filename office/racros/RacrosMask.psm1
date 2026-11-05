@@ -70,6 +70,7 @@ function Get-Pseudonym {
 function Save-PseudonymMap {
     param([Parameter(Mandatory)][hashtable]$Map)
     if (-not $Map.path) { return }
+    [void](Assert-PrivatePath -Path $Map.path -OutsideRepo)
     $dir = Split-Path -Parent $Map.path
     if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $rows = foreach ($k in $Map.entries.Keys) {
@@ -183,15 +184,42 @@ function Protect-FreeText {
     return '<自由記述>'
 }
 
-# 品番は英数字と記号だけを残す（それ以外の書き込みがあれば捨てる）
+# 品番は、英数字と記号だけで、怪しい書き方を含まず、多くの客に共通する値（$Common）だけを残す。
+# 品番の欄には車台番号やローマ字の名前も書けるので、形だけでは残さない。$Common が無ければ残さない。
 function Protect-PartCode {
-    param([AllowNull()][AllowEmptyString()][string]$Value)
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Value,
+        [System.Collections.Generic.HashSet[string]]$Common
+    )
     $t = (ConvertTo-NormalizedText $Value).ToUpperInvariant()
     if (-not $t) { return '' }
     # 0 で始まる 10 桁以上の数字は電話番号と見分けられないので捨てる（ハイフン・空白で区切ってあっても）
     if (($t -replace '[ .\-/]', '') -match '^0\d{9,}$') { return '<除外>' }
-    if ($t -match '^[A-Z0-9][A-Z0-9 .\-/]{0,29}$' -and $t -notmatch '[\w.+-]+@') { return $t }
-    return '<除外>'
+    if ($t -notmatch '^[A-Z0-9][A-Z0-9 .\-/]{0,29}$' -or $t -match '[\w.+-]+@') { return '<除外>' }
+    # 国産車の純正の品番（例: 16510-81420、90915-YZZD1）は車台番号と同じ形なので、怪しい書き方の検査から外す。
+    # それ以外（例: ABC1-1234567 は型式に英字を含む車台番号の形）は、共通でも捨てる。
+    $isOemNumber = $t -match '^\d{5}-[A-Z0-9]{2,5}(-[A-Z0-9]{2,3})?$'
+    if (-not $isOemNumber -and (Test-SuspiciousText $t)) { return '<除外>' }
+    if ($null -ne $Common -and $Common.Contains($t)) { return $t }
+    return '<少数>'
+}
+
+# 出力の置き場を確かめる。
+#   OutsideRepo: リポジトリの外だけを許す（対応表）
+#   それ以外: リポジトリの外か、リポジトリの中なら git で無視される所だけを許す（明細・台帳・ログ）
+# 確かめられないとき（git が無い等）は止める。
+function Assert-PrivatePath {
+    param([Parameter(Mandatory)][string]$Path, [switch]$OutsideRepo)
+    $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')).TrimEnd('\')
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $inside = $full.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($repoRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+    if (-not $inside) { return $full }
+    if ($OutsideRepo) { throw "リポジトリの外に置きます: $full" }
+    # 置き場の中に書くファイルが無視されるかを確かめる（置き場がまだ無くても確かめられるよう、中のファイルの名前で聞く）
+    $probe = Join-Path $full 'nda-private-probe.csv'
+    & git -C $repoRoot check-ignore -q -- $probe 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "リポジトリの中で git に無視されない所には書きません: $full" }
+    return $full
 }
 
 # 明細の行を分ける（工賃コードと品名から）。品名を伏せる前に、この PC の中で決める。
@@ -278,11 +306,11 @@ function ConvertTo-MaskedRow {
             '^season$' { Get-TireSeason "$v" }
             '^brand$' { Get-TireBrand "$v" }
             '^km$' { ConvertTo-KmBucket $v }
-            '^code$' { Protect-PartCode "$v" }
+            '^code$' { Protect-PartCode -Value "$v" -Common $CommonSets['hinbans'] }
             default { throw "未知の変換: $as" }
         }
     }
     return [pscustomobject]$o
 }
 
-Export-ModuleMember -Function ConvertTo-NormalizedText, ConvertTo-AlphaIndex, Format-Pseudonym, New-PseudonymMap, Get-Pseudonym, Save-PseudonymMap, Test-SuspiciousText, Get-TireSize, Get-TireSeason, Get-TireBrand, Protect-FreeText, Protect-RareValue, Protect-PartCode, Get-TireLineCategory, ConvertTo-KmBucket, ConvertTo-MaskedRow
+Export-ModuleMember -Function ConvertTo-NormalizedText, ConvertTo-AlphaIndex, Format-Pseudonym, New-PseudonymMap, Get-Pseudonym, Save-PseudonymMap, Test-SuspiciousText, Get-TireSize, Get-TireSeason, Get-TireBrand, Protect-FreeText, Protect-RareValue, Protect-PartCode, Assert-PrivatePath,Get-TireLineCategory, ConvertTo-KmBucket, ConvertTo-MaskedRow

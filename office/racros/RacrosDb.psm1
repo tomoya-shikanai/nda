@@ -36,7 +36,8 @@ function Get-SqlSkeleton {
         $c = $Sql[$i]
         $next = if ($i + 1 -lt $n) { $Sql[$i + 1] } else { [char]0 }
         if ($c -eq '-' -and $next -eq '-') {
-            while ($i -lt $n -and $Sql[$i] -ne "`n") { $i++ }
+            # CR だけの改行でも行コメントを終える（LF まで読み飛ばすと、CR の後ろの文が検査から隠れる）
+            while ($i -lt $n -and $Sql[$i] -ne "`n" -and $Sql[$i] -ne "`r") { $i++ }
             [void]$sb.Append(' '); continue
         }
         if ($c -eq '/' -and $next -eq '*') {
@@ -103,6 +104,9 @@ function Assert-ReadOnlySql {
             throw "使えない語が含まれています: $w"
         }
     }
+    # 4 部名（サーバー.DB.スキーマ.表）はリンクサーバーで外の DB を読めるので拒否する（[ ] の名前は骨格で X になる）
+    $name = '(?:[A-Za-z_@#][A-Za-z0-9_@#$]*|X)'
+    if ($trimmed -match "(?i)$name\s*\.\s*(?:$name\s*)?\.\s*(?:$name\s*)?\.\s*$name") { throw '4 部名（サーバー.DB.スキーマ.表）は使えません' }
     # システムの拡張プロシージャ（xp_／sp_）を名前で呼ぶことも拒否する
     if ($trimmed -match '(?i)(?<![A-Za-z0-9_])(xp_|sp_)[A-Za-z0-9_]+\s*\(') { throw 'xp_／sp_ の呼び出しは使えません' }
     return $true

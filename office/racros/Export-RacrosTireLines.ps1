@@ -10,7 +10,7 @@ param(
     [string]$OutDir = (Join-Path $PSScriptRoot '..\..\data\private\racros'),
     [string]$MapPath = 'C:\Users\PRS\nda-private\racros\pseudonyms.csv',
     [string[]]$Databases = @('RS3_SYARE', 'RS3_DATA'),
-    [int]$MinCustomers = 3,   # 品名を残すのに必要な、その品名を使った客の数
+    [int]$MinCustomers = 3,   # 品名・品番を残すのに必要な、その品名を使った客の数
     [int]$MinVehicles = 3     # 車種・型式を残すのに必要な、その値を持つ車の数
 )
 $ErrorActionPreference = 'Stop'
@@ -18,9 +18,8 @@ Import-Module (Join-Path $PSScriptRoot 'RacrosDb.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'RacrosMask.psm1') -Force
 
 $started = Get-Date
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$mapFull = [IO.Path]::GetFullPath($MapPath)
-if ($mapFull.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "対応表はリポジトリの外に置きます: $mapFull" }
+$mapFull = Assert-PrivatePath -Path $MapPath -OutsideRepo
+$OutDir = Assert-PrivatePath -Path $OutDir
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # タイヤの伝票を見分ける条件（工賃コードか品名）
@@ -35,9 +34,10 @@ function Add-Common {
     # 表記ゆれを正規化して合わせるとき、同じ客を二重に数えないよう、和ではなく最大を取る
     if (-not $Counts.ContainsKey($t) -or $Counts[$t] -lt $N) { $Counts[$t] = $N }
 }
-$nameCounts = @{}; $modelCounts = @{}; $kataCounts = @{}
+$nameCounts = @{}; $modelCounts = @{}; $kataCounts = @{}; $hinbanCounts = @{}
 foreach ($db in $Databases) {
     foreach ($r in (Invoke-RacrosSelect -Database $db -Sql "SELECT l.SYAJNL_NM v, COUNT(DISTINCT h.TJNL_KOKCD) n FROM SYAJNL_DAT l JOIN TJNL_DAT h ON h.TJNL_DENNO = l.SYAJNL_DENNO GROUP BY l.SYAJNL_NM")) { Add-Common $nameCounts $r.v $r.n }
+    foreach ($r in (Invoke-RacrosSelect -Database $db -Sql "SELECT l.SYAJNL_HINBAN v, COUNT(DISTINCT h.TJNL_KOKCD) n FROM SYAJNL_DAT l JOIN TJNL_DAT h ON h.TJNL_DENNO = l.SYAJNL_DENNO GROUP BY l.SYAJNL_HINBAN")) { Add-Common $hinbanCounts ("$($r.v)".ToUpperInvariant()) $r.n }
     foreach ($r in (Invoke-RacrosSelect -Database $db -Sql "SELECT TJNL_SYASYU v, COUNT(DISTINCT TJNL_CARCD) n FROM TJNL_DAT GROUP BY TJNL_SYASYU")) { Add-Common $modelCounts $r.v $r.n }
     foreach ($r in (Invoke-RacrosSelect -Database $db -Sql "SELECT TJNL_KATA v, COUNT(DISTINCT TJNL_CARCD) n FROM TJNL_DAT GROUP BY TJNL_KATA")) { Add-Common $kataCounts $r.v $r.n }
 }
@@ -50,6 +50,7 @@ $common = @{
     names = (New-CommonSet $nameCounts $MinCustomers)
     models = (New-CommonSet $modelCounts $MinVehicles)
     katas = (New-CommonSet $kataCounts $MinVehicles)
+    hinbans = (New-CommonSet $hinbanCounts $MinCustomers)
 }
 
 # ---- 許可リスト。ここに無い列は出力に出ない ----
@@ -126,6 +127,7 @@ $meta = [ordered]@{
     min_customers_for_names = $MinCustomers
     min_vehicles_for_models = $MinVehicles
     common_names = $common.names.Count
+    common_hinbans = $common.hinbans.Count
 }
 $meta | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutDir 'export_meta.json') -Encoding UTF8
 Write-Output ("lines={0} slips={1} seconds={2} ({3})" -f $meta.lines, $meta.slips, $meta.seconds, (($perDb.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' '))
