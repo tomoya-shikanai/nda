@@ -45,3 +45,4 @@
 - 2026-11-05 #25 工場側の最小（§7）: lib/office/schema.ts（4 種と封筒、label 付き、JSON Schema は office/box/schema に書き出し）、受け箱はフォルダ（.tmp → rename、sftp は口だけ）、POST /api/office/reply（NDA_OFFICE_TOKEN を時間一定で比べる、未設定 503、二重の id は当てない）、照合の問い合わせは抽出と並べて置き 10 秒で expired、工場の客の一覧を廃止し伏せ字は一覧なし、label はメモリだけ、done の後ろに sending → sent → entered | stopped、偽の事務所（pnpm office:fake）。試験 +14
 - 2026-11-05 §9-4: 受け箱は事務所の共有フォルダの mount 先（NDA_OFFICE_BOX）。工場は受け箱を作らず、目印 .nda-box が無ければ「見えません」、書けなければ「書き込めません」の札。伏せ字は 4 桁を含む句と、その直前の品目の語の無い句も丸ごと伏せる（敬称の無い姓）
 - 2026-11-05 Codex の敵対レビュー（#25）の 4 件と自動点検の 3 件: 伏せ字を文の単位に（ナンバーかもしれない数の文と前後の文を丸ごと）、said は 4 桁の文と直前の文、受け箱の mount と書いた後の目印の確かめ（NDA_OFFICE_BOX_REQUIRE_MOUNT）、.tmp に乱数、送り直しを作業ごとのロックで 1 本、stopped・duplicate は記録だけ。試験 +3
+- 2026-11-05 2 回目の Codex（#25）の 4 件: 敬称の前の空白を飛ばす、読点で区切ったナンバーも拾う、作業ごとの排他（lib/session/lock.ts、プロセス内の #47）で同時の承認でも依頼は 1 件、rename の直後に事務所が取り込んだのは成功。試験 +6

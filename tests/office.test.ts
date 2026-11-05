@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, test } from "node:test";
@@ -652,4 +652,31 @@ test("Codex 2 回目 3: 同時 2 本の承認でも依頼は 1 件だけ置か�
     delete process.env.NDA_OFFICE_BOX;
     delete process.env.NDA_OFFICE_BOX_REQUIRE_MOUNT;
   }
+});
+
+test("Codex 2 回目 4: 事務所が rename の直後に取り込んでも成功。目印が消えていれば失敗", async () => {
+  const root = await tmp();
+  const box = join(root, "in");
+  const taken = join(root, "work");
+  await mkdir(box);
+  await mkdir(taken);
+  await writeFile(join(box, BOX_MARKER), "");
+  // すぐ取り込まれた（ファイルが移った）
+  const quick = folderBox(box, { requireMount: false, afterCommit: (f) => rename(f, join(taken, "a.json")) });
+  await quick.put("a.json", "{}");
+  assert.deepEqual(await readdir(taken), ["a.json"]);
+  // 取り込まれたが、目印も消えていた（unmount）
+  const lost = folderBox(box, {
+    requireMount: false,
+    afterCommit: async (f) => {
+      await rename(f, join(taken, "b.json"));
+      await rm(join(box, BOX_MARKER));
+    },
+  });
+  await assert.rejects(lost.put("b.json", "{}"), BoxMissingError);
+  // ファイルが残ったまま目印が消えた: ファイルを消して失敗
+  await writeFile(join(box, BOX_MARKER), "");
+  const gone = folderBox(box, { requireMount: false, afterCommit: () => rm(join(box, BOX_MARKER)) });
+  await assert.rejects(gone.put("c.json", "{}"), BoxMissingError);
+  assert.deepEqual(await readdir(box), []);
 });

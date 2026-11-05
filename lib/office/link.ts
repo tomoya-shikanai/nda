@@ -50,6 +50,8 @@ export type FolderBoxOptions = {
   rootDir?: string;
   /** 試験用: .tmp を書いた後、rename の前に呼ぶ（その間に unmount された場合を作る）。 */
   beforeCommit?: () => Promise<void>;
+  /** 試験用: rename の後、確かめの前に呼ぶ（事務所がすぐ取り込んだ場合・その間に unmount された場合を作る）。 */
+  afterCommit?: (final: string) => Promise<void>;
 };
 
 /**
@@ -85,9 +87,17 @@ export function folderBox(dir: string, opts: FolderBoxOptions = {}): BoxWriter {
         await rm(tmp, { force: true }).catch(() => {});
         throw new BoxWriteError("受け箱に書けない");
       }
+      await opts.afterCommit?.(final);
+      // 置いた後の確かめ: 目印がまだあり（mount を確かめるなら、その dev が / と違い）、置いたファイルがまだあれば目印と同じ dev。
+      // 置いたファイルが無い（ENOENT）のは、事務所がすぐ取り込んだので成功とする
       try {
-        const [f, m] = await Promise.all([stat(final), stat(marker)]);
-        if (f.dev !== m.dev || (rootDev !== null && f.dev === rootDev)) throw new Error("moved");
+        const m = await stat(marker);
+        if (rootDev !== null && m.dev === rootDev) throw new Error("not mounted");
+        const f = await stat(final).catch((e: NodeJS.ErrnoException) => {
+          if (e.code === "ENOENT") return null;
+          throw e;
+        });
+        if (f !== null && f.dev !== m.dev) throw new Error("moved");
       } catch {
         await rm(final, { force: true }).catch(() => {});
         throw new BoxMissingError("書いている間に受け箱が見えなくなった");
