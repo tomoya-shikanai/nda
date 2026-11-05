@@ -44,6 +44,20 @@ def dialog_choice(buttons: list[str] | tuple[str, ...]) -> str | None:
     return None
 
 
+DIALOG_KNOWN = ("はい", "いいえ", "OK", "キャンセル", "閉じる")
+
+
+def safe_label(name: str) -> str:
+    """記録に残してよい名前だけを残す。ダイアログの決まったボタンと、許可か禁止の語を含む短い名前（機能の名前）。
+    それ以外（客の名前などが入り得る）は *** にする。"""
+    n = norm(name)
+    if n in DIALOG_KNOWN:
+        return n
+    if n and len(n) <= 20 and not re.search(r"\d", n) and any(w in n for w in MENU_ALLOW + MENU_DENY):
+        return n
+    return "***"
+
+
 def menu_allowed(name: str) -> bool:
     n = norm(name)
     if not n or len(n) > 20:

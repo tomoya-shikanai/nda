@@ -4,7 +4,7 @@
 
 import unittest
 
-from patrol.guard import Budget, dialog_choice, menu_allowed, norm
+from patrol.guard import Budget, dialog_choice, menu_allowed, norm, safe_label
 
 
 class DialogTest(unittest.TestCase):
@@ -46,6 +46,18 @@ class MenuTest(unittest.TestCase):
 
     def test_長すぎる名前は許さない(self):
         self.assertFalse(menu_allowed("検索" * 11))
+
+
+class SafeLabelTest(unittest.TestCase):
+    def test_決まったボタンと機能の名前は残す(self):
+        self.assertEqual(safe_label("いいえ(N)"), "いいえ")
+        self.assertEqual(safe_label("車歴検索"), "車歴検索")
+        self.assertEqual(safe_label("請求書発行"), "請求書発行")
+
+    def test_それ以外は伏せる(self):
+        for n in ["山田太郎", "山田商会", "品川500あ1234", "検索 1234", "", "x" * 30]:
+            with self.subTest(n=n):
+                self.assertEqual(safe_label(n), "***")
 
 
 class BudgetTest(unittest.TestCase):

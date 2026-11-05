@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from .guard import Budget, dialog_choice, menu_allowed, norm
+from .guard import Budget, dialog_choice, menu_allowed, norm, safe_label
 
 EXE_DIR = Path(r"C:\RACROS3\EXE")
 MENU_EXE = "RS_MENU.exe"
@@ -108,6 +108,17 @@ class Patrol:
             time.sleep(0.5)
         return False
 
+    def before_windows(self) -> set[tuple[int, int]]:
+        """巡回の前から動いていたプロセスの上の窓（pid, ハンドル）。変われば巡回が触ったとみなして止める。"""
+        out = set()
+        for pid in self.before:
+            for w in top_windows(pid):
+                try:
+                    out.add((pid, int(w.NativeWindowHandle)))
+                except Exception:
+                    pass
+        return out
+
     def handle_dialogs(self) -> None:
         """自分で起動したプロセスの確認のダイアログ（#32770）だけを扱う。"""
         for pid in list(self.mine):
@@ -117,7 +128,7 @@ class Patrol:
                 buttons = [(c.Name or "", c) for c in w.GetChildren() if c.ControlTypeName == "ButtonControl" and _pid(c) == pid]
                 names = [n for n, _ in buttons]
                 choice = dialog_choice(names)
-                self.note("dialog", pid=pid, buttons=[n[:20] for n in names], pressed=choice)
+                self.note("dialog", pid=pid, buttons=[safe_label(n) for n in names], pressed=choice and safe_label(choice))
                 if choice is None:
                     raise Stop("押してよいボタンの無いダイアログが出た")
                 for n, c in buttons:
@@ -132,9 +143,21 @@ class Patrol:
         from recorder import win
         from recorder.config import Config
 
-        name = psutil.Process(pid).name()
+        if pid in self.before or pid not in self.mine:
+            raise Stop("自分で開いていないプロセスは書き出さない")
+        proc = psutil.Process(pid)
+        name = proc.name()
         cfg = Config(target_exe=[name], root=self.cfg.root, name_value_classes=self.cfg.name_value_classes)
-        path = win.dump_tree(cfg, self.out / "dumps")
+        # 同じ名前の別のプロセス（巡回の前から開いていた画面）を選ばないよう、この pid に固定する
+        # 画像は撮らない（読むだけの画面にも客の名前・ナンバーが映り得る）
+        saved = (win._foreground_target, win.find_target, win.grab_front)
+        win._foreground_target = lambda c: proc
+        win.find_target = lambda c: proc
+        win.grab_front = lambda *a, **k: False
+        try:
+            path = win.dump_tree(cfg, self.out / "dumps")
+        finally:
+            win._foreground_target, win.find_target, win.grab_front = saved
         self.note("dump", label=label, exe=name, file=path.name if path else None)
 
     def run(self) -> None:
@@ -147,6 +170,7 @@ class Patrol:
         if not self.wait(OPEN_WAIT_SEC, lambda: any((w.ClassName or "") != "#32770" for w in top_windows(proc.pid))):
             raise Stop("メニューの窓が出なかった")
         time.sleep(2)
+        self.check()
         self.dump(proc.pid, "menu")
 
         import uiautomation as auto
@@ -159,7 +183,7 @@ class Patrol:
                 n = c.Name or ""
                 if n:
                     items.append((n, c))
-        self.note("menu_items", names=sorted({norm(n) for n, _ in items}), allowed=sorted({norm(n) for n, _ in items if menu_allowed(n)}))
+        self.note("menu_items", names=sorted({safe_label(n) for n, _ in items}), allowed=sorted({norm(n) for n, _ in items if menu_allowed(n)}))
 
         opened = 0
         seen = set()
@@ -172,6 +196,7 @@ class Patrol:
             seen.add(key)
             self.check()
             before = set(racros_pids())
+            hwnds_before = self.before_windows()
             try:
                 c.GetInvokePattern().Invoke()
             except Exception as ex:
@@ -182,15 +207,20 @@ class Patrol:
 
             def appeared() -> bool:
                 new[:] = [p for p in racros_pids() if p not in before and p not in self.before]
-                return any(top_windows(p) for p in new)
+                self.mine.update(new)  # 開く途中のダイアログも handle_dialogs で扱う
+                return any((w.ClassName or "") != "#32770" for p in new for w in top_windows(p))
 
             if not self.wait(OPEN_WAIT_SEC, appeared):
-                self.note("no_new_screen", item=key)
-                continue
+                # 前から開いていた画面に切り替わった・何かが起きたが分からない、のどちらでも続けない
+                raise Stop("項目を開いても新しい画面が出なかった")
+            if self.before_windows() != hwnds_before:
+                raise Stop("前から開いていた画面の窓が変わった")
             self.mine.update(new)
             time.sleep(2)
+            self.check()
             for p in new:
                 self.dump(p, key)
+            self.check()
             self.close(new)
             opened += 1
 
@@ -198,10 +228,13 @@ class Patrol:
         """自分で開いたプロセスの窓だけに WM_CLOSE を送る。閉じなければ止める。"""
         import psutil
 
+        self.handle_dialogs()
         for p in pids:
             if p in self.before or p not in self.mine:
                 continue
             for w in top_windows(p):
+                if (w.ClassName or "") == "#32770":  # ダイアログに WM_CLOSE は送らない（OK だけのダイアログでは OK になる）
+                    raise Stop("閉じる前にダイアログが残っている")
                 try:
                     ctypes.windll.user32.PostMessageW(int(w.NativeWindowHandle), WM_CLOSE, 0, 0)
                 except Exception:
