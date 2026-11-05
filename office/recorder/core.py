@@ -191,6 +191,15 @@ def toolbar_button(exe: str, element: Element | None, x: int) -> str | None:
 TITLE_CONTROL_TYPES = {"WindowControl", "TitleBarControl"}
 
 
+def error_text(ex: BaseException) -> str:
+    """失敗を記録に残す形にする。例外の文面には部品の名前や値が入り得るので残さず、
+    例外の型と、COM のエラー番号（0x80131505 など）だけを残す。"""
+    code = getattr(ex, "hresult", None)
+    if not isinstance(code, int):
+        code = next((a for a in getattr(ex, "args", ()) if isinstance(a, int) and not isinstance(a, bool)), None)
+    return type(ex).__name__ + (f" 0x{code & 0xFFFFFFFF:08X}" if code is not None else "")
+
+
 def mask_title(title: str) -> str:
     """窓の題名から客の名前を伏せる。
 

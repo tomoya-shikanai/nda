@@ -9,7 +9,7 @@ import unittest
 from datetime import date, datetime
 from pathlib import Path
 
-from recorder.core import MASK, Click, Element, Key, Snapshot, Store, Tracker, Window, cleanup, mask_title, toolbar_button
+from recorder.core import MASK, Click, Element, Key, Snapshot, Store, Tracker, Window, cleanup, error_text, mask_title, toolbar_button
 
 W1 = Window(handle=1, title="請求書入力", class_name="TForm", rect=(0, 0, 800, 600))
 W2 = Window(handle=1, title="請求書確認", class_name="TForm", rect=(0, 0, 800, 600))
@@ -218,6 +218,16 @@ class RecorderFixTest(unittest.TestCase):
         text = Element(name="山田太郎 のデータを削除しますか", control_type="TextControl", class_name="Static")
         (e,) = t.observe(Snapshot(target_pid=10, clicks=[Click(1, 2, "left", text, 0, exe="M_CAR.exe")]))
         self.assertNotIn("山田", json.dumps(e.data, ensure_ascii=False))
+
+    def test_失敗の文面は残さず型とエラー番号だけ残す(self):
+        self.assertEqual(error_text(RuntimeError("山田太郎")), "RuntimeError")
+        com = OSError(-2146233083, "山田太郎 の欄", None)
+        self.assertEqual(error_text(com), "OSError 0x80131505")
+
+        class COMError(Exception):
+            hresult = -2147220991
+
+        self.assertEqual(error_text(COMError("山田太郎")), "COMError 0x80040201")
 
     def test_キーは種類と文字の数だけ残す(self):
         t = Tracker()

@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from .config import load
-from .core import Store, Tracker, cleanup
+from .core import Store, Tracker, cleanup, error_text
 
 
 def run() -> None:
@@ -77,7 +77,7 @@ def run() -> None:
 def _stderr(ex: BaseException) -> None:
     """標準エラーに 1 行だけ出す（pythonw では出る先が無いので、出せなくても何もしない）。"""
     try:
-        print(f"recorder: {type(ex).__name__}: {ex}"[:500].replace("\n", " "), file=sys.stderr)
+        print(f"recorder: {error_text(ex)}", file=sys.stderr)
     except Exception:
         pass
 
@@ -93,7 +93,7 @@ def _report(store, ex: Exception) -> None:
 def type_error(ex: Exception):
     from .core import Event
 
-    return Event("error", {"error": f"{type(ex).__name__}: {ex}"[:500]})
+    return Event("error", {"error": error_text(ex)})
 
 
 def main(argv: list[str]) -> int:

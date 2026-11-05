@@ -17,7 +17,7 @@ from PIL import ImageGrab
 from pynput import keyboard, mouse
 
 from .config import Config
-from .core import Click, Element, Key, Snapshot, Window
+from .core import Click, Element, Key, Snapshot, Window, error_text
 
 
 def set_dpi_aware() -> None:
@@ -141,8 +141,8 @@ def _rect(r) -> tuple[int, int, int, int] | None:
 STATE_SYSTEM_PROTECTED = 0x20000000  # MSAA の状態。VB6 のパスワード欄は IsPassword でなくこれで分かる
 
 
-def _read_value(c) -> tuple[str | None, str | None, bool]:
-    """値と、どちらから読んだか（"value" | "legacy"）と、MSAA で保護された欄か。
+def _read_value(c) -> tuple[str | None, str | None, bool | None]:
+    """値と、どちらから読んだか（"value" | "legacy"）と、MSAA で保護された欄か（読めなければ None）。
     LegacyIAccessiblePattern があれば、どちらから値を読む場合も先にその状態を確かめる。
     状態が読めない（例外・None）部品は安全側に倒し、どちらの値も返さない。"""
     lp = None
@@ -153,10 +153,10 @@ def _read_value(c) -> tuple[str | None, str | None, bool]:
         if lp is not None:
             state = lp.State
             if state is None:
-                return None, None, False
+                return None, None, None
             protected = bool(state & STATE_SYSTEM_PROTECTED)
     except Exception:
-        return None, None, False
+        return None, None, None
     try:
         # GetValuePattern() は Edit・ComboBox など一部の部品クラスにしか無い。
         # GetPattern が返すパターンをそのまま使えば、Custom・Pane などの部品でも値が取れる。
@@ -174,7 +174,7 @@ def _read_value(c) -> tuple[str | None, str | None, bool]:
                 return v, "legacy", protected
     except Exception:
         pass
-    return None, None, False
+    return None, None, protected
 
 
 def element_of(c, name_value_classes: frozenset[str] = frozenset()) -> Element | None:
@@ -185,11 +185,14 @@ def element_of(c, name_value_classes: frozenset[str] = frozenset()) -> Element |
         return None
     try:
         value, value_source, protected = _read_value(c)
-        is_password = protected
+        known = protected is not None
+        is_password = bool(protected)
         try:
-            is_password = protected or bool(c.IsPassword)
+            is_password = is_password or bool(c.IsPassword)
         except Exception:
-            # パスワード欄かどうか分からない部品は安全側に倒し、値を残さない
+            known = False
+        if not known:
+            # パスワード欄かどうか分からない部品は安全側に倒し、値（Name に出る値も）と文字数を残さない
             value, value_source = None, None
         name = c.Name or ""
         class_name = c.ClassName or ""
@@ -199,8 +202,8 @@ def element_of(c, name_value_classes: frozenset[str] = frozenset()) -> Element |
                 automation_id=c.AutomationId or "",
                 control_type=c.ControlTypeName or "",
                 class_name=class_name,
-                value=name,
-                value_source="name",
+                value=name if known else None,
+                value_source="name" if known else None,
                 is_password=is_password,
                 rect=_rect(c.BoundingRectangle),
             )
@@ -394,7 +397,7 @@ class Reader:
         s = Snapshot(target_pid=pid, target_exe=proc.name(), target_path=self.proc_path)
 
         def fail(stage: str, ex: Exception) -> None:
-            s.errors.append({"stage": stage, "error": f"{type(ex).__name__}: {ex}"[:300]})
+            s.errors.append({"stage": stage, "error": error_text(ex)})
 
         fg = None
         fg_pid = None

@@ -333,6 +333,47 @@ class NameValueTest(unittest.TestCase):
 
         self.assertEqual(set(Config().name_value_classes), {"TextEdit", "NumEdit"})
 
+    def test_パスワード欄か分からなければ_Name_の値も文字数も出さない(self):
+        class _NoIsPassword(_Control):
+            @property
+            def IsPassword(self):
+                raise RuntimeError("取れない")
+
+            @IsPassword.setter
+            def IsPassword(self, v):
+                pass
+
+        c = _NoIsPassword(control_type="PaneControl")
+        c.ClassName, c.Name = "TextEdit", "secret"
+        e = self.win.element_of(c, self.NV)
+        self.assertIsNone(e.value)
+        self.assertNotIn("value_len", e.to_dict())
+        for state in (None, RuntimeError("取れない")):
+            c = self._ctl("TextEdit", "secret")
+            c._legacy_value, c._legacy_state = "x", state
+            e = self.win.element_of(c, self.NV)
+            self.assertIsNone(e.value, state)
+            self.assertNotIn("value_len", e.to_dict())
+
+    def test_保護された欄は値が読めなくても_Name_の文字数を出さない(self):
+        c = self._ctl("TextEdit", "secret")
+        orig = c.GetPattern
+        c.GetPattern = lambda pid: _LegacyPattern(None, 0x20000000) if pid == _PatternId.LegacyIAccessiblePattern else orig(pid)
+        d = self.win.element_of(c, self.NV).to_dict()
+        self.assertEqual(d["value"], "***")
+        self.assertNotIn("value_len", d)
+
+    def test_読み取りの失敗の文面を残さない(self):
+        from recorder.config import Config
+
+        reader = self.win.Reader(Config(target_exe=["RacroS.exe"]))
+        reader.proc = _TargetProcess(PID)
+        auto = sys.modules["uiautomation"]
+        auto.GetForegroundControl = lambda: (_ for _ in ()).throw(RuntimeError("山田太郎"))
+        auto.GetFocusedControl = lambda: None
+        s = reader.snapshot()
+        self.assertEqual(s.errors, [{"stage": "window", "error": "RuntimeError"}])
+
     def test_パスワードの印があれば文字数も出さない(self):
         c = self._ctl("TextEdit", "secret")
         c.IsPassword = True
