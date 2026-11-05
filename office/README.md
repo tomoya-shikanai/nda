@@ -132,6 +132,7 @@ python -m inputter plan <job.json> --items inputter\items.json
 - 手順は `{"field", "action": "type"|"key", "value"}` の並びで、JSON で出ます。数量は画面の数（4）を打ちます（DB は 10 倍の 40 で持つ）。
 - 数量・単価が null の行、`items.json` に無い品目があれば、手順を作らずに止まります（推測で埋めない）。
 - 欄の順は `inputter\columns.json` で決めます。業務の記録で分かっているのは 項目CD → 作業内容 → 作業区分 の順だけで、その先は**未確認**（`"confirmed": false`）。画面の dump で確かめてから直します。出力の `columns_confirmed` が false のままの手順は送ってはいけません。
+- 業務の記録から取り出した明細 1 行のキーの道筋（欄の部品・位置・読み返し・分からない所）は `inputter\keypath.json`、人の手順は `docs\racros-operations.md`。まだ `plan.py` は読みません（`"confirmed": false`）。
 - `--send` は付けても何もせずに止まります。送る機能はまだ作っていません。作る前に、鹿内さんが店で画面を見て確かめることと、Codex の敵対レビューが要ります。
 
 ### 許可リスト（`inputter\guard.py`）

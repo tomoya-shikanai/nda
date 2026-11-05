@@ -1,0 +1,146 @@
+{
+  "_status": "2026-11-05 の業務の記録と DB の時刻から取り出した。まだ送ってはいけない（confirmed: false）。手順書は docs/racros-operations.md、部品の地図は docs/racros-screens.md。確度: 確＝記録や DB で裏づけた／推＝推定。分からない所は unknown: true と理由",
+  "confirmed": false,
+  "screen": {
+    "exe": "M_NOU.exe",
+    "window_class": "ThunderRT6FormDC",
+    "title_contains": "整備伝票発行",
+    "opened_from": "M_CAR.exe の上の大きなタブ「03 整備伝票」（確）",
+    "coordinates": "窓の左上からの画素。1920×1080・拡大 100%・窓の位置 (192, 0)・幅 1536 で測った",
+    "position_tolerance_px": 3
+  },
+  "advance_key": "Enter",
+  "focus_check": "各手順の前に、フォーカスのある部品の class と位置（x, y）を読み、ここの値と合わなければ何も送らずに止める。Enter の回数で欄を数えない",
+  "header": {
+    "伝票種別": {
+      "class": "NumEdit",
+      "x": 874,
+      "y": 321,
+      "width": 33,
+      "focused_on_open": true,
+      "focused_on_open_confidence": "確",
+      "steps": [
+        {"action": "type", "value": "4"},
+        {"action": "key", "value": "Enter"}
+      ],
+      "steps_confidence": "推",
+      "readback": {"by": "Name", "expect": "4", "confidence": "推（NumEdit の値が Name に出ることは確）"},
+      "observed": "人は右の選択欄（▼、x≈1075, y≈337）をマウスで開き、一覧の 4 番目（御見積書）を選んでいた。御見積書の伝票はどれも、種別を変えたのは最後の保存（修正 → 保存）の直前だった",
+      "unknown": true,
+      "unknown_reason": "数の欄に 4 を打って Enter で確定するか、Enter の後のフォーカスの行き先、印保存の前に種別を変えてよいか（人は印保存の後で変えていた）が記録に無い。店で確かめるまで送らない"
+    },
+    "to_first_row": {
+      "start": {"field": "走行距離", "class": "NumEdit", "x": 873, "y": 437, "width": 123, "confidence": "確"},
+      "via": "Enter で x=1222 の列の欄（利用内容・車種ランク・受付担当・整備担当など）を進み、明細の 1 行目の項目CD に着く（確）",
+      "until": {"class": "NumEdit", "x": 53, "y": 566},
+      "unknown": true,
+      "unknown_reason": "Enter の回数が伝票で 6〜9 回とばらつく。欄の数の違いか記録の取りこぼしか分からない。回数でなく、フォーカスが until に来るまで 1 回ずつ確かめる。走行距離を打つかどうか（承認済みの明細に無い）も未"
+    }
+  },
+  "rows": {
+    "first_row_y": 566,
+    "row_height": 25,
+    "visible_rows": 15,
+    "beyond_visible": {
+      "unknown": true,
+      "unknown_reason": "16 行目からの部品の位置（表が動くか）が記録に無い。15 行を超える明細は今は止める"
+    },
+    "fields": [
+      {
+        "field": "項目CD",
+        "source": "code",
+        "class": "NumEdit",
+        "x": 53,
+        "width": 72,
+        "steps": [{"action": "type", "value": "<code>"}, {"action": "key", "value": "Enter"}],
+        "readback": {"by": "Name"},
+        "confidence": "確",
+        "popups_after": ["部品の選択", "追加点数の選択"],
+        "popups_note": "コードによって Enter の後に小窓が出る（確）。出たら止める。どのコードで出るかは未"
+      },
+      {
+        "field": "作業内容",
+        "source": "name",
+        "class": "TextEdit",
+        "x": 137,
+        "width": 511,
+        "steps": [{"action": "key", "value": "Enter"}],
+        "readback": {"by": "Name", "expect": "空でない（マスタの名前が入っている）"},
+        "confidence": "確（マスタの品目は名前が入っている）／推（打たずに Enter で進める）",
+        "free_entry": {
+          "unknown": true,
+          "unknown_reason": "項目CD 0 の自由入力の行の入れ方が記録に無い。人は名前を IME で打ち、F8（半角カナへの変換と見られる）を使っていた。F8 は許可リストで断るので、今は止める"
+        }
+      },
+      {
+        "field": "作業区分",
+        "source": "none",
+        "class": "NumEdit",
+        "x": 577,
+        "width": 33,
+        "steps": [{"action": "key", "value": "Enter"}],
+        "readback": {"by": "Name"},
+        "confidence": "確（多くは何も打たずに Enter）"
+      },
+      {
+        "field": "担当",
+        "source": "none",
+        "class": "NumEdit",
+        "x": 672,
+        "width": 45,
+        "steps": [{"action": "key", "value": "Enter"}],
+        "readback": {"by": "Name"},
+        "confidence": "推（欄の順は確。何も打たないかは推。記録で飛ばされて見える行があり、0.3 秒ごとの記録の取りこぼしと見られる）"
+      }
+    ],
+    "branch_after_担当": {
+      "note": "担当の Enter の後、フォーカスの位置でどちらの道かを確かめる（確: 欄の移り変わりと DB の行の中身）",
+      "part": {
+        "when_focus": {"class": "NumEdit", "x": 749},
+        "fields": [
+          {
+            "field": "数量",
+            "source": "qty",
+            "class": "NumEdit",
+            "x": 749,
+            "width": 69,
+            "steps": [{"action": "type", "value": "<qty>"}, {"action": "key", "value": "Enter"}],
+            "readback": {"by": "Name"},
+            "confidence": "確（順）／推（打って Enter）"
+          },
+          {
+            "field": "単価",
+            "source": "unit_price",
+            "class": "NumEdit",
+            "x": 822,
+            "width": 123,
+            "steps": [{"action": "type", "value": "<unit_price>"}, {"action": "key", "value": "Enter"}],
+            "readback": {"by": "Name"},
+            "confidence": "確（順）／推（打って Enter）"
+          }
+        ]
+      },
+      "labor": {
+        "when_focus": {"class": "NumEdit", "x": 1070},
+        "fields": [
+          {"field": "点数", "class": "NumEdit", "x": 1070, "width": 75, "confidence": "確（順）"},
+          {"field": "技術料", "class": "NumEdit", "x": 1149, "width": 123, "confidence": "確（順）"}
+        ],
+        "unknown": true,
+        "unknown_reason": "作業（技術料）の行は数量・単価の欄を通らない。承認済みの明細の数量・単価を点数・技術料にどう当てるか、どちらの道へ進むかを何が決めるか（マスタか作業区分か部品区分か）が分からない。この道に来たら止める"
+      },
+      "not_on_path": {"field": "部品金額", "class": "NumEdit", "x": 948, "width": 123, "note": "普段の道では通らない（推）"}
+    },
+    "row_end": {
+      "steps": [],
+      "next_focus": {"class": "NumEdit", "x": 53, "y": "次の行の y（+25）"},
+      "confidence": "確（単価・技術料の後は次の行の項目CD に移る）／推（そのキーは単価・技術料の Enter そのもので、行の終わりに足すキーは無い）"
+    }
+  },
+  "readback_number_format": {
+    "unknown": true,
+    "unknown_reason": "NumEdit の Name に出る数に桁区切りのカンマや小数点以下の 0 が付くか未。照合の前に確かめる"
+  },
+  "stop_on_windows": ["部品の選択", "追加点数の選択", "コード表", "額強制", "保存確認", "行削除確認", "印刷確認", "伝票削除確認"],
+  "human_only": ["保存", "印保存", "印刷", "額強制", "修正", "削除", "次へ（明細 → 集計）"]
+}
