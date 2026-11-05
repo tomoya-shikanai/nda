@@ -67,9 +67,15 @@ def _cmd_plan(args) -> int:
 def _cmd_send(args) -> int:
     try:
         _, columns, steps = _plan(args.job, args.items, None)
+    except (PlanError, guard.GuardError, OSError, json.JSONDecodeError) as ex:
+        # 手順を作る段のエラーの文には、品目の名前・数量などの値が入るので、send では出さない（Codex の指摘）
+        print(f"送る手順を作れない（何も送っていない）: {type(ex).__name__}。理由は plan で見る。", file=sys.stderr)
+        return 1
+    try:
         kp = sendmod.load_keypath(load_json(sendmod.KEYPATH_PATH))
         groups = sendmod.prepare(steps, kp)
-    except (PlanError, guard.GuardError, sendmod.SendError, OSError, json.JSONDecodeError) as ex:
+    except (sendmod.SendError, OSError, json.JSONDecodeError) as ex:
+        # send.py のエラーの文は、欄の名前と理由だけで、値を入れない
         print(f"送る手順を作れない（何も送っていない）: {ex}", file=sys.stderr)
         return 1
     columns_confirmed = isinstance(columns, dict) and columns.get("confirmed") is True
@@ -88,8 +94,10 @@ def _cmd_send(args) -> int:
         return 2
     from .winsend import WinDesktop
 
+    desk = None
     try:
-        sendmod.run(WinDesktop(), kp, groups, lambda m: print(m, flush=True))
+        desk = WinDesktop()
+        sendmod.run(desk, kp, groups, lambda m: print(m, flush=True))
     except sendmod.Stop as ex:
         print(f"止めた（これ以上は何も送らない）: {ex}", file=sys.stderr)
         print("伝票は保存せず、人が画面を確かめてください。", file=sys.stderr)
@@ -98,6 +106,9 @@ def _cmd_send(args) -> int:
         print(f"止めた（これ以上は何も送らない）: {type(ex).__name__}", file=sys.stderr)
         print("伝票は保存せず、人が画面を確かめてください。", file=sys.stderr)
         return 3
+    finally:
+        if desk is not None:
+            desk.close()
     return 0
 
 

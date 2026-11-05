@@ -55,6 +55,8 @@ class FakeDesktop:
         self.hooks = []  # 送るたびに呼ぶ（偽の不具合を起こす）
         self.focus_override = None
         self.drop_chars = False
+        self.human_flag = False  # 低水準のフックで、injected でない入力を見た
+        self.delayed = []  # (出る時刻, TopWindow)。遅れて出る小窓
         self.format = None  # Name の見え方を変える関数
 
     # -- Desktop --
@@ -78,7 +80,14 @@ class FakeDesktop:
         return FocusInfo(pid=7, class_name=f["class"], rect=self._rect(row, f), name=name)
 
     def windows_of(self, pid):
-        return [TopWindow(hwnd=100, class_name="ThunderRT6FormDC", title=self.window.title)] + self.extra_windows
+        late = [w for at, w in self.delayed if at <= self.now]
+        return [TopWindow(hwnd=100, class_name="ThunderRT6FormDC", title=self.window.title)] + self.extra_windows + late
+
+    def human_input_seen(self):
+        return self.human_flag
+
+    def reset_human_input(self):
+        self.human_flag = False
 
     def last_input_tick(self):
         return self.last_input & 0xFFFFFFFF
@@ -352,6 +361,28 @@ class RunTest(unittest.TestCase):
         self.desk.sleep = sleep
         self.assertStops("人が", sent_max=4)
 
+    def test_human_key_right_after_send_seen_by_hook(self):
+        # 送ってから 100 ミリ秒の内の人の入力は、時刻では自分の入力と分けられない。フックの injected の印で止める
+        def touch(d):
+            if len(d.sent) == 2:
+                d.last_input = d.now + 1
+                d.human_flag = True
+        self.desk.hooks.append(touch)
+        self.assertStops("人が", sent_max=2)
+
+    def test_human_click_before_start_is_not_counted(self):
+        self.desk.human_flag = True  # 人が欄をクリックした（始める前）
+        run(self.desk, groups_for(LINE_A))
+        self.assertEqual(self.desk.sent[-1], ("key", "Enter"))
+
+    def test_late_popup_after_enter_stops_before_next_send(self):
+        # 項目CD の Enter の 300 ミリ秒後に小窓が出る。次の欄で落ち着くのを待つ間に見つけ、何も送らない
+        def popup(d):
+            if d.sent[-1] == ("key", "Enter") and len(d.sent) == 4:
+                d.delayed.append((d.now + 300, TopWindow(hwnd=202, class_name="ThunderRT6FormDC", title="部品の選択")))
+        self.desk.hooks.append(popup)
+        self.assertStops("小窓", sent_max=4)
+
     def test_mouse_move_stops(self):
         def move(d):
             if len(d.sent) == 3:
@@ -512,6 +543,13 @@ class MainSendTest(unittest.TestCase):
                 code, out, err = self._run(argv)
                 self.assertEqual(code, 2)
                 self.assertEqual(out, "")
+
+    def test_plan_error_in_send_hides_values(self):
+        bad = self._write("bad.json", job({"item": "架空の部品A", "qty": 1.25, "unit": "本", "unitPrice": 100}))
+        code, out, err = self._run(["send", bad, "--items", self.items])
+        self.assertEqual(code, 1)
+        self.assertNotIn("1.25", err)
+        self.assertNotIn("架空の部品A", err)
 
     def test_free_entry_refused_before_anything(self):
         bad = self._write("bad.json", job({"item": "架空の自由入力", "qty": 1, "unit": "本", "unitPrice": 100}))

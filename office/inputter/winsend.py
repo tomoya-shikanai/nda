@@ -125,6 +125,38 @@ class WinDesktop:
         self._win = win
         win.set_dpi_aware()  # 位置は記録（recorder）と同じ画素でそろえる
         win.shorten_uia_timeouts(2000)
+        self._human = False
+        self._start_hooks()
+
+    # -- 人の入力（低水準のフック。読むだけで、入力を止めたり書き換えたりしない） --
+
+    def _start_hooks(self) -> None:
+        from pynput import keyboard, mouse
+
+        def seen(*args):
+            # pynput は最後の引数に injected（SendInput などで作られた入力か）を渡す
+            if not args[-1]:
+                self._human = True
+
+        self._listeners = [
+            keyboard.Listener(on_press=seen, on_release=seen),
+            mouse.Listener(on_move=seen, on_click=seen, on_scroll=seen),
+        ]
+        for listener in self._listeners:
+            listener.start()
+        for listener in self._listeners:
+            listener.wait()
+
+    def human_input_seen(self) -> bool:
+        # フックが止まっていたら、人の入力を見られないので、見たことにして止める
+        return self._human or not all(listener.is_alive() for listener in self._listeners)
+
+    def reset_human_input(self) -> None:
+        self._human = False
+
+    def close(self) -> None:
+        for listener in self._listeners:
+            listener.stop()
 
     def foreground(self) -> WindowInfo | None:
         try:
@@ -167,7 +199,8 @@ class WinDesktop:
                 if user32.IsWindowVisible(hwnd) and self._win.pid_of_window(int(hwnd)) == pid:
                     found.append(TopWindow(hwnd=int(hwnd), class_name=_class_name(int(hwnd)), title=_title(int(hwnd))))
             except Exception:
-                pass
+                # 1 つでも読めない窓があれば、ダイアログが無いと言えないので止める側にする（Codex の指摘）
+                found.append(TopWindow(hwnd=0, class_name="#32770", title=""))
             return True
 
         if not user32.EnumWindows(proto(cb), 0):

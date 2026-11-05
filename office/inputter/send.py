@@ -35,6 +35,9 @@ FOCUS_TIMEOUT_S = 3.0  # Enter の後、フォーカスが次の欄に来るま�
 READBACK_TIMEOUT_S = 2.0
 POLL_S = 0.05
 SETTLE_S = 0.15  # 送った後、画面が受け取るまで待つ長さ
+# Enter の後、次の欄にフォーカスが来てから、この長さ続けて同じ欄にあるのを見てから送る。
+# 遅れて出る小窓（部品の選択など）に、確かめた直後の文字や Enter が入るのを減らす（Codex の指摘。0 にはできない）
+STABLE_S = 0.5
 OWN_INPUT_MARGIN_MS = 100  # 送った自分の入力の時刻として見なす幅（これより後の入力は人の入力）
 START_TIMEOUT_S = 60.0
 START_QUIET_MS = 2000  # 始める前に、人の入力が無いことを確かめる長さ
@@ -83,6 +86,8 @@ class Desktop(Protocol):
     def tick_now(self) -> int: ...  # GetTickCount
     def cursor_pos(self) -> tuple[int, int]: ...
     def keys_held(self) -> bool: ...  # Shift・Ctrl・Alt・Win・マウスのボタンが押されている、かな固定が入っている
+    def human_input_seen(self) -> bool: ...  # 送った自分の入力（injected）でないキー・マウスの入力を、一度でも見た
+    def reset_human_input(self) -> None: ...
     def send_key(self, name: str) -> None: ...
     def send_char(self, ch: str) -> None: ...
     def sleep(self, seconds: float) -> None: ...
@@ -391,6 +396,9 @@ class Sender:
         return None
 
     def _check_input(self) -> None:
+        if self.desk.human_input_seen():
+            # 低水準のフックで、送った自分の入力でない（injected でない）入力を見た。時刻の差では分けられない分も止める
+            raise Stop("人がキーボードかマウスを触った")
         if self.desk.keys_held():
             raise Stop("修飾キー（Shift・Ctrl・Alt・Win）かマウスのボタンが押されているか、かな固定が入っている")
         if self.desk.last_input_tick() != self.tick:
@@ -409,15 +417,20 @@ class Sender:
         return f
 
     def _wait_focus(self, t: Target, timeout: float = FOCUS_TIMEOUT_S) -> FocusInfo:
-        """フォーカスが t に来るまで待つ。待つ間も人の入力・窓・ダイアログを確かめ続ける。"""
+        """フォーカスが t に来て、STABLE_S の間そこに続けてあるまで待つ。待つ間も人の入力・窓・ダイアログを確かめ続ける。"""
         waited = 0.0
+        stable = 0.0
         while True:
             self._check_input()
             w = self._check_window()
             f = self.desk.focused()
             problem = self._focus_problem(w, f, t)
             if problem is None:
-                return f
+                if stable >= STABLE_S:
+                    return f
+                stable += POLL_S
+            else:
+                stable = 0.0
             if waited >= timeout:
                 raise Stop(f"{t.field} を待ったが来ない: {problem}")
             self.desk.sleep(POLL_S)
@@ -444,6 +457,8 @@ class Sender:
         send()
         self.desk.sleep(SETTLE_S)
         last = self.desk.last_input_tick()
+        # GetLastInputInfo は自分の入力でも進むので、送った直後の分は差し引く。
+        # この幅の中の人の入力は時刻では分けられないので、human_input_seen（injected の印）でも見る
         if _tick_after(last, sent_at) > OWN_INPUT_MARGIN_MS:
             # 送った直後より後に入力があった＝人の入力（待つ間に人が触った）
             raise Stop("送った後に、人がキーボードかマウスを触った")
@@ -478,6 +493,7 @@ class Sender:
                 idle = _tick_after(self.desk.tick_now(), self.desk.last_input_tick())
                 ready = self._focus_problem(w, f, first) is None and idle >= START_QUIET_MS and not self.desk.keys_held()
             if ready:
+                self.desk.reset_human_input()  # 人が欄をクリックした分は数えない。ここから後の人の入力で止める
                 self.hwnd, self.pid = w.hwnd, w.pid
                 self.tick = self.desk.last_input_tick()
                 self.cursor = self.desk.cursor_pos()
