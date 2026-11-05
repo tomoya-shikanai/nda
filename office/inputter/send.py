@@ -438,11 +438,19 @@ class Sender:
         """人の入力・窓・ダイアログ・フォーカスを今確かめる。1 つでも外れれば Stop。"""
         self._check_input()
         w = self._check_window()
-        f = self.desk.focused()
+        f = self._focused()
         problem = self._focus_problem(w, f, t)
         if problem:
             raise Stop(problem)
         return f
+
+    def _focused(self) -> FocusInfo | None:
+        """フォーカスを読む。読み取りが失敗したら（例外）、待ち直さずに止める（Codex 5 回目の指摘）。
+        None は「今はフォーカスのある部品が無い」（欄の移り変わりの間）で、待ってよい。"""
+        try:
+            return self.desk.focused()
+        except Exception as ex:
+            raise Stop(f"フォーカスを読めなかった（{type(ex).__name__}）") from None
 
     def _wait_focus(self, t: Target, timeout: float = FOCUS_TIMEOUT_S) -> FocusInfo:
         """フォーカスが t に来て、STABLE_S の間そこに続けてあるまで待つ。待つ間も人の入力・窓・ダイアログを確かめ続ける。"""
@@ -451,7 +459,7 @@ class Sender:
         while True:
             self._check_input()
             w = self._check_window()
-            f = self.desk.focused()
+            f = self._focused()
             problem = self._focus_problem(w, f, t)
             if problem is None:
                 if stable >= STABLE_S:
@@ -517,7 +525,7 @@ class Sender:
             w = self.desk.foreground()
             ready = False
             if self._window_ok(w) is None:
-                f = self.desk.focused()
+                f = self._focused()
                 idle = _tick_after(self.desk.tick_now(), self.desk.last_input_tick())
                 ready = self._focus_problem(w, f, first) is None and idle >= START_QUIET_MS and not self.desk.keys_held()
             if ready:

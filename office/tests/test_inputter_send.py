@@ -69,6 +69,8 @@ class FakeDesktop:
         return (x, y, x + (f.get("width") or 10), y + 20)
 
     def focused(self):
+        if self.focus_override == "raise":
+            raise OSError("読めない")
         if self.focus_override == "none":
             return None
         if self.focus_override is not None:
@@ -310,6 +312,15 @@ class RunTest(unittest.TestCase):
                 d.extra_windows.append(TopWindow(hwnd=200, class_name="#32770", title="確認"))
         self.desk.hooks.append(popup)
         self.assertStops("ダイアログ", sent_max=4)
+
+    def test_focus_read_failure_stops_without_retry(self):
+        # 項目CD の Enter の後、フォーカスの読み取りが 1 回失敗したら、読めるようになっても続けない（Codex 5 回目）
+        def fail_once(d):
+            if d.sent == [("char", "1"), ("char", "0"), ("char", "1"), ("key", "Enter")] and not getattr(d, "_failed", False):
+                d._failed = True
+                d.focus_override = "raise"
+        self.desk.hooks.append(fail_once)
+        self.assertStops("フォーカスを読めなかった", sent_max=4)
 
     def test_other_process_dialog_stops(self):
         # 前面とフォーカスが伝票の画面のままでも、別の process の見えているダイアログで止める

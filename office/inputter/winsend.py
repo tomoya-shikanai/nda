@@ -188,14 +188,15 @@ class WinDesktop:
             import uiautomation as auto
 
             c = auto.GetFocusedControl()
-            if c is None:
-                return None
-            rect = _rect(c.BoundingRectangle)
-            if rect is None:
-                return None
-            return FocusInfo(pid=int(c.ProcessId), class_name=c.ClassName or "", rect=rect, name=c.Name or "")
-        except Exception:
-            return None
+        except Exception as ex:
+            raise OSError("フォーカスの部品を読めなかった") from ex
+        if c is None:
+            return None  # フォーカスのある部品が無い（欄の移り変わりの間）。待ってよい
+        # ここから先の読み取りの失敗は例外のまま上げる（send が止める）。失敗を None にして待ち直さない
+        rect = _rect(c.BoundingRectangle)
+        if rect is None:
+            raise OSError("フォーカスの部品の位置を読めなかった")
+        return FocusInfo(pid=int(c.ProcessId), class_name=c.ClassName or "", rect=rect, name=c.Name or "")
 
     def visible_windows(self) -> list[TopWindow]:
         user32 = ctypes.windll.user32
