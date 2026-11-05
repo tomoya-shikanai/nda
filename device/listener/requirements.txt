@@ -1,0 +1,14 @@
+# 聞き役（device/listener/listen.py）の依存。2026-11-05 に PyPI の版で入れて、この Mac（Python 3.14）で動かした。
+vosk==0.3.44
+sounddevice==0.5.6
+# 上の 2 つが必要とするもの（版をそろえるため固定）
+cffi==2.1.1
+pycparser==3.12
+requests==2.34.2
+srt==3.5.3
+tqdm==4.70.1
+websockets==17.4
+certifi==2026.10.23
+charset-normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0
