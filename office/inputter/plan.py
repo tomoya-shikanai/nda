@@ -32,9 +32,19 @@ def _is_num(v: object) -> bool:
     return isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
 
 
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    # 同じ項目が 2 回ある JSON（"qty": null と "qty": 1 など）は、どちらが正か分からないので止める（Codex の指摘）
+    out: dict = {}
+    for k, v in pairs:
+        if k in out:
+            raise PlanError(f"JSON に同じ項目が 2 回ある: {k!r}")
+        out[k] = v
+    return out
+
+
 def load_json(path: str | Path) -> object:
     # 小数は Decimal で読む。float で読むと 1.00000000000000001 が 1.0 になり、0.1 刻みでない数を見逃す（Codex の指摘）
-    return json.loads(Path(path).read_text(encoding="utf-8"), parse_float=Decimal)
+    return json.loads(Path(path).read_text(encoding="utf-8"), parse_float=Decimal, object_pairs_hook=_no_duplicate_keys)
 
 
 def load_items(data: object) -> dict[str, int]:
@@ -85,10 +95,20 @@ def qty_tenths(qty: object) -> int:
     """
     if not _is_num(qty):
         raise PlanError(f"数量が数でない: {qty!r}")
-    d = (qty if isinstance(qty, Decimal) else Decimal(repr(qty))) * 10
-    if not d.is_finite() or d != d.to_integral_value():
+    d = qty if isinstance(qty, Decimal) else Decimal(repr(qty))
+    if not d.is_finite():
         raise PlanError(f"数量が 0.1 刻みでない: {qty!r}")
-    tenths = int(d)
+    # Decimal の掛け算も既定の精度（28 桁）で丸まるので使わない（Codex の指摘）。
+    # 桁の並びと指数をそのまま見て、小数点以下の 0 でない桁が 1 桁までのときだけ通す。
+    sign, digits, exp = d.as_tuple()
+    digits = list(digits)
+    while exp < 0 and len(digits) > 1 and digits[-1] == 0:
+        digits.pop()
+        exp += 1
+    if sign or exp < -1 or len(digits) > 6:
+        raise PlanError(f"数量が 0.1 刻みでない: {qty!r}")
+    n = int("".join(map(str, digits)))
+    tenths = n * (10 ** (exp + 1))
     if tenths <= 0 or tenths > MAX_QTY * 10:
         raise PlanError(f"数量が 0.1〜{MAX_QTY} の範囲にない: {qty!r}")
     return tenths

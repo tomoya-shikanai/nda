@@ -208,3 +208,30 @@ class JsonDecimalTest(unittest.TestCase):
             p = Path(d) / "job.json"
             p.write_text(_json.dumps(_job(qty=1.5)), encoding="utf-8")
             self.assertIn({"field": "明細1.数量", "action": "type", "value": "1.5"}, build_plan(load_json(p), ITEMS, COLUMNS))
+
+
+class QtyExactRound3Test(unittest.TestCase):
+    """Codex の 3 回目の指摘: Decimal の掛け算の丸めと、JSON の同じ項目の 2 回目。"""
+
+    def test_thirty_digit_qty_is_rejected(self):
+        from decimal import Decimal
+        with self.assertRaises(PlanError):
+            build_plan(_job(qty=Decimal("1.00000000000000000000000000001")), ITEMS, COLUMNS)
+
+    def test_tenths_values(self):
+        from decimal import Decimal
+        from inputter.plan import qty_tenths
+        for q, t in ((4, 40), (Decimal("1.5"), 15), (Decimal("1.50"), 15), (Decimal("4.0"), 40), (0.1, 1), (9999, 99990), (Decimal("1E+1"), 100)):
+            self.assertEqual(qty_tenths(q), t, q)
+        for q in (Decimal("1.25"), Decimal("0.05"), 10000, Decimal("-1"), 0):
+            with self.assertRaises(PlanError):
+                qty_tenths(q)
+
+    def test_duplicate_key_json_is_rejected(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "job.json"
+            p.write_text('{"job_id":"t","customer_code":1,"car_code":1,"lines":[{"item":"架空の作業A","qty":null,"qty":1,"unitPrice":1}]}', encoding="utf-8")
+            with self.assertRaises(PlanError):
+                load_json(p)
