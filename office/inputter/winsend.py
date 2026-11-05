@@ -97,15 +97,23 @@ def _send(inputs: list[INPUT]) -> None:
         raise OSError(f"SendInput が {n}/{len(inputs)} しか送れなかった")
 
 
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+
 def _class_name(hwnd: int) -> str:
+    # 失敗は戻り値 0 で知らされる。読めなかった窓を「ダイアログでない」と見なさないよう、例外にする（Codex の指摘）
     buf = ctypes.create_unicode_buffer(256)
-    ctypes.windll.user32.GetClassNameW(wintypes.HWND(hwnd), buf, 256)
+    if not _user32.GetClassNameW(wintypes.HWND(hwnd), buf, 256):
+        raise OSError("GetClassNameW が失敗した")
     return buf.value
 
 
 def _title(hwnd: int) -> str:
+    # 題名が空でも 0 が返るので、GetLastError で失敗と見分ける
     buf = ctypes.create_unicode_buffer(512)
-    ctypes.windll.user32.GetWindowTextW(wintypes.HWND(hwnd), buf, 512)
+    ctypes.set_last_error(0)
+    if not _user32.GetWindowTextW(wintypes.HWND(hwnd), buf, 512) and ctypes.get_last_error():
+        raise OSError("GetWindowTextW が失敗した")
     return buf.value
 
 

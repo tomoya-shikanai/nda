@@ -73,7 +73,7 @@ def _cmd_send(args) -> int:
         return 1
     try:
         kp = sendmod.load_keypath(load_json(sendmod.KEYPATH_PATH))
-        groups = sendmod.prepare(steps, kp)
+        groups = sendmod.prepare(steps, kp, columns)
     except (sendmod.SendError, OSError, json.JSONDecodeError) as ex:
         # send.py のエラーの文は、欄の名前と理由だけで、値を入れない
         print(f"送る手順を作れない（何も送っていない）: {ex}", file=sys.stderr)

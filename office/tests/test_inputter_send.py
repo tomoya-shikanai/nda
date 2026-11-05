@@ -29,7 +29,7 @@ def kp(data=None):
 
 
 def groups_for(*lines):
-    return send.prepare(build_plan(job(*lines), ITEMS, COLUMNS), kp())
+    return send.prepare(build_plan(job(*lines), ITEMS, COLUMNS), kp(), COLUMNS)
 
 
 class FakeDesktop:
@@ -197,7 +197,21 @@ class PrepareTest(unittest.TestCase):
             s = copy.deepcopy(good)
             mutate(s)
             with self.subTest(name), self.assertRaises(send.SendError):
-                send.prepare(s, kp())
+                send.prepare(s, kp(), COLUMNS)
+
+    def test_columns_source_must_match_keypath(self):
+        # columns.json の項目CD と単価の source を入れ替えると、項目CD の欄に単価を打つ手順ができる。送る前に止める
+        cols = copy.deepcopy(COLUMNS)
+        by = {c["field"]: c for c in cols["columns"]}
+        by["項目CD"]["source"], by["単価"]["source"] = "unit_price", "code"
+        steps = build_plan(job(LINE_A), ITEMS, cols)
+        with self.assertRaisesRegex(send.SendError, "source"):
+            send.prepare(steps, kp(), cols)
+        for mutate in (lambda c: c.__setitem__("row_end_keys", ["Down"]), lambda c: c["columns"].pop()):
+            c = copy.deepcopy(COLUMNS)
+            mutate(c)
+            with self.subTest(), self.assertRaises(send.SendError):
+                send.prepare(build_plan(job(LINE_A), ITEMS, COLUMNS), kp(), c)
 
     def test_dry_run_lines_mask_values(self):
         lines = send.dry_run_lines(groups_for(LINE_A), kp())
@@ -496,6 +510,23 @@ class WinSendTest(unittest.TestCase):
         for bad in ("\r", "\n", "\t", "\x1b", "ab", ""):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 winsend.char_inputs(bad)
+
+    def test_unreadable_window_raises(self):
+        # クラス名・題名が読めない窓は、空の名前の窓でなく失敗として扱う（呼ぶ側でダイアログと見なして止める）
+        from unittest import mock
+
+        from inputter import winsend
+
+        fake = mock.Mock()
+        fake.GetClassNameW.return_value = 0
+        fake.GetWindowTextW.return_value = 0
+        with mock.patch.object(winsend, "_user32", fake), mock.patch.object(winsend.ctypes, "get_last_error", return_value=5):
+            with self.assertRaises(OSError):
+                winsend._class_name(1)
+            with self.assertRaises(OSError):
+                winsend._title(1)
+        with mock.patch.object(winsend, "_user32", fake), mock.patch.object(winsend.ctypes, "get_last_error", return_value=0):
+            self.assertEqual(winsend._title(1), "")  # 題名が空なだけ
 
     def test_send_checks_count(self):
         from unittest import mock

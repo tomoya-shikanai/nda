@@ -245,8 +245,24 @@ def _check_text(t: Target, text: str) -> str | None:
     return None
 
 
-def prepare(steps: object, kp: Keypath) -> list[Group]:
-    """plan.py の手順を、欄ごとの Group に分け、keypath の順・キー・打てる文字と照らす。1 つでも外れれば SendError。"""
+def check_columns(columns: object, kp: Keypath) -> None:
+    """plan.py が値を選ぶ columns.json の欄と入れる元（source）が、keypath の 1 行の欄と同じ順・同じ元か。
+    違えば、例えば項目CD の欄に単価を打ってしまう（形はどちらも整数なので、打つ文字の確かめでは分からない。Codex の指摘）。"""
+    cols = columns.get("columns") if isinstance(columns, dict) else None
+    if not isinstance(cols, list):
+        raise SendError("columns.json に columns が無い")
+    got = [(c.get("field"), c.get("source")) for c in cols if isinstance(c, dict)]
+    want = [(f["field"], f.get("source")) for f in kp.path]
+    if len(got) != len(cols) or got != want:
+        raise SendError("columns.json の欄と入れる元（source）が、keypath の 1 行の欄の順・元と合わない")
+    if columns.get("advance_key") != kp.advance_key or columns.get("row_end_keys", []) != []:
+        raise SendError("columns.json の advance_key か row_end_keys が keypath と合わない")
+
+
+def prepare(steps: object, kp: Keypath, columns: object) -> list[Group]:
+    """plan.py の手順を、欄ごとの Group に分け、keypath の順・キー・打てる文字と照らす。1 つでも外れれば SendError。
+    columns は手順を作るのに使った columns.json の中身（欄と入れる元が keypath と同じかを確かめる）。"""
+    check_columns(columns, kp)
     if not isinstance(steps, list) or not steps:
         raise SendError("手順が空か、list でない")
     groups: list[tuple[str, list[dict]]] = []
