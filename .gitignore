@@ -36,6 +36,7 @@ data/sessions/
 
 # 事務所の記録（設定は PC ごと）
 office/recorder/config.json
+office/inputter/items.json
 __pycache__/
 !.env.example
 office/.venv/
