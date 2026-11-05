@@ -422,7 +422,11 @@ class Reader:
             try:
                 focus = auto.GetFocusedControl()
                 if focus is not None and focus.ProcessId == fg_pid:
-                    s.focus = element_of(focus, self.name_value_classes)
+                    e = element_of(focus, self.name_value_classes)
+                    # 窓を読んでから欄を読むまで（最大で UIA の待ち時間）に、対象が終わって pid が他のアプリに
+                    # 使い回されていたら捨てる。読んだ後に、今も対象の名前のプロセスかを確かめる
+                    if self._target_name(fg_pid):
+                        s.focus = e
             except Exception as ex:
                 fail("focus", ex)
 

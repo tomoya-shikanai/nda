@@ -798,6 +798,28 @@ class PidReuseTest(unittest.TestCase):
         self.reader._on_press(_SpecialKey("enter"))
         self.assertEqual([k.key for k in self.reader.snapshot().keys], ["tab"])
 
+    def test_欄を読む間に_pid_が他のアプリに使い回されたら欄を残さない(self):
+        w = _Window(self.SCREEN, "整備伝票", handle=300)
+        self.auto.GetForegroundControl = lambda: w
+        names = self.names
+
+        def focused():
+            names[self.SCREEN] = "chrome.exe"  # 窓を読んだ後に M_NOU が閉じ、同じ pid で他のアプリが前に出た
+            c = _Control(control_type="ButtonControl")
+            c.Name, c.ProcessId = "受信トレイ", self.SCREEN
+            return c
+
+        self.auto.GetFocusedControl = focused
+        self.assertIsNone(self.reader.snapshot().focus)
+
+    def test_対象の欄は残す(self):
+        w = _Window(self.SCREEN, "整備伝票", handle=300)
+        self.auto.GetForegroundControl = lambda: w
+        c = _Control(control_type="ButtonControl")
+        c.ProcessId = self.SCREEN
+        self.auto.GetFocusedControl = lambda: c
+        self.assertIsNotNone(self.reader.snapshot().focus)
+
     def test_区切りのプロセスが終わったら同じ_pid_でも対象にしない(self):
         self.reader.proc.is_running = lambda: False
         self.assertEqual(self.reader._target_name(PID), "")
