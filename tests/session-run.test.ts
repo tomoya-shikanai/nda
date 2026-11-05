@@ -233,14 +233,15 @@ test("(6) 6 つの状態それぞれの say", async () => {
     asking: toMonitorView(asking).say,
     done: toMonitorView(done).say,
   };
-  assert.deepEqual(Object.keys(says), [...SESSION_STATES]);
+  // 承認の後の 4 つ（事務所への入力）は tests/office.test.ts
+  assert.deepEqual(Object.keys(says), SESSION_STATES.slice(0, 6));
   assert.deepEqual(says, {
     idle: "待っています。手は整備のままで。",
     listening: "聞いています",
     thinking: "明細に分けています",
     drafting: "請求書を作っています",
     asking: "合っていれば「請求書頼む」と言ってください",
-    done: "2行入れました。発行は人が押してください",
+    done: "2行の請求書を承認しました。入力は人がしてください",
   });
   assert.equal(SAY.done(2), says.done);
   // heard は全発話をそのままつなぐ

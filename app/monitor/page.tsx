@@ -11,7 +11,7 @@ import { ANSWERED_VALVE_QTY, ITEMS, yen } from "../_demo/tire-change";
 import Companion from "./Companion";
 import LiveMonitor from "./LiveMonitor";
 import styles from "./monitor.module.css";
-import { AWAITING_LABEL, CALL_HINT, type FaceKey, STATE_KEYS, STATES, toStateKey, type ItemStatus } from "./states";
+import { AFTER_LABELS, AWAITING_LABEL, CALL_HINT, type LabelKey, STATE_KEYS, STATES, toStateKey, type ItemStatus } from "./states";
 
 export const metadata: Metadata = { title: "んだ — 工場のモニター" };
 
@@ -24,8 +24,9 @@ const MARK: Record<ItemStatus, { icon: string; text: string }> = {
 
 const LABELS = {
   ...Object.fromEntries(STATE_KEYS.map((k) => [k, STATES[k].label])),
+  ...AFTER_LABELS,
   awaiting: AWAITING_LABEL,
-} as Record<FaceKey, string>;
+} as Record<LabelKey, string>;
 
 export default function MonitorPage({ searchParams }: PageProps<"/monitor">) {
   return (

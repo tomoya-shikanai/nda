@@ -11,13 +11,16 @@ import type { PublicLedger } from "../../lib/ledger/lookup";
 import { type MonitorLine, type MonitorView, toMonitorView, yenText } from "../../lib/session/view";
 import Companion from "./Companion";
 import styles from "./monitor.module.css";
-import type { FaceKey } from "./states";
+import type { FaceKey, LabelKey } from "./states";
+
+/** 承認の後の状態は、試作の 6 つの表情を借りる（states.ts の FACE_OF と同じ。states.ts は node を使う store を読むので写す）。 */
+const AFTER_FACE: Record<string, FaceKey> = { sending: "drafting", sent: "drafting", entered: "done", stopped: "asking" };
 
 const POLL_MS = 2000;
 /** これより行が多ければ明細を詰める。 */
 const DENSE_LINES = 4;
 
-function isView(v: unknown, labels: Record<FaceKey, string>): v is MonitorView {
+function isView(v: unknown, labels: Record<LabelKey, string>): v is MonitorView {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Record<string, unknown>;
   return (
@@ -81,7 +84,7 @@ function sayClass(say: string): string {
   return `${styles.doing} ${styles.doingLonger}`;
 }
 
-export default function LiveMonitor({ labels, hint }: { labels: Record<FaceKey, string>; hint: string }) {
+export default function LiveMonitor({ labels, hint }: { labels: Record<LabelKey, string>; hint: string }) {
   const [view, setView] = useState<MonitorView>(() => toMonitorView(null));
   const [offline, setOffline] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -149,7 +152,8 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<FaceKey, 
     ul.scrollTop = Math.max(0, bottom - ul.clientHeight);
   }, [view.lines]);
 
-  const face: FaceKey = view.awaitingApproval ? "awaiting" : view.state;
+  const face: FaceKey = view.awaitingApproval ? "awaiting" : (AFTER_FACE[view.state] ?? (view.state as FaceKey));
+  const label = labels[view.awaitingApproval ? "awaiting" : view.state];
   const asks = view.questions.length;
   const okCount = view.lines.filter((l) => l.status === "ok").length;
   const total = yenText(view.total);
@@ -162,17 +166,11 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<FaceKey, 
           んだ <span>nDa</span>
         </div>
         <div className={styles.customer}>
-          {view.customer ? (
-            <>
-              お客様: <b>{view.customer.name}様</b>　車: <b>{view.customer.car}</b>
-            </>
-          ) : (
-            "お客様: 未指定"
-          )}
+          {view.customer ?? "お客様: 未指定"}
         </div>
         <div className={styles.status}>
           <span className={styles.lamp} />
-          {labels[face]}
+          {label}
         </div>
       </header>
 
@@ -208,7 +206,11 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<FaceKey, 
                   {asks > 1 && <span className={styles.more}>ほか {asks - 1} 問</span>}
                 </li>
               )}
-              {view.approved && <li className={styles.resolved}>✓ 承認済み</li>}
+              {view.approved && (
+                <li className={styles.resolved}>
+                  ✓ 承認済み{view.office && <span className={styles.more}>{view.office}</span>}
+                </li>
+              )}
             </ul>
           </div>
 

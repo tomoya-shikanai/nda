@@ -15,7 +15,24 @@ import { Provenance } from "../karte/schema";
 import type { Transcript } from "../stt/types";
 import { customerPending } from "./customer";
 
-export const SESSION_STATES = ["idle", "listening", "thinking", "drafting", "asking", "done"] as const;
+/**
+ * done（承認した瞬間）の後ろは事務所への入力（docs/design/pi-office.md §5）: sending（受け箱に置いている・送り直し中）→ sent（置けた。結果待ち）
+ * → entered（保存の手前まで入った）| stopped（事務所で止まった。または依頼を組めなかった）。
+ */
+export const SESSION_STATES = [
+  "idle",
+  "listening",
+  "thinking",
+  "drafting",
+  "asking",
+  "done",
+  "sending",
+  "sent",
+  "entered",
+  "stopped",
+] as const;
+/** 承認の後の状態（承認済み・確認事項 0 件・客が決まっていること）。 */
+export const APPROVED_STATES: readonly SessionStatus[] = ["done", "sending", "sent", "entered", "stopped"];
 export const SessionStatus = z.enum(SESSION_STATES);
 export type SessionStatus = (typeof SESSION_STATES)[number];
 
@@ -30,8 +47,8 @@ export const AnswerAction = z.discriminatedUnion("kind", [
   /** 「X は何の数ですか」に「関係ない」。その行の使われない数の確認事項を解く。 */
   z.object({ kind: z.literal("unrelated") }),
   z.object({ kind: z.literal("approve") }),
-  /** 答えで客が決まった（名前と下 4 桁が一覧の同じ 1 件に合った）。id だけを残す。 */
-  z.object({ kind: z.literal("setCustomer"), id: z.string() }),
+  /** 返事の 4 桁を含む文で、事務所に客の照合を問い合わせた（原文は残さない。queryId だけ）。 */
+  z.object({ kind: z.literal("askOffice"), queryId: z.string() }),
   /**
    * 明細が 0 行の作業への返事を、作業の話の続きとして文字起こしの後ろに足して抽出し直した（run.ts の continueSession）。
    * offsetSec は足した発話を後ろにずらした秒数。文字起こしの時刻 − offsetSec が、返事の録音（provenance.recordingId）の時刻。
@@ -84,8 +101,53 @@ const SessionSchema = z.object({
   extraction: ExtractionCost.nullable().default(null),
   /** 前の版のファイルには無いので、無ければ客の照合なし。 */
   customerRequired: z.boolean().default(false),
-  customerId: z.string().nullable().default(null),
+  customer: z.object({ customerNo: z.string(), carNo: z.string() }).nullable().default(null),
+  customerQuery: z
+    .object({
+      id: z.string(),
+      sentAt: z.string(),
+      status: z.enum(["pending", "answered", "expired", "unreachable"]),
+      retryReason: z.string().nullable(),
+    })
+    .nullable()
+    .default(null),
+  office: z
+    .object({
+      requestId: z.string(),
+      attempt: z.number().int(),
+      sentAt: z.string().nullable(),
+      firstTriedAt: z.string(),
+      lastTriedAt: z.string().nullable(),
+      lastError: z.string().nullable(),
+      result: z
+        .object({ id: z.string(), outcome: z.string(), reason: z.string().nullable(), enteredLines: z.number(), at: z.string() })
+        .nullable(),
+    })
+    .nullable()
+    .default(null),
+  appliedIds: z.array(z.string()).default([]),
 });
+
+export type CustomerQueryState = {
+  id: string;
+  sentAt: string;
+  status: "pending" | "answered" | "expired" | "unreachable";
+  /** retry の理由（none・many・expired・dbUnavailable）。found なら null。 */
+  retryReason: string | null;
+};
+
+export type OfficeState = {
+  /** 依頼のメッセージの id。送り直しても同じ（事務所が二重を止める鍵）。 */
+  requestId: string;
+  attempt: number;
+  /** 受け箱に置けた時刻。置けていなければ null。 */
+  sentAt: string | null;
+  firstTriedAt: string;
+  lastTriedAt: string | null;
+  /** 置けなかった理由（固定の文と種類名だけ）。 */
+  lastError: string | null;
+  result: { id: string; outcome: string; reason: string | null; enteredLines: number; at: string } | null;
+};
 
 export type Session = {
   id: string;
@@ -107,8 +169,14 @@ export type Session = {
   extraction: ExtractionCost | null;
   /** 客の照合が有効か（作業を作ったときに一覧があったか）。true なら客が決まるまで承認できない。 */
   customerRequired: boolean;
-  /** 決まった客の id（名前・ナンバーは保存しない。表示のときに一覧から引く）。 */
-  customerId: string | null;
+  /** 決まった客。番号だけ（label は画面のためにメモリにだけ持つ。lib/office/labels.ts）。 */
+  customer: { customerNo: string; carNo: string } | null;
+  /** 今の照合の問い合わせ。said（原文）は入れない。 */
+  customerQuery: CustomerQueryState | null;
+  /** 承認後の入力の依頼と結果。 */
+  office: OfficeState | null;
+  /** 当てた事務所のメッセージの id（二重に届いたときの判定）。 */
+  appliedIds: string[];
 };
 
 /** 形を確かめて Session として返す。不正なら throw。 */
@@ -144,7 +212,10 @@ export function newSession(id: string, now: Date): Session {
     error: null,
     extraction: null,
     customerRequired: false,
-    customerId: null,
+    customer: null,
+    customerQuery: null,
+    office: null,
+    appliedIds: [],
   };
 }
 
@@ -154,7 +225,11 @@ const ALLOWED: Record<SessionStatus, readonly SessionStatus[]> = {
   thinking: ["drafting", "idle"],
   drafting: ["asking"],
   asking: ["drafting", "done"],
-  done: [],
+  done: ["sending", "stopped"],
+  sending: ["sent"],
+  sent: ["entered", "stopped"],
+  entered: [],
+  stopped: [],
 };
 
 /** 状態を進める。入力は書き換えない。許されない遷移と、未承認の asking→done は throw。 */
@@ -178,9 +253,9 @@ function fileOf(dir: string, id: string): string {
   return join(dir, `${id}.json`);
 }
 
-/** done の作業は、承認されていて確認事項が 0 件であること。違えば throw（読み書きで壊れた done を通さない）。 */
+/** 承認の後の作業は、承認されていて確認事項が 0 件で客が決まっていること。違えば throw（読み書きで壊れた done を通さない）。 */
 function assertDone(s: Session): void {
-  if (s.status !== "done") return;
+  if (!APPROVED_STATES.includes(s.status)) return;
   const confs: unknown = s.invoice?.confirmations;
   if (s.approved !== true || !Array.isArray(confs) || confs.length !== 0 || customerPending(s)) {
     throw new Error(`done なのに承認されていないか確認事項が残っている: ${s.id}`);

@@ -1,5 +1,7 @@
 /**
- * 客と車の照合（#45）。名前（name か kana）とナンバーの下 4 桁の両方が、一覧の同じ 1 件に合うときだけ結び付ける。
+ * 客と車の照合（#45）と伏せ字。名前（name か kana）とナンバーの下 4 桁の両方が、一覧の同じ 1 件に合うときだけ結び付ける。
+ * 工場は一覧を持たない（#25。照合は事務所が行う）。工場が使うのは一覧なしの伏せ字（maskCustomerInfo）と、問い合わせる文の取り出し（plateSentences）。
+ * 一覧つきの照合（identifyCustomer）は、Mac の中の偽の事務所（lib/office/fake.ts）が架空の一覧で使う。
  * 純粋な関数。API を呼ばない（照合は Claude に任せない）、入力を書き換えない。画面のコードからは型だけを使う。
  *
  * 比べ方: 1 字ずつ NFKC にし、カタカナをひらがなに、漢数字の 1 字（〇一二…九）を算用数字にそろえ、空白・「-」を飛ばした文字列で探す
@@ -194,4 +196,37 @@ function mask(text: string, spans: (Span & { mask: string })[]): string {
   let s = text;
   for (const sp of merged.reverse()) s = s.slice(0, sp.start) + sp.mask + s.slice(sp.end);
   return s;
+}
+
+/** 文の 4 桁の数（前後が数字でなく「円」が続かないもの。算用・全角・漢数字の 1 字ずつ）。 */
+function plates4(sentence: string): string[] {
+  const f = fold(sentence);
+  return [...f.s.matchAll(/[0-9]+/g)]
+    .filter((m) => m[0].length === 4 && f.s[(m.index ?? 0) + 4] !== "円")
+    .map((m) => m[0]);
+}
+
+/**
+ * 事務所に問い合わせる文（docs/design/pi-office.md §3）: 4 桁の数を含む文（。！？で区切る）だけを、伏せ字にする前の原文で返す。
+ * 作業の話（明細の説明）は事務所に行かない。4 桁が 1 つも無ければ said も plate4 も空。入力は書き換えない。
+ */
+export function plateSentences(texts: string[]): { said: string[]; plate4: string[] } {
+  const said: string[] = [];
+  const plate4: string[] = [];
+  for (const text of texts) {
+    for (const m of text.matchAll(SENTENCE)) {
+      const sentence = m[0].trim();
+      if (sentence === "") continue;
+      const ps = plates4(sentence);
+      if (ps.length === 0) continue;
+      said.push(sentence);
+      for (const p of ps) if (!plate4.includes(p)) plate4.push(p);
+    }
+  }
+  return { said, plate4 };
+}
+
+/** 一覧なしの伏せ字（敬称の前の名前らしい部分と 4 桁）。工場はこれだけを使う（一覧は事務所にある）。 */
+export function maskCustomerInfo(texts: string[]): string[] {
+  return identifyCustomer(texts, []).texts;
 }

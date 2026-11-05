@@ -2,8 +2,7 @@
  * モニター用の 1 つの JSON（W2）。純粋な関数。入力を書き換えない。
  * 金額を推測で出さない。null は null のまま返し、「値段？」の表示は画面がする。
  */
-import type { Customer } from "../customer/match";
-import { customerView, pendingCount } from "./customer";
+import { customerPending, pendingCount } from "./customer";
 import { keptLines } from "./kept";
 import type { Session, SessionStatus } from "./store";
 
@@ -37,7 +36,13 @@ export type MonitorView = {
   confirmationCount: number;
   approved: boolean;
   /** 決まった客（名前と車）。未定・照合なし・一覧に無いなら null（画面は「お客様: 未指定」）。 */
-  customer: { name: string; car: string } | null;
+  /**
+   * 客の札（docs/design/pi-office.md §4・§9-1）。照合なしなら null（画面は「お客様: 未指定」）。
+   * 決まったら label（姓と車種。メモリにだけある）か「お客様: 決まりました」。照合中・失敗はその札。
+   */
+  customer: string | null;
+  /** 承認の後の事務所への入力の札（§4・§5）。承認の前は null。 */
+  office: string | null;
   credit: typeof VOICE_CREDIT;
 };
 
@@ -52,8 +57,72 @@ export const SAY = {
   retry: (q: string) => `もう一度お願いします。${q}`,
   /** 確認事項が残っているのに承認の言葉を言ったとき。 */
   notYet: (q: string) => `まだ確かめたいことがあります。${q}`,
-  done: (n: number) => `${n}行入れました。発行は人が押してください`,
+  /** 事務所がつながっていない作業の承認（入力は人がする）。 */
+  done: (n: number) => `${n}行の請求書を承認しました。入力は人がしてください`,
+  // 事務所への入力（§4・§5）
+  submit: "承認しました。事務所に送ります",
+  sending: "事務所に送っています",
+  sendFailed: "承認しました。事務所につながったら送ります",
+  sent: "事務所に届きました。入れています",
+  entered: (n: number) => `${n}行入れました。保存は人が押してください`,
+  stopped: (reason: string | null) =>
+    reason === "busy"
+      ? "事務所のソフトが使用中でした。人が入れてください"
+      : reason === "appNotRunning"
+        ? "事務所のソフトが開いていません"
+        : "事務所で止まりました。人が入れてください",
+  // 客の照合（§4）
+  checking: "お客様を事務所で確かめています",
+  noReply: "事務所から返事がありません。名前とナンバーの下4桁をもう一度お願いします",
+  unreachable: "事務所につながりません。お客様はあとでもう一度聞きます",
+  notFound: "お客様が決まりませんでした。名前とナンバーの下4桁をもう一度お願いします",
 } as const;
+
+/** 客の質問が今の質問のときの声（照合中・失敗）。当てはまらなければ null。 */
+function customerSay(s: Session): string | null {
+  if (s.questions[0]?.reason !== "customer" || !customerPending(s)) return null;
+  const q = s.customerQuery;
+  if (q === null) return null;
+  if (q.status === "pending") return SAY.checking;
+  if (q.status === "expired") return SAY.noReply;
+  if (q.status === "unreachable") return SAY.unreachable;
+  if (q.retryReason !== null) return SAY.notFound;
+  return null;
+}
+
+function customerBadge(s: Session | null, label: string | null): string | null {
+  if (s === null || !s.customerRequired) return null;
+  if (s.customer !== null) return label === null ? "お客様: 決まりました" : `お客様: ${label}`;
+  const q = s.customerQuery;
+  if (q?.status === "pending") return "お客様を確かめています…";
+  if (q?.status === "expired") return "事務所から返事がありません";
+  if (q?.status === "unreachable") return "事務所につながりません";
+  if (q?.retryReason) return "お客様が決まりませんでした";
+  return "お客様: 未指定";
+}
+
+function officeBadge(s: Session | null): string | null {
+  if (s === null) return null;
+  switch (s.status) {
+    case "done":
+      return s.customerRequired ? "事務所に送ります" : null;
+    case "sending":
+      return s.office?.lastError ? "事務所に送れていません。つながったら送ります" : "事務所に送っています";
+    case "sent":
+      return "事務所に届きました。入れています";
+    case "entered":
+      return `${s.office?.result?.enteredLines ?? 0}行入れました。保存は人が押してください`;
+    case "stopped": {
+      const r = s.office?.result?.reason ?? null;
+      if (r === "busy") return "事務所のソフトが使用中です。人が入れてください";
+      if (r === "appNotRunning") return "事務所のソフトが開いていません";
+      if (r === "unknownItem") return "事務所で止まりました: 品目が見つかりません";
+      return "事務所で止まりました。人が入れてください";
+    }
+    default:
+      return null;
+  }
+}
 
 function sayOf(s: Session | null): string {
   if (s === null) return SAY.idle;
@@ -68,6 +137,8 @@ function sayOf(s: Session | null): string {
     case "drafting":
       return SAY.drafting;
     case "asking": {
+      const office = customerSay(s);
+      if (office !== null) return office;
       const ask = s.questions[0]?.text ?? SAY.askApprove;
       // 最後の答えが読めなかった・承認の言葉が効かなかったなら、そう言ってから聞き直す
       const last = s.answers.at(-1);
@@ -75,7 +146,15 @@ function sayOf(s: Session | null): string {
       return last.action.reason === "確認事項が残っている" ? SAY.notYet(ask) : SAY.retry(ask);
     }
     case "done":
-      return SAY.done(s.invoice?.lines.length ?? 0);
+      return s.customerRequired ? SAY.submit : SAY.done(s.invoice?.lines.length ?? 0);
+    case "sending":
+      return s.office?.lastError ? SAY.sendFailed : SAY.sending;
+    case "sent":
+      return SAY.sent;
+    case "entered":
+      return SAY.entered(s.office?.result?.enteredLines ?? 0);
+    case "stopped":
+      return SAY.stopped(s.office?.result?.reason ?? null);
   }
 }
 
@@ -84,10 +163,10 @@ export function yenText(n: number | null): string | null {
   return n === null ? null : `¥${n.toLocaleString("ja-JP")}`;
 }
 
-const NOT_ANSWERS = new Set(["unread", "approve", "continue", "setCustomer"]);
+const NOT_ANSWERS = new Set(["unread", "approve", "continue", "askOffice"]);
 
-/** customers は客の一覧（表示のときに id から名前と車を引く）。無ければ客は null。 */
-export function toMonitorView(s: Session | null, customers: Customer[] | null = null): MonitorView {
+/** label は事務所が返した客の姓と車種（メモリにだけある。lib/office/labels.ts）。無ければ「決まりました」。 */
+export function toMonitorView(s: Session | null, label: string | null = null): MonitorView {
   const segs = s?.transcript?.segments ?? [];
   const confirmations = s?.invoice?.confirmations ?? [];
   const answers = s?.answers ?? [];
@@ -109,14 +188,19 @@ export function toMonitorView(s: Session | null, customers: Customer[] | null = 
     state: s?.status ?? "idle",
     heard: segs.length ? segs.map((x) => x.text).join("") : null,
     say: sayOf(s),
-    sayId: s === null ? "none" : `${s.id}:${s.history.length}:${s.answers.length}`,
+    // 照合の札・依頼の失敗が変わったときも声を出し直す（状態の遷移が無くても）
+    sayId:
+      s === null
+        ? "none"
+        : `${s.id}:${s.history.length}:${s.answers.length}:${s.customerQuery?.status ?? "-"}${s.customerQuery?.retryReason ?? ""}:${s.customer ? "c" : "-"}:${s.office?.lastError ? "e" : "-"}`,
     awaitingApproval: s?.status === "asking" && s.invoice !== null && pendingCount(s) === 0,
     lines,
     total: s?.invoice?.total ?? null,
     questions: (s?.questions ?? []).map((q) => q.text),
     confirmationCount: s ? pendingCount(s) : 0,
     approved: s?.approved ?? false,
-    customer: customerView(s?.customerId ?? null, customers),
+    customer: customerBadge(s, label),
+    office: officeBadge(s),
     credit: VOICE_CREDIT,
   };
 }
