@@ -233,9 +233,9 @@ export function plateSentences(texts: string[]): { said: string[]; plate4: strin
 const PHRASE = /[^、。！？!?,，\s]+/g;
 
 /**
- * 4 桁の数（ナンバー）を含む句を丸ごと伏せ、その直前の句も、料金表の語（品目名・別名・言い換え）を含まなければ伏せる。
- * 敬称の無い姓（「田中 1234」「田中、1234。」「1234の田中」）を一覧なしで伏せるため（伏せすぎる側）。
- * 直前の句は、同じ発話の前の句か、句が発話の頭なら前の発話の最後の句。品目の語を含む句は残す（「脱着4本、田中1234」の「脱着4本」）。
+ * 4 桁の数（ナンバー）を含む句を丸ごと伏せ、その前後の句も、料金表の語（品目名・別名・言い換え）を含まなければ伏せる。
+ * 敬称の無い姓（「田中 1234」「田中、1234。」「1234の田中」「1234、田中」）を一覧なしで伏せるため（伏せすぎる側）。
+ * 前後の句は同じ発話の隣の句。句が発話の端なら、前（後）の発話の最後（最初）の句。品目の語を含む句は残す（「脱着4本、田中1234」の「脱着4本」）。
  */
 function platePhrases(texts: string[], itemWords: string[]): (Span & { mask: string })[][] {
   const words = [...new Set(itemWords.map(normalizeText).filter((w) => w !== ""))];
@@ -252,6 +252,9 @@ function platePhrases(texts: string[], itemWords: string[]): (Span & { mask: str
       const prevTi = pi > 0 ? ti : ti - 1;
       const prev = pi > 0 ? ps[pi - 1] : phrases[ti - 1]?.at(-1);
       if (prev !== undefined && !hasItem(prev.text)) out[prevTi].push({ start: prev.start, end: prev.end, mask: MASK_NAME });
+      const nextTi = pi < ps.length - 1 ? ti : ti + 1;
+      const next = pi < ps.length - 1 ? ps[pi + 1] : phrases[ti + 1]?.[0];
+      if (next !== undefined && !hasItem(next.text)) out[nextTi].push({ start: next.start, end: next.end, mask: MASK_NAME });
     });
   });
   return out;
