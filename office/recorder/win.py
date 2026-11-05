@@ -17,7 +17,7 @@ from PIL import ImageGrab
 from pynput import keyboard, mouse
 
 from .config import Config
-from .core import Click, Element, Key, Snapshot, Window
+from .core import Click, Element, Key, Snapshot, Window, mask_title
 
 
 def set_dpi_aware() -> None:
@@ -480,7 +480,7 @@ def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
                 if e.value is not None and e.value_source == "legacy":
                     v += " (legacy)"
                 f.write(
-                    f"{'  ' * depth}{e.control_type} class={e.class_name!r} name={e.name[:80]!r} "
+                    f"{'  ' * depth}{e.control_type} class={e.class_name!r} name={e.to_dict()['name'][:80]!r} "
                     f"id={e.automation_id!r} rect={e.rect} patterns={have}{v}\n"
                 )
             try:
@@ -507,7 +507,7 @@ def list_targets() -> str:
     for w in auto.GetRootControl().GetChildren():
         try:
             p = psutil.Process(w.ProcessId)
-            lines.append(f"{p.name():30} pid={p.pid:<6} class={w.ClassName!r:40} title={w.Name!r}")
+            lines.append(f"{p.name():30} pid={p.pid:<6} class={w.ClassName!r:40} title={mask_title(w.Name or '')!r}")
         except Exception:
             continue
     return "\n".join(sorted(set(lines)))

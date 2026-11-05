@@ -41,7 +41,8 @@ class Element:
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
-            "name": self.name[:MAX_VALUE],
+            # 窓・題名の帯の部品は、名前が窓の題名と同じなので、客の名前を伏せる
+            "name": (mask_title(self.name) if self.control_type in TITLE_CONTROL_TYPES else self.name)[:MAX_VALUE],
             "automation_id": self.automation_id,
             "control_type": self.control_type,
             "class_name": self.class_name,
@@ -74,7 +75,7 @@ class Window:
     buttons: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"handle": self.handle, "title": self.title, "class_name": self.class_name, "rect": list(self.rect)}
+        d: dict[str, Any] = {"handle": self.handle, "title": mask_title(self.title), "class_name": self.class_name, "rect": list(self.rect)}
         if self.exe:
             d["exe"] = self.exe
         if self.buttons:
@@ -127,31 +128,61 @@ SCREENSHOT_CONTROL_TYPES = {"ButtonControl", "MenuItemControl", "TabItemControl"
 
 # ツールバー（msvb_lib_toolbar）のボタンには名前が無い。帯の左端からのボタンの中心の位置（画素）で名前を決める。
 # 2026-11-05 に事務所の PC（1920×1080、拡大 100%）の画面で測った。版の更新や拡大の設定で変わり得る。
+# 伝票（M_NOU）は、新しく入れるときと、作った伝票を開いたときとでボタンの並びが変わる。並びは UIA で読めないので、
+# 並びごとの表を持ち、押した位置で候補が 1 つに決まらなければ「転用|新規」のように候補を並べて残す。
 TOOLBAR_CLASS = "msvb_lib_toolbar"
 TOOLBAR_HALF_WIDTH = 27
-TOOLBARS: dict[str, dict[str, int]] = {
-    "m_nou.exe": {
-        "終了": 25, "中止": 80, "削除": 135, "自社名": 190, "転用": 245, "保存": 355, "印保存": 405, "印刷": 465,
-        "車情報": 520, "マスタ": 630, "類似検": 685, "点数検": 740, "付箋": 850, "シール": 1015, "参照": 1125, "設定": 1180,
-    },
-    "m_car.exe": {
-        "終了": 25, "中止": 80, "保存": 135, "印刷": 190, "検索": 245, "保有車": 300, "客追加": 355, "客修正": 410,
-        "客削除": 465, "車追加": 520, "車修正": 575, "車削除": 630, "車移動": 685, "画像": 740, "付箋": 850,
-        "前候補": 905, "次候補": 960, "参照": 1015, "対応メモ": 1070,
-    },
+TOOLBARS: dict[str, tuple[dict[str, int], ...]] = {
+    "m_nou.exe": (
+        {  # 新しく入れるとき
+            "終了": 25, "中止": 80, "削除": 135, "自社名": 190, "転用": 245, "保存": 355, "印保存": 405, "印刷": 465,
+            "車情報": 520, "マスタ": 630, "類似検": 685, "点数検": 740, "付箋": 850, "シール": 1015, "参照": 1125, "設定": 1180,
+        },
+        {  # 作った伝票を開いたとき（修正を押すまで保存・印保存は押せない）
+            "終了": 25, "中止": 80, "削除": 135, "自社名": 190, "新規": 245, "修正": 300, "保存": 355, "印保存": 405,
+            "印刷": 465, "転用": 520, "返品": 575, "額振替": 630, "説明書": 685, "付箋": 850, "前候補": 905, "次候補": 960,
+            "シール": 1070, "参照": 1125, "設定": 1180,
+        },
+    ),
+    "m_car.exe": (
+        {
+            "終了": 25, "中止": 80, "保存": 135, "印刷": 190, "検索": 245, "保有車": 300, "客追加": 355, "客修正": 410,
+            "客削除": 465, "車追加": 520, "車修正": 575, "車削除": 630, "車移動": 685, "画像": 740, "付箋": 850,
+            "前候補": 905, "次候補": 960, "参照": 1015, "対応メモ": 1070,
+        },
+    ),
 }
 
 
 def toolbar_button(exe: str, element: Element | None, x: int) -> str | None:
-    """ツールバーのクリックなら、押した位置からボタンの名前を返す。分からなければ "?"、ツールバーでなければ None。"""
+    """ツールバーのクリックなら、押した位置からボタンの名前を返す。
+
+    並びが幾つかある画面で候補が割れたら「転用|新規」のように並べる。分からなければ "?"、ツールバーでなければ None。
+    """
     if element is None or element.class_name != TOOLBAR_CLASS or element.rect is None:
         return None
-    table = TOOLBARS.get(exe.lower())
-    if not table:
-        return "?"
     dx = x - element.rect[0]
-    name, center = min(table.items(), key=lambda kv: abs(kv[1] - dx))
-    return name if abs(center - dx) <= TOOLBAR_HALF_WIDTH else "?"
+    names: list[str] = []
+    for table in TOOLBARS.get(exe.lower(), ()):
+        name, center = min(table.items(), key=lambda kv: abs(kv[1] - dx))
+        if abs(center - dx) <= TOOLBAR_HALF_WIDTH and name not in names:
+            names.append(name)
+    return "|".join(names) if names else "?"
+
+
+TITLE_CONTROL_TYPES = {"WindowControl", "TitleBarControl"}
+
+
+def mask_title(title: str) -> str:
+    """窓の題名から客の名前を伏せる。
+
+    RacroS III の題名は「[ 客の名前 ] - [ 画面の名前 ] - RacroSⅢ」の形で、客を選ぶと先頭に名前が入る。
+    「 - 」で区切って 3 つ以上あれば、後ろの 2 つ（画面の名前とソフトの名前）だけを残し、前は *** にする。
+    """
+    parts = title.split(" - ")
+    if len(parts) < 3:
+        return title
+    return " - ".join(["***"] * (len(parts) - 2) + parts[-2:])
 
 
 class Tracker:
@@ -199,6 +230,8 @@ class Tracker:
             tb = toolbar_button(c.exe, c.element, c.x)
             if tb is not None:
                 d["toolbar_button"] = tb
+                if c.element is not None and c.element.rect is not None:
+                    d["toolbar_dx"] = c.x - c.element.rect[0]
             shot = "click" if tb is not None or (c.element is not None and c.element.control_type in SCREENSHOT_CONTROL_TYPES) else None
             events.append(Event("click", d, screenshot=shot))
 

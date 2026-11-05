@@ -9,7 +9,7 @@ import unittest
 from datetime import date, datetime
 from pathlib import Path
 
-from recorder.core import MASK, Click, Element, Key, Snapshot, Store, Tracker, Window, cleanup, toolbar_button
+from recorder.core import MASK, Click, Element, Key, Snapshot, Store, Tracker, Window, cleanup, mask_title, toolbar_button
 
 W1 = Window(handle=1, title="請求書入力", class_name="TForm", rect=(0, 0, 800, 600))
 W2 = Window(handle=1, title="請求書確認", class_name="TForm", rect=(0, 0, 800, 600))
@@ -146,7 +146,10 @@ class RecorderFixTest(unittest.TestCase):
         self.assertEqual(toolbar_button("M_NOU.exe", tb, 196 + 405), "印保存")
         self.assertEqual(toolbar_button("m_nou.exe", tb, 196 + 355), "保存")
         self.assertEqual(toolbar_button("M_CAR.exe", tb, 196 + 245), "検索")
-        self.assertEqual(toolbar_button("M_NOU.exe", tb, 196 + 300), "?")  # ボタンの間
+        self.assertEqual(toolbar_button("M_NOU.exe", tb, 196 + 300), "修正")  # 作った伝票を開いたときだけある
+        self.assertEqual(toolbar_button("M_NOU.exe", tb, 196 + 245), "転用|新規")  # 並びで割れる
+        self.assertEqual(toolbar_button("M_NOU.exe", tb, 196 + 1083), "シール")
+        self.assertEqual(toolbar_button("M_NOU.exe", tb, 196 + 795), "?")  # ボタンの間
         self.assertEqual(toolbar_button("D_SYARE.exe", tb, 200), "?")  # 表の無い画面
         self.assertIsNone(toolbar_button("M_NOU.exe", PRICE, 10))  # ツールバーでない
 
@@ -156,6 +159,20 @@ class RecorderFixTest(unittest.TestCase):
         tb = Element(control_type="PaneControl", class_name="msvb_lib_toolbar", rect=(196, 90, 1795, 144))
         (e,) = t.observe(Snapshot(target_pid=10, clicks=[Click(x=196 + 465, y=100, button="left", element=tb, at=0, exe="M_NOU.exe")]))
         self.assertEqual((e.data["toolbar_button"], e.data["exe"], e.screenshot), ("印刷", "M_NOU.exe", "click"))
+        self.assertEqual(e.data["toolbar_dx"], 465)
+
+    def test_窓の題名の客の名前を伏せる(self):
+        t = Tracker()
+        w = Window(handle=1, title="[ 山田　太郎 ] - [ 納品請求書 ] - RacroSⅢ", class_name="F", rect=(0, 0, 1, 1), exe="M_NOU.exe")
+        (e,) = [e for e in t.observe(Snapshot(target_pid=10, window=w)) if e.kind == "window"]
+        self.assertEqual(e.data["title"], "*** - [ 納品請求書 ] - RacroSⅢ")
+        self.assertNotIn("山田", json.dumps(e.data, ensure_ascii=False))
+        self.assertEqual(mask_title("[ 車検証 ] - RacroSⅢ"), "[ 車検証 ] - RacroSⅢ")
+        self.assertEqual(mask_title("確認"), "確認")
+        form = Element(name="[ 山田　太郎 ] - [ 車検証 ] - RacroSⅢ", control_type="WindowControl", class_name="ThunderRT6FormDC")
+        bar = Element(name="[ 山田　太郎 ] - [ 車検証 ] - RacroSⅢ", control_type="TitleBarControl")
+        self.assertEqual(form.to_dict()["name"], "*** - [ 車検証 ] - RacroSⅢ")
+        self.assertEqual(bar.to_dict()["name"], "*** - [ 車検証 ] - RacroSⅢ")
 
     def test_キーは種類と文字の数だけ残す(self):
         t = Tracker()
