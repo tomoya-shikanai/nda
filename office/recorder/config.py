@@ -21,6 +21,8 @@ class Config:
     root: str = field(default_factory=_default_root)
     keep_days: int = 7
     poll_sec: float = 0.3
+    # UI Automation の 1 回の呼び出しを待つ上限（ミリ秒）。0 なら Windows の既定（20 秒）のまま
+    uia_timeout_ms: int = 3000
     min_shot_interval: float = 2.0
     jpeg_quality: int = 70
     show_indicator: bool = True

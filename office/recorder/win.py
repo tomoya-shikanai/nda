@@ -273,11 +273,38 @@ def key_kind(key, ctrl: bool, alt: bool, shift: bool) -> str | None:
     return ""
 
 
+CUIAUTOMATION8 = "{e22ad333-b25f-460c-83d0-0581107395c9}"
+
+
+def shorten_uia_timeouts(transaction_ms: int, connection_ms: int = 1000) -> bool:
+    """UI Automation の 1 回の呼び出しの待ち時間を短くする。できたら True。
+
+    既定（CUIAutomation）は 1 回 20 秒まで待つ。RacroS III が忙しいと時間切れ（0x80131505）が 3 回続き、
+    記録が約 60 秒止まって画面の切り替わりを取りこぼしていた。待ち時間を変えられる CUIAutomation8 に替える。
+    """
+    try:
+        import comtypes.client
+        import uiautomation.uiautomation as u
+
+        client = u._AutomationClient.instance()
+        core = client.UIAutomationCore
+        ia = comtypes.client.CreateObject(CUIAUTOMATION8, interface=core.IUIAutomation)
+        ia2 = ia.QueryInterface(core.IUIAutomation2)
+        ia2.ConnectionTimeout = connection_ms
+        ia2.TransactionTimeout = transaction_ms
+        client.IUIAutomation = ia
+        client.ViewWalker = ia.RawViewWalker
+        return True
+    except Exception:
+        return False  # 替えられなければ既定のまま記録する
+
+
 class Reader:
     """画面の様子を 1 回分ずつ取る。"""
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
+        self.uia_timeout_set = shorten_uia_timeouts(cfg.uia_timeout_ms) if cfg.uia_timeout_ms > 0 else False
         self.name_value_classes = frozenset(cfg.name_value_classes)
         self.clicks: queue.Queue[tuple[int, int, str, float, int | None]] = queue.Queue()
         self.keys: queue.Queue[tuple[str, float, int | None]] = queue.Queue()

@@ -441,6 +441,15 @@ class StageErrorTest(unittest.TestCase):
         self.assertEqual([e["stage"] for e in s.errors], ["focus"])
 
 
+class UiaTimeoutTest(unittest.TestCase):
+    def setUp(self):
+        self.win = _import_win(self)
+
+    def test_替えられなくても止まらない(self):
+        # 架空の uiautomation には CUIAutomation8 が無い。例外を出さず、既定のまま記録する
+        self.assertFalse(self.win.shorten_uia_timeouts(3000))
+
+
 class DialogButtonsTest(unittest.TestCase):
     def setUp(self):
         self.win = _import_win(self)

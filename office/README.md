@@ -55,7 +55,7 @@ RacroS III は画面ごとに実行ファイルが分かれています（メニ
 ```
 
 - `target_exe`: 実行ファイル名（`list` の左端に出た名前を `.exe` まで含めてそのまま書く。完全一致）。
-- そのほかに書けるもの: `keep_days`（残す日数、既定 7）、`poll_sec`（画面を見る間隔の秒、既定 0.3）、`min_shot_interval`（スクリーンショットの最短の間隔の秒、既定 2）、`jpeg_quality`（既定 70）、`show_indicator`（右下の表示、既定 true）、`root`（記録の置き場）。
+- そのほかに書けるもの: `keep_days`（残す日数、既定 7）、`poll_sec`（画面を見る間隔の秒、既定 0.3）、`min_shot_interval`（スクリーンショットの最短の間隔の秒、既定 2）、`jpeg_quality`（既定 70）、`uia_timeout_ms`（画面を読む 1 回の呼び出しを待つ上限のミリ秒、既定 3000。Windows の既定は 20 秒で、RacroS III が忙しいと記録が約 60 秒止まっていた。0 で Windows の既定）、`show_indicator`（右下の表示、既定 true）、`root`（記録の置き場）。
 
 ### 2. 画面の部品を書き出す
 
