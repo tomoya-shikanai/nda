@@ -38,6 +38,8 @@
 }
 
 .brand {
+  flex: none;
+  white-space: nowrap;
   font-size: calc(52 * var(--u));
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -50,6 +52,8 @@
 }
 
 .status {
+  flex: none;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: calc(20 * var(--u));

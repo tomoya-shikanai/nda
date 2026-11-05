@@ -219,7 +219,7 @@ test("照合の答えが抽出の後に返る: 客の質問が残り、答えで
     [CUSTOMER_QUESTION],
   );
   assert.equal(toMonitorView(s).say, SAY.checking);
-  assert.equal(toMonitorView(s).customer, "お客様を確かめています…");
+  assert.equal(toMonitorView(s).customer, "お客様: 確かめています…");
   assert.equal(toMonitorView(s).awaitingApproval, false);
   await processBox({ box, customers, post });
   const s1 = await readSession(dir, s.id);
@@ -266,7 +266,7 @@ test("照合の期限: 10 秒で expired、遅れて来た答えは stale で捨
   const t = await tickOffice(dir, office, s, late);
   assert.equal(t.customerQuery?.status, "expired");
   assert.equal(toMonitorView(t).say, SAY.noReply);
-  assert.equal(toMonitorView(t).customer, "事務所から返事がありません");
+  assert.equal(toMonitorView(t).customer, "お客様: 事務所から返事がありません");
   const r = await reply(answer(q, FOUND));
   assert.deepEqual(await r.json(), { accepted: false, why: "stale" });
   assert.equal((await readSession(dir, s.id))?.customer, null);
@@ -288,7 +288,7 @@ test("二重の id は 2 回目から何もしない。別の問い合わせへ�
   const s1 = await readSession(dir, s.id);
   assert.equal(s1?.customer, null);
   assert.equal(toMonitorView(s1).say, SAY.notFound);
-  assert.equal(toMonitorView(s1).customer, "お客様が決まりませんでした");
+  assert.equal(toMonitorView(s1).customer, "お客様: 決まりませんでした");
   assert.deepEqual(await (await reply(retry)).json(), { accepted: true, duplicate: true });
   assert.deepEqual((await readSession(dir, s.id))?.appliedIds, [retry.id]);
   // 純粋な関数でも
@@ -315,7 +315,7 @@ test("受け箱に置けなければ「事務所の PC に届きません」。�
     id: `p${seq++}`,
   });
   assert.equal(s.customerQuery?.status, "unreachable");
-  assert.equal(toMonitorView(s).customer, "事務所の PC に届きません（書き込めません）");
+  assert.equal(toMonitorView(s).customer, "お客様: 事務所に届きません");
   assert.equal(s.questions[0].reason, "qty", "明細の質問が先");
   const s1 = await replySession({ dir, session: s, utterance: say("4本"), ledger, office: { box: broken, timeoutMs: 1000 } });
   assert.deepEqual(s1.answers.at(-1)?.action, { kind: "setQty", value: 4, unit: "本" });
@@ -512,7 +512,7 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
   const s1 = await start(missing);
   assert.equal(s1.customerQuery?.status, "unreachable");
   assert.equal(s1.customerQuery?.retryReason, "boxMissing");
-  assert.equal(toMonitorView(s1).customer, "事務所の PC に届きません（共有フォルダが見えません）");
+  assert.equal(toMonitorView(s1).customer, "お客様: 事務所に届きません");
   await assert.rejects(readdir(missing), "工場は受け箱を作らない");
 
   // フォルダはあるが目印が無い（mount 先の空のフォルダ）
@@ -530,7 +530,7 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
   try {
     const s3 = await start(ro);
     assert.equal(s3.customerQuery?.retryReason, "writeFailed");
-    assert.equal(toMonitorView(s3).customer, "事務所の PC に届きません（書き込めません）");
+    assert.equal(toMonitorView(s3).customer, "お客様: 事務所に届きません");
     assert.equal(toMonitorView(s3).say, SAY.unreachable);
 
     // 承認の後の依頼も同じ札

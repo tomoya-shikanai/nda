@@ -100,10 +100,10 @@ function customerBadge(s: Session | null, label: string | null): string | null {
   if (s === null || !s.customerRequired) return null;
   if (s.customer !== null) return label === null ? "お客様: 決まりました" : `お客様: ${label}`;
   const q = s.customerQuery;
-  if (q?.status === "pending") return "お客様を確かめています…";
-  if (q?.status === "expired") return "事務所から返事がありません";
-  if (q?.status === "unreachable") return unreachableBadge(q.retryReason);
-  if (q?.status === "answered" && q.retryReason) return "お客様が決まりませんでした";
+  if (q?.status === "pending") return "お客様: 確かめています…";
+  if (q?.status === "expired") return "お客様: 事務所から返事がありません";
+  if (q?.status === "unreachable") return "お客様: 事務所に届きません";
+  if (q?.status === "answered" && q.retryReason) return "お客様: 決まりませんでした";
   return "お客様: 未指定";
 }
 
