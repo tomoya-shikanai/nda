@@ -181,3 +181,30 @@ class QtyPrecisionTest(unittest.TestCase):
 
     def test_tenths_still_ok(self):
         self.assertIn({"field": "明細1.数量", "action": "type", "value": "0.1"}, build_plan(_job(qty=0.1), ITEMS, COLUMNS))
+
+
+class JsonDecimalTest(unittest.TestCase):
+    """Codex の指摘: JSON を float で読むと、0.1 刻みでない数が丸められて通る。"""
+
+    def test_long_decimal_in_json_is_rejected(self):
+        import json as _json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "job.json"
+            text = _json.dumps(_job(qty=4)).replace('"qty": 4', '"qty": 1.00000000000000001')
+            self.assertIn("1.00000000000000001", text)
+            p.write_text(text, encoding="utf-8")
+            with self.assertRaises(PlanError):
+                build_plan(load_json(p), ITEMS, COLUMNS)
+
+    def test_decimal_tenths_from_json_ok(self):
+        import tempfile
+        from pathlib import Path
+        import json as _json
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "job.json"
+            p.write_text(_json.dumps(_job(qty=1.5)), encoding="utf-8")
+            self.assertIn({"field": "明細1.数量", "action": "type", "value": "1.5"}, build_plan(load_json(p), ITEMS, COLUMNS))

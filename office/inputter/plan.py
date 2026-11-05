@@ -29,11 +29,12 @@ def _is_int(v: object) -> bool:
 
 
 def _is_num(v: object) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
 
 
 def load_json(path: str | Path) -> object:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    # 小数は Decimal で読む。float で読むと 1.00000000000000001 が 1.0 になり、0.1 刻みでない数を見逃す（Codex の指摘）
+    return json.loads(Path(path).read_text(encoding="utf-8"), parse_float=Decimal)
 
 
 def load_items(data: object) -> dict[str, int]:
@@ -84,7 +85,7 @@ def qty_tenths(qty: object) -> int:
     """
     if not _is_num(qty):
         raise PlanError(f"数量が数でない: {qty!r}")
-    d = Decimal(repr(qty)) * 10
+    d = (qty if isinstance(qty, Decimal) else Decimal(repr(qty))) * 10
     if not d.is_finite() or d != d.to_integral_value():
         raise PlanError(f"数量が 0.1 刻みでない: {qty!r}")
     tenths = int(d)
