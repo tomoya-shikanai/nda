@@ -10,7 +10,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, test } from "node:test";
-import { type Customer, CustomerList, identifyCustomer, MASK_NAME, MASK_PLATE } from "../lib/customer/match";
+import { type Customer, CustomerList, identifyCustomer, MASK_NAME, MASK_PLATE, maskCustomerInfo } from "../lib/customer/match";
 import { enumerateCandidates } from "../lib/invoice/candidates";
 import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { type Extractor, replySession, startSession } from "../lib/session/run";
@@ -216,4 +216,33 @@ test("自動のセキュリティ点検: 姓とひらがなの名の間の「は
     // 助詞の後ろが漢字・カタカナを含めば、これまでどおり助詞で止める
     assert.equal(m("脱着4本は山田さん"), `脱着4本は${MASK_NAME}さん`);
   }
+});
+
+// --- 自動のセキュリティ点検: 敬称の無い姓（一覧なし） ---
+
+test("一覧なしの伏せ字: 4 桁を含む句と、その直前の品目の語の無い句を伏せる。敬称の無い姓が残らず、品目と数量は残る", async () => {
+  const words = ledger.flatMap((e) => [e.item, ...e.aliases]);
+  const m = (texts: string[]) => maskCustomerInfo(texts, words);
+  for (const [t, keep] of [
+    ["田中 1234", []],
+    ["田中、1234。脱着4本", ["脱着4本"]],
+    ["脱着4本、田中1234", ["脱着4本"]],
+    ["1234の田中", []],
+    ["田中さん1234、脱着4本", ["脱着4本"]],
+    ["タイヤ交換4本、田中、1234", ["タイヤ交換4本"]],
+  ] as const) {
+    const [out] = m([t]);
+    assert.ok(!out.includes("田中") && !out.includes("1234"), `${t} → ${out}`);
+    for (const k of keep) assert.ok(out.includes(k), `${t} → ${out}`);
+  }
+  // 発話をまたぐ（前の発話の最後の句が姓）
+  assert.deepEqual(m(["田中です", "1234。脱着4本。"]), [MASK_NAME, `${MASK_PLATE}。脱着4本。`]);
+  // 4 桁が無ければ句は伏せない。円の 4 桁は伏せない
+  assert.deepEqual(m(["田中、脱着4本、1650円"]), ["田中、脱着4本、1650円"]);
+
+  // 作業でも: 抽出と作業ファイルに姓が残らず、明細は作れる
+  const { dir, s, seen } = await start(["田中、1234。脱着4本。"]);
+  assert.ok(!seen[0].segments[0].text.includes("田中"));
+  assert.ok(!JSON.stringify(await readSession(dir, s.id)).includes("田中"));
+  assert.equal(s.invoice?.lines[0]?.qty, 4);
 });

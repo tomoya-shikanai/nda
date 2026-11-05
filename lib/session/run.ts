@@ -80,8 +80,14 @@ async function withLatestOffice(dir: string, s: Session): Promise<Session> {
   return out;
 }
 
-const maskSegments = (t: Transcript): Transcript => {
-  const texts = maskCustomerInfo(t.segments.map((g) => g.text));
+/** 料金表の語（品目名・別名・言い換え）。これを含む句は伏せない。 */
+const itemWordsOf = (ledger: LedgerEntry[]) => ledger.flatMap((e) => [e.item, ...e.aliases]);
+
+const maskSegments = (t: Transcript, ledger: LedgerEntry[]): Transcript => {
+  const texts = maskCustomerInfo(
+    t.segments.map((g) => g.text),
+    itemWordsOf(ledger),
+  );
   return { ...t, segments: t.segments.map((g, i) => ({ ...g, text: texts[i] })) };
 };
 
@@ -110,7 +116,7 @@ export async function startSession(x: {
           from: { recordingId: x.transcript.recordingId, startSec: segs[0].startSec, endSec: Math.max(...segs.map((g) => g.endSec)) },
           now: now(),
         });
-  const transcript = maskSegments(x.transcript);
+  const transcript = maskSegments(x.transcript, x.ledger);
   let s: Session = {
     ...newSession(id, now()),
     customerRequired: office !== null,
@@ -211,7 +217,7 @@ export async function replySession(x: {
   const now = x.now ?? (() => new Date());
   const office = x.office ?? null;
   const s = x.session;
-  const utterance = { ...x.utterance, text: maskCustomerInfo([x.utterance.text])[0] };
+  const utterance = { ...x.utterance, text: maskCustomerInfo([x.utterance.text], itemWordsOf(x.ledger))[0] };
   if (office !== null && s.customerRequired && customerPending(s)) {
     if (s.status !== "asking") throw new Error(`asking でないので答えを受けられない: ${s.status}`);
     const base = answerBase(s, utterance, now());

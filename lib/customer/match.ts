@@ -16,6 +16,7 @@
  * 一覧の名前を含む文に否定・訂正の合図がある（「見本さんじゃなくて」）、一覧の名前と同じ発話に一覧に無いさん付けの名前がある。
  */
 import { z } from "zod";
+import { normalizeText } from "../invoice/candidates";
 import { CORRECTION_CUES, NEGATION_CUES } from "../invoice/resolve";
 
 export const Customer = z.object({
@@ -145,12 +146,13 @@ const overlaps = (a: Span, b: Span) => a.start < b.end && b.start < a.end;
 /**
  * 発話の文（1 つ以上）から客を探し、名前らしい部分と 4 桁の数を伏せ字にする（決め方と伏せ方は冒頭の注）。
  */
-export function identifyCustomer(texts: string[], customers: Customer[]): Identified {
+export function identifyCustomer(texts: string[], customers: Customer[], itemWords?: string[]): Identified {
   const plates = new Set(customers.map((c) => c.plate4));
   const named = new Set<string>();
   const saidPlates = new Set<string>();
   let blocked = false;
-  const out = texts.map((text) => {
+  const phraseSpans = itemWords === undefined ? texts.map(() => []) : platePhrases(texts, itemWords);
+  const out = texts.map((text, ti) => {
     const f = fold(text);
     const spans: (Span & { mask: string })[] = [];
     const nameHits: Span[] = [];
@@ -176,6 +178,7 @@ export function identifyCustomer(texts: string[], customers: Customer[]): Identi
       if (plates.has(m[0])) saidPlates.add(m[0]);
       spans.push({ start: f.at[i], end: f.at[i + 3] + 1, mask: MASK_PLATE });
     }
+    spans.push(...phraseSpans[ti]);
     return mask(text, spans);
   });
   const hits = customers.filter((c) => named.has(c.id) && saidPlates.has(c.plate4));
@@ -226,7 +229,38 @@ export function plateSentences(texts: string[]): { said: string[]; plate4: strin
   return { said, plate4 };
 }
 
-/** 一覧なしの伏せ字（敬称の前の名前らしい部分と 4 桁）。工場はこれだけを使う（一覧は事務所にある）。 */
-export function maskCustomerInfo(texts: string[]): string[] {
-  return identifyCustomer(texts, []).texts;
+/** 句の区切り（読点・句点・！？・空白）。 */
+const PHRASE = /[^、。！？!?,，\s]+/g;
+
+/**
+ * 4 桁の数（ナンバー）を含む句を丸ごと伏せ、その直前の句も、料金表の語（品目名・別名・言い換え）を含まなければ伏せる。
+ * 敬称の無い姓（「田中 1234」「田中、1234。」「1234の田中」）を一覧なしで伏せるため（伏せすぎる側）。
+ * 直前の句は、同じ発話の前の句か、句が発話の頭なら前の発話の最後の句。品目の語を含む句は残す（「脱着4本、田中1234」の「脱着4本」）。
+ */
+function platePhrases(texts: string[], itemWords: string[]): (Span & { mask: string })[][] {
+  const words = [...new Set(itemWords.map(normalizeText).filter((w) => w !== ""))];
+  const hasItem = (p: string) => {
+    const n = normalizeText(p);
+    return words.some((w) => n.includes(w));
+  };
+  const phrases = texts.map((t) => [...t.matchAll(PHRASE)].map((m) => ({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length, text: m[0] })));
+  const out: (Span & { mask: string })[][] = texts.map(() => []);
+  phrases.forEach((ps, ti) => {
+    ps.forEach((p, pi) => {
+      if (plates4(p.text).length === 0) return;
+      out[ti].push({ start: p.start, end: p.end, mask: MASK_PLATE });
+      const prevTi = pi > 0 ? ti : ti - 1;
+      const prev = pi > 0 ? ps[pi - 1] : phrases[ti - 1]?.at(-1);
+      if (prev !== undefined && !hasItem(prev.text)) out[prevTi].push({ start: prev.start, end: prev.end, mask: MASK_NAME });
+    });
+  });
+  return out;
+}
+
+/**
+ * 一覧なしの伏せ字。工場はこれだけを使う（一覧は事務所にある）。敬称の前の名前らしい部分と 4 桁に加え、
+ * 4 桁を含む句と、その直前の品目の語の無い句を伏せる（itemWords は料金表の品目名・別名・言い換えの語）。
+ */
+export function maskCustomerInfo(texts: string[], itemWords: string[]): string[] {
+  return identifyCustomer(texts, [], itemWords).texts;
 }
