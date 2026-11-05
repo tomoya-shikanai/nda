@@ -3,7 +3,7 @@
 置き場（root、既定は C:\\nda\\box）:
   in\\    工場が置く。*.json だけ拾う（.tmp や . で始まるものは書きかけなので拾わない）
   work\\  拾って処理中。始めたときにここにあるものは、途中で落ちたものなので stopped: other にする（続きは入れない）
-  done\\  <id>.json（処理の記録と返した答え）、<id>.request.json（届いたファイル）、<sessionId>.state.json（二重入力の鍵）
+  done\\  <id>.json（処理の記録と返した答え）、<id>.request.json（届いたファイル）、session-<sessionId>.state.json（二重入力の鍵）
   dry\\   ドライランの記録（受け箱の状態は変えない）
 
 ここで扱うのは invoice.request だけ。customer.query（照合）は別の部品が扱うので、拾わずに残す。
@@ -116,12 +116,16 @@ class Inbox:
 
     # --- 状態 ---------------------------------------------------------------
 
+    def _state_path(self, session_id: str) -> Path:
+        # 頭に session- を付ける。CON・NUL などの Windows の予約名がファイル名にならないように（Codex 3 回目）
+        return self.done / f"session-{session_id}.state.json"
+
     def state(self, session_id: str) -> dict | None:
-        p = self.done / f"{session_id}.state.json"
+        p = self._state_path(session_id)
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
     def _set_state(self, session_id: str, **kw) -> None:
-        write_json(self.done / f"{session_id}.state.json", {**kw, "at": now_iso()})
+        write_json(self._state_path(session_id), {**kw, "at": now_iso()})
 
     def record(self, request_id: str) -> dict | None:
         p = self.done / f"{request_id}.json"
@@ -141,12 +145,20 @@ class Inbox:
             if self.record(rid) is None:
                 attempt = msg.get("attempt") if isinstance(msg.get("attempt"), int) else 0
                 st = self.state(sid)
-                if st is not None and st.get("status") == "entering" and st.get("requestId") == rid:
-                    # 送っている途中で落ちたかもしれない。入れかけの伝票を人が閉じるまで stopped を返さない（Codex 2 回目）
-                    self.h.log(f"{rid[:8]} 前に入力の途中で止まっていた依頼がある")
-                    self.h.closed()
-                self._set_state(sid, status="stopped", attempt=attempt, requestId=rid)
-                self._finish(p, sid, rid, "stopped", 0, "other", "前に処理の途中で止まっていた")
+                if st is not None and st.get("requestId") != rid:
+                    # 同じ作業の別の依頼の状態（入れ終えた・入れている）は書き換えない。
+                    # 書き換えると attempt+1 で入れ直せてしまう（Codex 3 回目）
+                    self._finish(p, sid, rid, "stopped", 0, "duplicate", "前に処理の途中で止まっていた（同じ作業はほかの依頼で受けている）")
+                elif st is not None and st.get("status") == "entered":
+                    # 入れ終えた後、記録を書く前に落ちた。答えは entered のまま返す
+                    self._finish(p, sid, rid, "entered", int(st.get("lines", 0)), None, "保存の手前まで入れた（記録は再起動の後に書いた）")
+                else:
+                    if st is not None and st.get("status") == "entering":
+                        # 送っている途中で落ちたかもしれない。入れかけの伝票を人が閉じるまで stopped を返さない（Codex 2 回目）
+                        self.h.log(f"{rid[:8]} 前に入力の途中で止まっていた依頼がある")
+                        self.h.closed()
+                    self._set_state(sid, status="stopped", attempt=attempt, requestId=rid)
+                    self._finish(p, sid, rid, "stopped", 0, "other", "前に処理の途中で止まっていた")
             else:
                 os.replace(p, self.done / f"{rid}.request.json")
 
@@ -162,7 +174,7 @@ class Inbox:
                 continue
             # 期限は記録を作った時刻で見る（ファイルの更新時刻は再送のたびに変わる。Codex 2 回目）
             created = rec.get("createdAt")
-            if rec.get("posted") == "failed" and isinstance(created, (int, float)) and created >= limit:
+            if rec.get("posted") in ("failed", None) and isinstance(created, (int, float)) and created >= limit:
                 rec["posted"] = self.h.post(rec["result"])
                 write_json(p, rec)
 
@@ -254,7 +266,7 @@ class Inbox:
             if not isinstance(ex, Exception):
                 raise
             return self.record(rid)
-        self._set_state(sid, status="entered", attempt=attempt, requestId=rid)
+        self._set_state(sid, status="entered", attempt=attempt, requestId=rid, lines=entered)
         return self._finish(w, sid, rid, "entered", entered, None, "保存の手前まで入れた。保存は人が押す")
 
     def run_once(self) -> int:

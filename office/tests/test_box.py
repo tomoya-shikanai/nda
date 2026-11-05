@@ -122,7 +122,7 @@ class InboxTest(unittest.TestCase):
         return p
 
     def state(self, sid="s-1"):
-        return json.loads((self.root / "done" / f"{sid}.state.json").read_text(encoding="utf-8"))
+        return json.loads((self.root / "done" / f"session-{sid}.state.json").read_text(encoding="utf-8"))
 
     def test_entered_once(self):
         m = request()
@@ -393,6 +393,45 @@ class CodexFixTest(unittest.TestCase):
             self.assertTrue(boxmain.confirm_then_check({}))
         finally:
             boxmain.ask_operator, boxmain.confirmed = saved
+
+    def test_recover_does_not_reopen_entered_session(self):
+        # A を入れ終えた後、同じ作業の B が work に残って落ちた → 再起動しても A の状態は entered のまま
+        self.write(json.dumps(request(), default=float))
+        self.box.run_once()
+        (self.root / "work" / "b.json").write_text(json.dumps(request(), default=float), encoding="utf-8")
+        self.box.recover()
+        self.assertEqual(json.loads((self.root / "done" / "session-s-1.state.json").read_text(encoding="utf-8"))["status"], "entered")
+        self.write(json.dumps(request(attempt=2), default=float), "c.json")
+        self.box.run_once()
+        self.assertEqual(len(self.fh.entered), 1)
+        self.assertEqual(self.fh.posted[-1]["reason"], "duplicate")
+
+    def test_recover_after_entered_before_record_reports_entered(self):
+        m = request()
+        (self.root / "work" / "x.json").write_text(json.dumps(m, default=float), encoding="utf-8")
+        self.box._set_state("s-1", status="entered", attempt=1, requestId=m["id"], lines=2)
+        self.box.recover()
+        self.assertEqual((self.fh.posted[-1]["outcome"], self.fh.posted[-1]["enteredLines"]), ("entered", 2))
+        self.assertEqual(self.closed, [])
+
+    def test_unposted_record_is_resent(self):
+        # 記録を書いた後、POST の前に落ちた（posted が null）
+        self.write(json.dumps(request(), default=float))
+        self.box.run_once()
+        rec_path = next(p for p in (self.root / "done").glob("*.json")
+                        if not p.name.endswith((".state.json", ".request.json")))
+        rec = json.loads(rec_path.read_text(encoding="utf-8"))
+        rec["posted"] = None
+        rec_path.write_text(json.dumps(rec), encoding="utf-8")
+        n = len(self.fh.posted)
+        self.box.resend()
+        self.assertEqual(len(self.fh.posted), n + 1)
+
+    def test_reserved_name_session(self):
+        self.write(json.dumps(request(sessionId="CON"), default=float))
+        self.box.run_once()
+        self.assertEqual(self.fh.posted[-1]["outcome"], "entered")
+        self.box.recover()
 
     def test_send_needs_confirmed_per_request(self):
         # リポジトリの keypath・columns は未確認なので、送る形の手順は作らない
