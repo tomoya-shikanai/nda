@@ -406,7 +406,7 @@ test("状態: stopped の理由で札が変わる。置けなければ sending �
   assert.equal(sending.status, "sending");
   assert.equal(sending.office?.lastError, "受け箱に置けませんでした（Error）");
   assert.equal(toMonitorView(sending).say, SAY.sendFailed("writeFailed"));
-  assert.equal(toMonitorView(sending).office, "未送信");
+  assert.equal(toMonitorView(sending).office, "未送信・つながったら送ります");
   assert.equal(toMonitorView(sending).officeTrouble, true);
   // 30 秒たつまでは送り直さない
   fail = false;
@@ -543,7 +543,7 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
     await writeSession(dir, done);
     const sd = await submitInvoice(dir, { box: folderBox(ro, NOMOUNT), timeoutMs: 1000 }, done);
     assert.equal(sd.status, "sending");
-    assert.equal(toMonitorView(sd).office, "未送信");
+    assert.equal(toMonitorView(sd).office, "未送信・つながったら送ります");
     const other = approvedSession({ ...decided, id: `m${seq++}` });
     await writeSession(dir, other);
     const sm = await submitInvoice(dir, { box: folderBox(missing, NOMOUNT), timeoutMs: 1000 }, other);

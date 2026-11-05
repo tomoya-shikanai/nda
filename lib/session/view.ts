@@ -119,7 +119,7 @@ function officeBadge(s: Session | null): string | null {
     case "done":
       return s.customerRequired ? "これから送る" : null;
     case "sending":
-      return s.office?.lastError ? "未送信" : "送信中";
+      return s.office?.lastError ? "未送信・つながったら送ります" : "送信中";
     case "sent":
       return "事務所に届いた";
     case "entered":
