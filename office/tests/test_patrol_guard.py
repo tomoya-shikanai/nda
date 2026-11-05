@@ -49,13 +49,12 @@ class MenuTest(unittest.TestCase):
 
 
 class SafeLabelTest(unittest.TestCase):
-    def test_決まったボタンと機能の名前は残す(self):
+    def test_決まったボタンは残す(self):
         self.assertEqual(safe_label("いいえ(N)"), "いいえ")
-        self.assertEqual(safe_label("車歴検索"), "車歴検索")
-        self.assertEqual(safe_label("請求書発行"), "請求書発行")
+        self.assertEqual(safe_label("キャンセル"), "キャンセル")
 
     def test_それ以外は伏せる(self):
-        for n in ["山田太郎", "山田商会", "品川500あ1234", "検索 1234", "", "x" * 30]:
+        for n in ["山田太郎", "山田商会", "品川500あ1234", "検索 1234", "顧客:山田太郎", "車歴検索", "", "x" * 30]:
             with self.subTest(n=n):
                 self.assertEqual(safe_label(n), "***")
 

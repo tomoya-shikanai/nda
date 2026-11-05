@@ -131,6 +131,7 @@ class Patrol:
                 self.note("dialog", pid=pid, buttons=[safe_label(n) for n in names], pressed=choice and safe_label(choice))
                 if choice is None:
                     raise Stop("押してよいボタンの無いダイアログが出た")
+                self.check()
                 for n, c in buttons:
                     if n == choice:
                         c.GetInvokePattern().Invoke()
@@ -183,7 +184,7 @@ class Patrol:
                 n = c.Name or ""
                 if n:
                     items.append((n, c))
-        self.note("menu_items", names=sorted({safe_label(n) for n, _ in items}), allowed=sorted({norm(n) for n, _ in items if menu_allowed(n)}))
+        self.note("menu_items", count=len(items), allowed=sorted({norm(n) for n, _ in items if menu_allowed(n)}))
 
         opened = 0
         seen = set()
@@ -201,7 +202,7 @@ class Patrol:
                 c.GetInvokePattern().Invoke()
             except Exception as ex:
                 self.note("invoke_failed", item=key, error=type(ex).__name__)
-                continue
+                raise Stop("項目を開く操作が失敗した（開いたかどうか分からないので止める）")
             self.note("invoke", item=key)
             new: list[int] = []
 
@@ -219,6 +220,7 @@ class Patrol:
             time.sleep(2)
             self.check()
             for p in new:
+                self.check()
                 self.dump(p, key)
             self.check()
             self.close(new)
@@ -233,6 +235,7 @@ class Patrol:
             if p in self.before or p not in self.mine:
                 continue
             for w in top_windows(p):
+                self.check()
                 if (w.ClassName or "") == "#32770":  # ダイアログに WM_CLOSE は送らない（OK だけのダイアログでは OK になる）
                     raise Stop("閉じる前にダイアログが残っている")
                 try:
