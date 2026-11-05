@@ -203,44 +203,67 @@ function mask(text: string, spans: (Span & { mask: string })[]): string {
 const DIGIT_GAP = /[\s\-‐－−ー・,，.]/;
 
 /**
- * 文の中の数字の並び。NFKC にし、漢数字の 1 字を算用数字にそろえ、数字の間の空白・「-」などを詰める（「12 34」「1 2 3 4」「一二三四」）。
- * yen は並びの後（空白を飛ばして）に「円」が続くか。
+ * 文の中の数字の並び。NFKC にし、漢数字の 1 字を算用数字にそろえる。並びは数字の塊（区切りの無い数字）を、
+ * 数字の間の空白・「-」・読点などの区切りをまたいでつないだもの（「12 34」「1 2 3 4」「一二三四」）。
+ * 並びの後（空白を飛ばして）に「円」が続くときは、最後の塊だけを値段とし（yen）、それより前の塊は値段に入れない
+ * （「田中 1234 1650円」の 1234 をナンバーとして見る）。
  */
-function digitRuns(sentence: string): { digits: string; yen: boolean }[] {
+function digitRuns(sentence: string): { chunks: string[]; yen: boolean }[] {
   const chars = [...sentence].map((c) => {
-    const n = c.normalize("NFKC");
     const k = KANJI_DIGITS.indexOf(c);
-    return k >= 0 ? String(k) : n;
+    return k >= 0 ? String(k) : c.normalize("NFKC");
   });
-  const out: { digits: string; yen: boolean }[] = [];
+  const isDigit = (c: string | undefined) => c !== undefined && /^[0-9]$/.test(c);
+  const out: { chunks: string[]; yen: boolean }[] = [];
   let i = 0;
   while (i < chars.length) {
-    if (!/^[0-9]$/.test(chars[i])) {
+    if (!isDigit(chars[i])) {
       i++;
       continue;
     }
-    let digits = "";
+    const chunks: string[] = [];
     let j = i;
     let last = i;
-    while (j < chars.length && (/^[0-9]$/.test(chars[j]) || DIGIT_GAP.test(chars[j]))) {
-      if (/^[0-9]$/.test(chars[j])) {
-        digits += chars[j];
+    for (;;) {
+      let chunk = "";
+      while (isDigit(chars[j])) {
+        chunk += chars[j];
         last = j;
+        j++;
       }
-      j++;
+      chunks.push(chunk);
+      let k = j;
+      while (k < chars.length && DIGIT_GAP.test(chars[k])) k++;
+      if (k === j || !isDigit(chars[k])) break;
+      j = k;
     }
     let k = last + 1;
     while (k < chars.length && /\s/.test(chars[k])) k++;
-    out.push({ digits, yen: chars[k] === "円" });
+    out.push({ chunks, yen: chars[k] === "円" });
     i = last + 1;
   }
   return out;
 }
 
-/** 文の 4 桁の数（ナンバー。円が続かないもの）。 */
-const plates4 = (sentence: string) => digitRuns(sentence).filter((r) => !r.yen && r.digits.length === 4).map((r) => r.digits);
-/** ナンバーかもしれない数（円が続かない 4 桁以上）。伏せ字はこれで決める（伏せすぎる側）。 */
-const hasPlateLike = (sentence: string) => digitRuns(sentence).some((r) => !r.yen && r.digits.length >= 4);
+/** 値段でない部分の塊（円が続く並びは最後の塊を除く）。 */
+const plateChunks = (r: { chunks: string[]; yen: boolean }) => (r.yen ? r.chunks.slice(0, -1) : r.chunks);
+
+/** 文の 4 桁の数（ナンバー）の候補: 値段でない部分をつないだ並びと、塊のうち、ちょうど 4 桁のもの。 */
+function plates4(sentence: string): string[] {
+  const out: string[] = [];
+  for (const r of digitRuns(sentence)) {
+    const cs = plateChunks(r);
+    for (const c of [cs.join(""), ...cs]) if (c.length === 4 && !out.includes(c)) out.push(c);
+  }
+  return out;
+}
+
+/** ナンバーかもしれない数（値段でない部分をつないだ並びか塊が 4 桁以上）。伏せ字はこれで決める（伏せすぎる側）。 */
+const hasPlateLike = (sentence: string) =>
+  digitRuns(sentence).some((r) => {
+    const cs = plateChunks(r);
+    return cs.join("").length >= 4 || cs.some((c) => c.length >= 4);
+  });
 
 type Sentence = { ti: number; start: number; end: number; text: string };
 
