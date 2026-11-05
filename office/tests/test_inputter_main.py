@@ -80,12 +80,21 @@ class MainTest(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertIn("F8", err)
 
-    def test_no_window_sending_imports(self):
-        # この段階では、窓にキー・クリックを送るものを読み込まない
+    def test_window_sending_only_in_winsend(self):
+        # 窓にキーを送るもの・Windows を読むものは winsend.py だけに置く（判定の send.py は Windows に依存しない）
         pkg = Path(__file__).resolve().parents[1] / "inputter"
-        src = "".join(p.read_text(encoding="utf-8") for p in pkg.glob("*.py"))
-        for name in ("pywinauto", "SendInput", "ctypes", "win32api", "keybd_event", "pyautogui", "comtypes", "uiautomation"):
-            self.assertNotIn(name, src)
+        for p in pkg.glob("*.py"):
+            if p.name == "winsend.py":
+                continue
+            src = p.read_text(encoding="utf-8")
+            for name in ("pywinauto", "SendInput", "ctypes", "win32api", "keybd_event", "pyautogui", "comtypes", "uiautomation"):
+                with self.subTest(file=p.name, name=name):
+                    self.assertNotIn(name, src)
+        win = (pkg / "winsend.py").read_text(encoding="utf-8")
+        # クリック・マウスの入力・F キー・Esc・Delete を作る道は持たない
+        for name in ("MOUSEINPUT", "INPUT_MOUSE", "mouse_event", "SetCursorPos", "VK_F", "0x70", "0x1B", "0x2E", "PostMessage", "SendMessage", "Invoke"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, win)
 
 
 if __name__ == "__main__":
