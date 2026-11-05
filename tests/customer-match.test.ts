@@ -269,3 +269,18 @@ test("Codex 2 回目 1: 敬称の直前に空白（半角・全角・続く）�
   // 空白の前が名前の字でなければ伏せない
   assert.equal(maskCustomerInfo(["4本、 さんで"])[0], "4本、 さんで");
 });
+
+test("Codex 2 回目 2: 読点で区切ったナンバーも拾って伏せ、plate4 も同じ規則で取る", () => {
+  for (const [t, plate] of [
+    ["田中、ナンバーは12、34。", "1234"],
+    ["田中、ナンバーは一、二、三、四。", "1234"],
+    ["田中、ナンバーは1，2，3，4。", "1234"],
+  ] as const) {
+    const [out] = maskCustomerInfo([t]);
+    assert.ok(!out.includes("田中") && !/[0-9一二三四]/.test(out), `${t} → ${out}`);
+    assert.deepEqual(plateSentences([t]).plate4, [plate], t);
+  }
+  // 読点の値段は従来どおり（円の直前の塊だけが値段）
+  assert.deepEqual(maskCustomerInfo(["組替1650円、脱着4本。"]), ["組替1650円、脱着4本。"]);
+  assert.ok(maskCustomerInfo(["田中、1234、1650円"])[0].includes(MASK_PLATE));
+});
