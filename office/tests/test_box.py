@@ -340,6 +340,60 @@ class CodexFixTest(unittest.TestCase):
         self.box.run_once()
         self.assertEqual(len(calls), 2)
 
+    def test_recover_waits_closed_when_entering(self):
+        m = request()
+        (self.root / "work").mkdir(exist_ok=True)
+        (self.root / "work" / "x.json").write_text(json.dumps(m, default=float), encoding="utf-8")
+        self.box._set_state("s-1", status="entering", attempt=1, requestId=m["id"])
+        order = []
+        self.hooks.closed = lambda: order.append("closed")
+        post = self.hooks.post
+        self.hooks.post = lambda r: order.append(r["outcome"]) or post(r)
+        self.box.recover()
+        self.assertEqual(order, ["closed", "stopped"])
+
+    def test_recover_without_entering_does_not_wait(self):
+        (self.root / "work").mkdir(exist_ok=True)
+        (self.root / "work" / "x.json").write_text(json.dumps(request(), default=float), encoding="utf-8")
+        self.box.recover()
+        self.assertEqual(self.closed, [])
+
+    def test_resend_stops_after_24h_from_creation(self):
+        calls = []
+        self.hooks.post = lambda r: calls.append(r) or "failed"
+        self.write(json.dumps(request(), default=float))
+        self.box.run_once()
+        rec_path = next(p for p in (self.root / "done").glob("*.json")
+                        if not p.name.endswith((".state.json", ".request.json")))
+        rec = json.loads(rec_path.read_text(encoding="utf-8"))
+        rec["createdAt"] -= 24 * 3600 + 1
+        rec_path.write_text(json.dumps(rec), encoding="utf-8")  # 更新時刻は今
+        self.box.resend()
+        self.assertEqual(len(calls), 1)
+
+    def test_session_id_not_logged(self):
+        self.write(json.dumps(request(sessionId="9001-partA-7777"), default=float))
+        self.box.run_once()
+        self.assertTrue(self.fh.logs)
+        self.assertNotIn("9001", "\n".join(self.fh.logs))
+
+    def test_oversized_file_not_read_whole(self):
+        self.write(" " * (300 * 1024) + json.dumps(request(), default=float))
+        self.box.run_once()
+        self.assertEqual(self.fh.entered, [])
+        self.assertEqual(len(list((self.root / "done").glob("unreadable-*.json"))), 1)
+
+    def test_confirm_rechecks_confirmed_after_operator(self):
+        saved = (boxmain.ask_operator, boxmain.confirmed)
+        try:
+            boxmain.ask_operator = lambda job: True
+            boxmain.confirmed = lambda: False
+            self.assertFalse(boxmain.confirm_then_check({}))
+            boxmain.confirmed = lambda: True
+            self.assertTrue(boxmain.confirm_then_check({}))
+        finally:
+            boxmain.ask_operator, boxmain.confirmed = saved
+
     def test_send_needs_confirmed_per_request(self):
         # リポジトリの keypath・columns は未確認なので、送る形の手順は作らない
         with self.assertRaises(RuntimeError):

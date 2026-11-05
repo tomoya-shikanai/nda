@@ -92,10 +92,13 @@ def _no_constant(name: str) -> object:
 
 def read_message(path: Path, max_bytes: int) -> object:
     """受け箱のファイルを読む。読めないもの（大きすぎる・JSON でない・重複キー・NaN・深すぎる入れ子）は Reject。"""
-    if path.stat().st_size > max_bytes:
+    # 大きさは読んだ量で見る（stat の後に差し替えられても上限を超えて読まない。Codex 2 回目）
+    with open(path, "rb") as f:
+        raw = f.read(max_bytes + 1)
+    if len(raw) > max_bytes:
         raise _bad("ファイルが大きすぎる")
     try:
-        text = path.read_text(encoding="utf-8")
+        text = raw.decode("utf-8")
         return json.loads(text, parse_float=Decimal, parse_constant=_no_constant, object_pairs_hook=_no_duplicate_keys)
     except (PlanError, ValueError, UnicodeDecodeError, RecursionError):
         # RecursionError: [ を 1 万個並べたファイルで見回りが落ちないように（Codex の指摘）

@@ -140,6 +140,11 @@ class Inbox:
                 continue
             if self.record(rid) is None:
                 attempt = msg.get("attempt") if isinstance(msg.get("attempt"), int) else 0
+                st = self.state(sid)
+                if st is not None and st.get("status") == "entering" and st.get("requestId") == rid:
+                    # 送っている途中で落ちたかもしれない。入れかけの伝票を人が閉じるまで stopped を返さない（Codex 2 回目）
+                    self.h.log(f"{rid[:8]} 前に入力の途中で止まっていた依頼がある")
+                    self.h.closed()
                 self._set_state(sid, status="stopped", attempt=attempt, requestId=rid)
                 self._finish(p, sid, rid, "stopped", 0, "other", "前に処理の途中で止まっていた")
             else:
@@ -155,7 +160,9 @@ class Inbox:
                 rec = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if rec.get("posted") == "failed" and p.stat().st_mtime >= limit:
+            # 期限は記録を作った時刻で見る（ファイルの更新時刻は再送のたびに変わる。Codex 2 回目）
+            created = rec.get("createdAt")
+            if rec.get("posted") == "failed" and isinstance(created, (int, float)) and created >= limit:
                 rec["posted"] = self.h.post(rec["result"])
                 write_json(p, rec)
 
@@ -163,13 +170,14 @@ class Inbox:
 
     def _finish(self, work_path: Path, sid: str, rid: str, outcome: str, entered: int, reason: str | None, why: str) -> dict:
         result = result_message(sid, rid, outcome, entered, reason)
-        rec = {"requestId": rid, "sessionId": sid, "why": why, "result": result, "posted": None}
+        rec = {"requestId": rid, "sessionId": sid, "why": why, "result": result, "posted": None, "createdAt": time.time()}
         write_json(self.done / f"{rid}.json", rec)
         if work_path.exists():
             os.replace(work_path, self.done / f"{rid}.request.json")
         rec["posted"] = self.h.post(result)
         write_json(self.done / f"{rid}.json", rec)
-        self.h.log(f"{rid[:8]} 作業 {sid}: {outcome}" + (f"（{reason}: {why}）" if reason else "") + f" 工場へ: {rec['posted']}")
+        # sessionId は工場が付けた文字列で、値が入り得るのでログに出さない（Codex 2 回目）。id の頭だけ出す
+        self.h.log(f"{rid[:8]}: {outcome}" + (f"（{reason}: {why}）" if reason else "") + f" 工場へ: {rec['posted']}")
         return rec
 
     def handle(self, p: Path) -> dict | None:

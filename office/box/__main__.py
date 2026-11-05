@@ -111,6 +111,15 @@ def wait_closed() -> None:
             return
 
 
+def confirm_then_check(job: dict) -> bool:
+    """人の確かめの後、送る直前にもう一度 keypath・columns の確認済みを読み直す（待つ間に取り消されても送らない。Codex 2 回目）。"""
+    if not ask_operator(job):
+        return False
+    if not confirmed():
+        print("  keypath.json か columns.json が確認済みでなくなったので、入れません。", flush=True)
+        return False
+    return True
+
 def real_enter(prepared) -> int:
     from inputter.winsend import WinDesktop
 
@@ -162,7 +171,7 @@ def cmd_run(args) -> int:
         if not confirmed():
             print("keypath.json と columns.json の confirmed が両方 true でないので、送らない。店で画面を確かめてから人が true にする。", file=sys.stderr)
             return 2
-        hooks = Hooks(prepare=lambda job: _plan(job, cfg, need_confirmed=True), confirm=ask_operator, enter=real_enter,
+        hooks = Hooks(prepare=lambda job: _plan(job, cfg, need_confirmed=True), confirm=confirm_then_check, enter=real_enter,
                       post=make_post(cfg), log=log, closed=wait_closed)
         box = Inbox(root, cfg, hooks)
         try:
