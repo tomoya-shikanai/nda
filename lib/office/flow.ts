@@ -102,6 +102,8 @@ export function applyToFactory(s: Session, m: ToFactory, now: Date): Applied {
 
   // invoice.result
   const o = s.office;
+  // 事務所が「同じ依頼が 2 回届いた」と止めた結果は、1 回目の結果を保つ（§4）。状態を変えずに、受け取ったことだけ記録する
+  if (m.outcome === "stopped" && m.reason === "duplicate" && o !== null) return applied(s);
   if (o === null || o.requestId !== m.requestId || (s.status !== "sending" && s.status !== "sent")) {
     return { accepted: false, why: "stale", session: s };
   }

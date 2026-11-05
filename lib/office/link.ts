@@ -68,7 +68,7 @@ export function folderBox(dir: string, opts: FolderBoxOptions = {}): BoxWriter {
         if (!(await stat(dir)).isDirectory()) throw new Error("not a directory");
         await access(marker);
         if (requireMount) {
-          rootDev = (await stat(rootDir)).dev;
+          rootDev = (await stat(/*turbopackIgnore: true*/ rootDir)).dev;
           if ((await stat(dir)).dev === rootDev) throw new Error("not mounted");
         }
       } catch {

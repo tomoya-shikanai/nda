@@ -595,3 +595,26 @@ test("Codex 3: 同時の見回りでも送り直しは 1 本。.tmp は書き手
   assert.ok(["{\"a\":1}", "{\"a\":2}"].includes(await readFile(join(box, "same.json"), "utf8")));
   assert.deepEqual((await readdir(box)).filter((n) => n.endsWith(".tmp")), []);
 });
+
+test("Codex 4: stopped・duplicate は 1 回目の結果を遮らない（状態を変えず記録だけ）", async () => {
+  const { dir, box, office, s } = await ready();
+  const sent = await replySession({ dir, session: s, utterance: say("請求書頼む"), ledger, office });
+  assert.equal(sent.status, "sent");
+  const [req] = await readBox(box);
+  if (req.kind !== "invoice.request") throw new Error("依頼でない");
+  const dup: InvoiceResult = { ...answerRequest(req), outcome: "stopped", enteredLines: 0, reason: "duplicate", readback: null };
+  // 本来の結果より先に duplicate が届く
+  assert.deepEqual(await (await reply(dup)).json(), { accepted: true });
+  const mid = await readSession(dir, s.id);
+  assert.equal(mid?.status, "sent", "duplicate では止まらない");
+  assert.deepEqual(mid?.appliedIds.at(-1), dup.id);
+  assert.equal(toMonitorView(mid).say, SAY.sent);
+  // 本来の結果が届けば entered
+  assert.deepEqual(await (await reply(answerRequest(req))).json(), { accepted: true });
+  const end = await readSession(dir, s.id);
+  assert.equal(end?.status, "entered");
+  // entered の後に duplicate が届いても entered のまま
+  const dup2 = { ...dup, id: randomUUID() };
+  assert.deepEqual(await (await reply(dup2)).json(), { accepted: true });
+  assert.equal((await readSession(dir, s.id))?.status, "entered");
+});
