@@ -79,7 +79,7 @@ class FakeDesktop:
             name = self.format(f, name)
         return FocusInfo(pid=7, class_name=f["class"], rect=self._rect(row, f), name=name)
 
-    def windows_of(self, pid):
+    def visible_windows(self):
         late = [w for at, w in self.delayed if at <= self.now]
         return [TopWindow(hwnd=100, class_name="ThunderRT6FormDC", title=self.window.title)] + self.extra_windows + late
 
@@ -296,6 +296,11 @@ class RunTest(unittest.TestCase):
                 d.extra_windows.append(TopWindow(hwnd=200, class_name="#32770", title="確認"))
         self.desk.hooks.append(popup)
         self.assertStops("ダイアログ", sent_max=4)
+
+    def test_other_process_dialog_stops(self):
+        # 前面とフォーカスが伝票の画面のままでも、別の process の見えているダイアログで止める
+        self.desk.extra_windows.append(TopWindow(hwnd=300, class_name="#32770", title="警告"))
+        self.assertStops("来ない: |ダイアログ", sent_max=0)
 
     def test_stop_title_window_stops(self):
         def popup(d):

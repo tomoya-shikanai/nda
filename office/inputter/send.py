@@ -81,7 +81,7 @@ class Desktop(Protocol):
 
     def foreground(self) -> WindowInfo | None: ...
     def focused(self) -> FocusInfo | None: ...
-    def windows_of(self, pid: int) -> list[TopWindow]: ...  # その process の見えている窓
+    def visible_windows(self) -> list[TopWindow]: ...  # どの process のものも含めた、見えている最上位の窓
     def last_input_tick(self) -> int: ...  # GetLastInputInfo（ミリ秒、32 ビットで一周する）
     def tick_now(self) -> int: ...  # GetTickCount
     def cursor_pos(self) -> tuple[int, int]: ...
@@ -384,9 +384,10 @@ class Sender:
         problem = self._window_ok(w)
         if problem:
             raise Stop(problem)
-        for top in self.desk.windows_of(w.pid):
+        # ダイアログは、伝票の画面の process のものに限らず止める（常駐の RS1_DATA などの警告もあり得る。Codex の指摘）
+        for top in self.desk.visible_windows():
             if top.class_name == DIALOG_CLASS:
-                raise Stop("伝票の画面のダイアログ（#32770）が出ている")
+                raise Stop("ダイアログ（#32770）が出ている")
             if top.hwnd != w.hwnd and any(s in top.title for s in self.kp.stop_titles):
                 raise Stop("止める小窓（部品の選択・コード表など）が出ている")
         return w

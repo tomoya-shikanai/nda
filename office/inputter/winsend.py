@@ -189,7 +189,7 @@ class WinDesktop:
         except Exception:
             return None
 
-    def windows_of(self, pid: int) -> list[TopWindow]:
+    def visible_windows(self) -> list[TopWindow]:
         user32 = ctypes.windll.user32
         found: list[TopWindow] = []
         proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -197,12 +197,7 @@ class WinDesktop:
         def cb(hwnd, _):
             try:
                 if user32.IsWindowVisible(hwnd):
-                    owner = self._win.pid_of_window(int(hwnd))
-                    if owner is None:
-                        # どの process の窓か読めない窓は、対象のダイアログでないと言えないので止める側にする（Codex の指摘）
-                        found.append(TopWindow(hwnd=0, class_name="#32770", title=""))
-                    elif owner == pid:
-                        found.append(TopWindow(hwnd=int(hwnd), class_name=_class_name(int(hwnd)), title=_title(int(hwnd))))
+                    found.append(TopWindow(hwnd=int(hwnd), class_name=_class_name(int(hwnd)), title=_title(int(hwnd))))
             except Exception:
                 # 1 つでも読めない窓があれば、ダイアログが無いと言えないので止める側にする（Codex の指摘）
                 found.append(TopWindow(hwnd=0, class_name="#32770", title=""))
