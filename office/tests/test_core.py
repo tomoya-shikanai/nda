@@ -9,7 +9,7 @@ import unittest
 from datetime import date, datetime
 from pathlib import Path
 
-from recorder.core import MASK, Click, Element, Snapshot, Store, Tracker, Window, cleanup
+from recorder.core import MASK, Click, Element, Key, Snapshot, Store, Tracker, Window, cleanup, toolbar_button
 
 W1 = Window(handle=1, title="請求書入力", class_name="TForm", rect=(0, 0, 800, 600))
 W2 = Window(handle=1, title="請求書確認", class_name="TForm", rect=(0, 0, 800, 600))
@@ -112,6 +112,67 @@ class TrackerTest(unittest.TestCase):
     def test_長い値は切り詰める(self):
         e = Element(name="備考", value="あ" * 1000)
         self.assertEqual(len(e.to_dict()["value"]), 500)
+
+
+class RecorderFixTest(unittest.TestCase):
+    """#48: 伏せる値・キー・ツールバー・exe・段階ごとの失敗。"""
+
+    def _masked(self, v):
+        return Element(control_type="PaneControl", class_name="TextEdit", value=v, value_source="name", masked=True)
+
+    def test_伏せる欄の値の変化は文字数だけ残す(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10, window=W1, focus=self._masked("")))
+        t.observe(Snapshot(target_pid=10, window=W1, focus=self._masked("山田太郎")))
+        ev = t.observe(Snapshot(target_pid=10, window=W1, focus=PRICE))
+        self.assertEqual(kinds(ev), ["value_changed", "focus"])
+        d = ev[0].data
+        self.assertEqual((d["before"], d["after"], d["before_len"], d["after_len"]), (MASK, MASK, 0, 4))
+        self.assertNotIn("山田", json.dumps([e.data for e in ev], ensure_ascii=False))
+
+    def test_入力の途中で欄の記録が増えない(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10, window=W1, focus=self._masked("1")))
+        self.assertEqual(t.observe(Snapshot(target_pid=10, window=W1, focus=self._masked("12"))), [])
+
+    def test_欄の移動に実行ファイル名を付ける(self):
+        t = Tracker()
+        w = Window(handle=1, title="x", class_name="F", rect=(0, 0, 1, 1), exe="M_NOU.exe")
+        ev = t.observe(Snapshot(target_pid=10, window=w, focus=PRICE))
+        self.assertEqual([e.data.get("exe") for e in ev if e.kind == "focus"], ["M_NOU.exe"])
+
+    def test_ツールバーの押した位置をボタン名にする(self):
+        tb = Element(control_type="PaneControl", class_name="msvb_lib_toolbar", rect=(196, 90, 1795, 144))
+        self.assertEqual(toolbar_button("M_NOU.exe", tb, 196 + 405), "印保存")
+        self.assertEqual(toolbar_button("m_nou.exe", tb, 196 + 355), "保存")
+        self.assertEqual(toolbar_button("M_CAR.exe", tb, 196 + 245), "検索")
+        self.assertEqual(toolbar_button("M_NOU.exe", tb, 196 + 300), "?")  # ボタンの間
+        self.assertEqual(toolbar_button("D_SYARE.exe", tb, 200), "?")  # 表の無い画面
+        self.assertIsNone(toolbar_button("M_NOU.exe", PRICE, 10))  # ツールバーでない
+
+    def test_ツールバーのクリックは名前を付けて撮る(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10))
+        tb = Element(control_type="PaneControl", class_name="msvb_lib_toolbar", rect=(196, 90, 1795, 144))
+        (e,) = t.observe(Snapshot(target_pid=10, clicks=[Click(x=196 + 465, y=100, button="left", element=tb, at=0, exe="M_NOU.exe")]))
+        self.assertEqual((e.data["toolbar_button"], e.data["exe"], e.screenshot), ("印刷", "M_NOU.exe", "click"))
+
+    def test_キーは種類と文字の数だけ残す(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10))
+        (e,) = t.observe(Snapshot(target_pid=10, keys=[Key(key="tab", chars_before=3, at=0, exe="M_NOU.exe")]))
+        self.assertEqual((e.kind, e.data), ("key", {"key": "tab", "chars_before": 3, "exe": "M_NOU.exe"}))
+
+    def test_読み取りの失敗は段階つきで残す(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10))
+        (e,) = t.observe(Snapshot(target_pid=10, errors=[{"stage": "focus", "error": "COMError: x"}]))
+        self.assertEqual((e.kind, e.data["stage"]), ("error", "focus"))
+
+    def test_ダイアログのボタンを窓の記録に残す(self):
+        w = Window(handle=2, title="確認", class_name="#32770", rect=(0, 0, 1, 1), buttons=("はい(Y)", "いいえ(N)"))
+        self.assertEqual(w.to_dict()["buttons"], ["はい(Y)", "いいえ(N)"])
+        self.assertNotIn("buttons", W1.to_dict())
 
 
 class StoreTest(unittest.TestCase):

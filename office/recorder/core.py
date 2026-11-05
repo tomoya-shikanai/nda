@@ -2,7 +2,8 @@
 
 画面の様子（Snapshot）を受け取り、前回と比べて「何が起きたか」（イベント）を返す。
 記録するのは対象のソフト（RacroS III）の操作だけ。他のアプリの操作は記録しない。
-キー入力そのものは記録せず、欄から離れたときの値の変化として残す（パスワード欄は伏せる）。
+キー入力の文字そのものは記録しない。Tab・Enter・F キーなどの種類と、その前に打った文字の数だけを残す。
+欄の値は、欄から離れたときの変化として残す（パスワード欄は伏せる。値が Name に出る部品は文字数だけ）。
 """
 
 from __future__ import annotations
@@ -29,8 +30,10 @@ class Element:
     class_name: str = ""
     value: str | None = None
     is_password: bool = False
-    value_source: str | None = None  # "value"（ValuePattern）か "legacy"（LegacyIAccessiblePattern）
+    value_source: str | None = None  # "value"（ValuePattern）か "legacy"（LegacyIAccessiblePattern）か "name"
     rect: tuple[int, int, int, int] | None = None
+    # 値を記録に残さず、文字数だけを残す（入力した値が Name に出る部品。客の名前などが入る）
+    masked: bool = False
 
     def key(self) -> tuple[str, str, str, str]:
         """同じ部品かどうかの判定に使う（値と位置は含めない）。"""
@@ -44,7 +47,13 @@ class Element:
             "class_name": self.class_name,
         }
         if self.value is not None:
-            d["value"] = MASK if self.is_password else self.value[:MAX_VALUE]
+            if self.is_password:
+                d["value"] = MASK
+            elif self.masked:
+                d["value"] = MASK
+                d["value_len"] = len(self.value)
+            else:
+                d["value"] = self.value[:MAX_VALUE]
             if self.value_source is not None:
                 d["value_source"] = self.value_source
         if self.rect is not None:
@@ -61,11 +70,15 @@ class Window:
     # 窓を持つプロセス。RacroS III は画面ごとに実行ファイルが分かれるので、窓ごとに持つ（0・空は不明）
     pid: int = 0
     exe: str = ""
+    # 確認のダイアログ（#32770）のボタンの名前。文面は残さない
+    buttons: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"handle": self.handle, "title": self.title, "class_name": self.class_name, "rect": list(self.rect)}
         if self.exe:
             d["exe"] = self.exe
+        if self.buttons:
+            d["buttons"] = list(self.buttons)
         return d
 
 
@@ -76,6 +89,17 @@ class Click:
     button: str
     element: Element | None
     at: float
+    exe: str = ""  # クリックした窓の実行ファイル名
+
+
+@dataclass(frozen=True)
+class Key:
+    """特別なキー 1 回（Tab・Enter・F キーなど）。普通の文字は数だけ（chars_before）。"""
+
+    key: str
+    chars_before: int
+    at: float
+    exe: str = ""
 
 
 @dataclass
@@ -88,6 +112,8 @@ class Snapshot:
     window: Window | None = None
     focus: Element | None = None
     clicks: list[Click] = field(default_factory=list)
+    keys: list[Key] = field(default_factory=list)
+    errors: list[dict[str, str]] = field(default_factory=list)  # 読み取りの段階ごとの失敗（stage, error）
 
 
 @dataclass
@@ -98,6 +124,34 @@ class Event:
 
 
 SCREENSHOT_CONTROL_TYPES = {"ButtonControl", "MenuItemControl", "TabItemControl", "ListItemControl", "HyperlinkControl"}
+
+# ツールバー（msvb_lib_toolbar）のボタンには名前が無い。帯の左端からのボタンの中心の位置（画素）で名前を決める。
+# 2026-11-05 に事務所の PC（1920×1080、拡大 100%）の画面で測った。版の更新や拡大の設定で変わり得る。
+TOOLBAR_CLASS = "msvb_lib_toolbar"
+TOOLBAR_HALF_WIDTH = 27
+TOOLBARS: dict[str, dict[str, int]] = {
+    "m_nou.exe": {
+        "終了": 25, "中止": 80, "削除": 135, "自社名": 190, "転用": 245, "保存": 355, "印保存": 405, "印刷": 465,
+        "車情報": 520, "マスタ": 630, "類似検": 685, "点数検": 740, "付箋": 850, "シール": 1015, "参照": 1125, "設定": 1180,
+    },
+    "m_car.exe": {
+        "終了": 25, "中止": 80, "保存": 135, "印刷": 190, "検索": 245, "保有車": 300, "客追加": 355, "客修正": 410,
+        "客削除": 465, "車追加": 520, "車修正": 575, "車削除": 630, "車移動": 685, "画像": 740, "付箋": 850,
+        "前候補": 905, "次候補": 960, "参照": 1015, "対応メモ": 1070,
+    },
+}
+
+
+def toolbar_button(exe: str, element: Element | None, x: int) -> str | None:
+    """ツールバーのクリックなら、押した位置からボタンの名前を返す。分からなければ "?"、ツールバーでなければ None。"""
+    if element is None or element.class_name != TOOLBAR_CLASS or element.rect is None:
+        return None
+    table = TOOLBARS.get(exe.lower())
+    if not table:
+        return "?"
+    dx = x - element.rect[0]
+    name, center = min(table.items(), key=lambda kv: abs(kv[1] - dx))
+    return name if abs(center - dx) <= TOOLBAR_HALF_WIDTH else "?"
 
 
 class Tracker:
@@ -133,16 +187,33 @@ class Tracker:
         if s.window is not None:
             self.window = s.window
 
+        for err in s.errors:
+            events.append(Event("error", dict(err)))
+
         for c in s.clicks:
             d: dict[str, Any] = {"x": c.x, "y": c.y, "button": c.button}
+            if c.exe:
+                d["exe"] = c.exe
             if c.element is not None:
                 d["element"] = c.element.to_dict()
-            shot = "click" if c.element is not None and c.element.control_type in SCREENSHOT_CONTROL_TYPES else None
+            tb = toolbar_button(c.exe, c.element, c.x)
+            if tb is not None:
+                d["toolbar_button"] = tb
+            shot = "click" if tb is not None or (c.element is not None and c.element.control_type in SCREENSHOT_CONTROL_TYPES) else None
             events.append(Event("click", d, screenshot=shot))
+
+        for k in s.keys:
+            d = {"key": k.key, "chars_before": k.chars_before}
+            if k.exe:
+                d["exe"] = k.exe
+            events.append(Event("key", d))
 
         if s.focus is not None and (self.focus is None or s.focus.key() != self.focus.key()):
             events += self._leave_focus()
-            events.append(Event("focus", s.focus.to_dict()))
+            d = s.focus.to_dict()
+            if s.window is not None and s.window.exe:
+                d["exe"] = s.window.exe
+            events.append(Event("focus", d))
             self.focus = s.focus
             self.focus_value_at_enter = s.focus.value
             self.focus_protected = s.focus.is_password
@@ -159,16 +230,14 @@ class Tracker:
         hide = self.focus_protected or f.is_password
         if hide:
             f = replace(f, is_password=True)
-        return [
-            Event(
-                "value_changed",
-                {
-                    "element": f.to_dict(),
-                    "before": MASK if hide else (before or "")[:MAX_VALUE],
-                    "after": MASK if hide else f.value[:MAX_VALUE],
-                },
-            )
-        ]
+        d: dict[str, Any] = {"element": f.to_dict()}
+        if hide:
+            d["before"] = d["after"] = MASK
+        elif f.masked:
+            d.update(before=MASK, after=MASK, before_len=len(before or ""), after_len=len(f.value))
+        else:
+            d.update(before=(before or "")[:MAX_VALUE], after=f.value[:MAX_VALUE])
+        return [Event("value_changed", d)]
 
     def flush(self) -> list[Event]:
         """終了時。入力途中の欄の値の変化も残す。"""

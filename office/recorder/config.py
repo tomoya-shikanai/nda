@@ -24,6 +24,8 @@ class Config:
     min_shot_interval: float = 2.0
     jpeg_quality: int = 70
     show_indicator: bool = True
+    # 入力した値が Name に出る部品のクラス名。Name を値として扱い、記録には文字数だけを残す
+    name_value_classes: list[str] = field(default_factory=lambda: ["TextEdit", "NumEdit"])
 
 
 def load(path: Path | None = None) -> Config:

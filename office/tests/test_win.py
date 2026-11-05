@@ -95,6 +95,33 @@ class _Listener:
         pass
 
 
+class _KeyListener:
+    """pynput.keyboard.Listener の偽物。"""
+
+    def __init__(self, on_press=None, on_release=None):
+        self.on_press, self.on_release = on_press, on_release
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+class _SpecialKey:
+    """pynput.keyboard.Key の要素の偽物（name を持つ）。"""
+
+    def __init__(self, name):
+        self.name = name
+
+
+class _KeyCode:
+    """pynput.keyboard.KeyCode の偽物（name を持たない）。"""
+
+    def __init__(self, char=None, vk=None):
+        self.char, self.vk = char, vk
+
+
 class _TargetProcess:
     """対象のプロセスの偽物（Reader と dump_tree が使う所だけ）。"""
 
@@ -131,6 +158,8 @@ def _fake_modules():
     pynput = types.ModuleType("pynput")
     pynput.mouse = types.ModuleType("pynput.mouse")
     pynput.mouse.Listener = _Listener
+    pynput.keyboard = types.ModuleType("pynput.keyboard")
+    pynput.keyboard.Listener = _KeyListener
     psutil = types.ModuleType("psutil")
     psutil.Process = _Process
     psutil.process_iter = lambda attrs=None: []
@@ -141,6 +170,7 @@ def _fake_modules():
         "PIL.ImageGrab": pil.ImageGrab,
         "pynput": pynput,
         "pynput.mouse": pynput.mouse,
+        "pynput.keyboard": pynput.keyboard,
     }
 
 
@@ -266,6 +296,167 @@ class LegacyValueTest(unittest.TestCase):
             self.assertIsNotNone(e, kw)
             self.assertEqual((e.value, e.value_source), (None, None), kw)
             self.assertNotIn("secret", str(e.to_dict()), kw)
+
+
+class NameValueTest(unittest.TestCase):
+    """RacroS III の TextEdit・NumEdit は、入力した値が Name に出る。Name を値として伏せる。"""
+
+    NV = frozenset({"TextEdit", "NumEdit"})
+
+    def setUp(self):
+        self.win = _import_win(self)
+
+    def _ctl(self, cls, name):
+        c = _Control(control_type="PaneControl")
+        c.ClassName, c.Name = cls, name
+        return c
+
+    def test_Name_に出る値は文字数だけ残す(self):
+        e = self.win.element_of(self._ctl("TextEdit", "山田太郎"), self.NV)
+        self.assertEqual((e.name, e.value, e.value_source, e.masked), ("", "山田太郎", "name", True))
+        d = e.to_dict()
+        self.assertEqual((d["name"], d["value"], d["value_len"]), ("", "***", 4))
+        self.assertNotIn("山田", str(d))
+
+    def test_入力の途中でも同じ部品に見える(self):
+        a = self.win.element_of(self._ctl("NumEdit", "1"), self.NV)
+        b = self.win.element_of(self._ctl("NumEdit", "1200"), self.NV)
+        self.assertEqual(a.key(), b.key())
+
+    def test_対象でないクラスは_Name_をそのまま残す(self):
+        e = self.win.element_of(self._ctl("Button", "保存"), self.NV)
+        self.assertEqual((e.name, e.masked), ("保存", False))
+
+    def test_既定の設定で_TextEdit_と_NumEdit_を伏せる(self):
+        from recorder.config import Config
+
+        self.assertEqual(set(Config().name_value_classes), {"TextEdit", "NumEdit"})
+
+    def test_パスワードの印があれば文字数も出さない(self):
+        c = self._ctl("TextEdit", "secret")
+        c.IsPassword = True
+        d = self.win.element_of(c, self.NV).to_dict()
+        self.assertEqual(d["value"], "***")
+        self.assertNotIn("value_len", d)
+
+
+class KeyKindTest(unittest.TestCase):
+    def setUp(self):
+        self.win = _import_win(self)
+
+    def k(self, key, ctrl=False, alt=False, shift=False):
+        return self.win.key_kind(key, ctrl, alt, shift)
+
+    def test_特別なキーは名前を残す(self):
+        self.assertEqual(self.k(_SpecialKey("tab")), "tab")
+        self.assertEqual(self.k(_SpecialKey("tab"), shift=True), "shift+tab")
+        self.assertEqual(self.k(_SpecialKey("f5")), "f5")
+
+    def test_普通の文字は数えるだけ(self):
+        self.assertEqual(self.k(_KeyCode(char="a", vk=0x41)), "")
+        self.assertEqual(self.k(_KeyCode(char="A", vk=0x41), shift=True), "")
+        self.assertEqual(self.k(_SpecialKey("space")), "")
+
+    def test_修飾キーそのものは残さない(self):
+        for n in ("ctrl_l", "shift", "alt_r"):
+            self.assertIsNone(self.k(_SpecialKey(n)))
+
+    def test_Ctrl_との組み合わせは英数字だけ残す(self):
+        self.assertEqual(self.k(_KeyCode(char="\x13", vk=0x53), ctrl=True), "ctrl+S")
+        self.assertEqual(self.k(_KeyCode(char=None, vk=0xBA), ctrl=True), "ctrl+?")
+
+
+class KeyRecordTest(unittest.TestCase):
+    """キーは対象のソフトが前面のときだけ数え、文字は数だけ残す。"""
+
+    def setUp(self):
+        from recorder.config import Config
+
+        self.win = _import_win(self)
+        self.reader = self.win.Reader(Config(target_exe=["RacroS.exe"]))
+        self.reader.proc = _TargetProcess(PID)
+        auto = sys.modules["uiautomation"]
+        auto.GetForegroundControl = lambda: None
+        auto.GetFocusedControl = lambda: None
+        self.win.foreground_window = lambda: 100
+
+    def _type(self, pid, keys):
+        self.win.pid_of_window = lambda hwnd: pid
+        for k in keys:
+            self.reader._on_press(k)
+            self.reader._on_release(k)
+
+    def test_文字の数と特別なキーを残す(self):
+        self._type(PID, [_KeyCode("a", 0x41), _KeyCode("b", 0x42), _SpecialKey("tab")])
+        (k,) = self.reader.snapshot().keys
+        self.assertEqual((k.key, k.chars_before, k.exe), ("tab", 2, "RacroS.exe"))
+
+    def test_他のアプリで打ったキーは残さない(self):
+        self._type(OTHER, [_KeyCode("a", 0x41), _SpecialKey("enter")])
+        self.assertEqual(self.reader.snapshot().keys, [])
+        self.assertEqual(self.reader.chars, 0)
+
+    def test_Ctrl_を押している間だけ組み合わせになる(self):
+        self.win.pid_of_window = lambda hwnd: PID
+        ctrl = _SpecialKey("ctrl_l")
+        self.reader._on_press(ctrl)
+        self.reader._on_press(_KeyCode("\x13", 0x53))
+        self.reader._on_release(ctrl)
+        self.reader._on_press(_SpecialKey("enter"))
+        self.assertEqual([k.key for k in self.reader.snapshot().keys], ["ctrl+S", "enter"])
+
+
+class StageErrorTest(unittest.TestCase):
+    """1 か所の読み取りの失敗で、その回のクリックをまとめて失わない。"""
+
+    def setUp(self):
+        from recorder.config import Config
+
+        self.win = _import_win(self)
+        self.reader = self.win.Reader(Config(target_exe=["RacroS.exe"]))
+        self.reader.proc = _TargetProcess(PID)
+        self.auto = sys.modules["uiautomation"]
+        btn = _Control(control_type="ButtonControl")
+        btn.ProcessId = PID
+        self.auto.ControlFromPoint = lambda x, y: btn
+        self.win.pid_at = lambda x, y: PID
+
+    def _boom(self):
+        raise RuntimeError("COM")
+
+    def test_窓の読み取りに失敗してもクリックは残す(self):
+        self.auto.GetForegroundControl = self._boom
+        self.auto.GetFocusedControl = lambda: None
+        self.reader._on_click(5, 6, "Button.left", True)
+        s = self.reader.snapshot()
+        self.assertEqual(len(s.clicks), 1)
+        self.assertEqual(s.errors[0]["stage"], "window")
+
+    def test_欄の読み取りに失敗しても窓は残す(self):
+        w = _Window(PID, "整備伝票", handle=300)
+        self.auto.GetForegroundControl = lambda: w
+        self.auto.GetFocusedControl = self._boom
+        s = self.reader.snapshot()
+        self.assertIsNotNone(s.window)
+        self.assertEqual([e["stage"] for e in s.errors], ["focus"])
+
+
+class DialogButtonsTest(unittest.TestCase):
+    def setUp(self):
+        self.win = _import_win(self)
+
+    def test_ダイアログのボタンの名前だけを返す(self):
+        kids = [
+            types.SimpleNamespace(ControlTypeName="TextControl", Name="データを保存しますか"),
+            types.SimpleNamespace(ControlTypeName="ButtonControl", Name="はい(Y)"),
+            types.SimpleNamespace(ControlTypeName="ButtonControl", Name="いいえ(N)"),
+        ]
+        w = types.SimpleNamespace(GetChildren=lambda: kids)
+        self.assertEqual(self.win.dialog_buttons(w), ("はい(Y)", "いいえ(N)"))
+
+    def test_読めなければ空(self):
+        w = types.SimpleNamespace(GetChildren=lambda: (_ for _ in ()).throw(RuntimeError("x")))
+        self.assertEqual(self.win.dialog_buttons(w), ())
 
 
 class FindTargetTest(unittest.TestCase):

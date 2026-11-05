@@ -1,7 +1,7 @@
 """Windows の画面を読む部分。Windows でだけ import する。
 
-使うもの: uiautomation（画面部品の読み取り）、pynput（クリックの検出）、Pillow（スクリーンショット）、psutil（プロセス）。
-読むだけで、整備ソフトに入力・クリックはしない。
+使うもの: uiautomation（画面部品の読み取り）、pynput（クリックとキーの検出）、Pillow（スクリーンショット）、psutil（プロセス）。
+読むだけで、整備ソフトに入力・クリックはしない。キーは種類だけを残し、文字は数えるだけ。
 """
 
 from __future__ import annotations
@@ -14,10 +14,10 @@ from pathlib import Path
 import psutil
 import uiautomation as auto
 from PIL import ImageGrab
-from pynput import mouse
+from pynput import keyboard, mouse
 
 from .config import Config
-from .core import Click, Element, Snapshot, Window
+from .core import Click, Element, Key, Snapshot, Window
 
 
 def set_dpi_aware() -> None:
@@ -176,7 +176,9 @@ def _read_value(c) -> tuple[str | None, str | None, bool]:
     return None, None, False
 
 
-def element_of(c) -> Element | None:
+def element_of(c, name_value_classes: frozenset[str] = frozenset()) -> Element | None:
+    """name_value_classes の部品（RacroS III の TextEdit・NumEdit）は、入力した値が Name に出る。
+    Name を値として扱い（伏せて文字数だけ残す）、Name は空にする。入力のたびに別の部品に見えないようにもなる。"""
     if c is None:
         return None
     try:
@@ -187,11 +189,25 @@ def element_of(c) -> Element | None:
         except Exception:
             # パスワード欄かどうか分からない部品は安全側に倒し、値を残さない
             value, value_source = None, None
+        name = c.Name or ""
+        class_name = c.ClassName or ""
+        if class_name in name_value_classes:
+            return Element(
+                name="",
+                automation_id=c.AutomationId or "",
+                control_type=c.ControlTypeName or "",
+                class_name=class_name,
+                value=name,
+                value_source="name",
+                is_password=is_password,
+                masked=True,
+                rect=_rect(c.BoundingRectangle),
+            )
         return Element(
-            name=c.Name or "",
+            name=name,
             automation_id=c.AutomationId or "",
             control_type=c.ControlTypeName or "",
-            class_name=c.ClassName or "",
+            class_name=class_name,
             value=value,
             value_source=value_source,
             is_password=is_password,
@@ -233,14 +249,44 @@ def _foreground_target(cfg: Config) -> psutil.Process | None:
         return None
 
 
+MODIFIERS = {"ctrl", "ctrl_l", "ctrl_r", "alt", "alt_l", "alt_r", "alt_gr", "shift", "shift_l", "shift_r", "cmd", "cmd_l", "cmd_r"}
+CHAR_KEYS = {"space"}  # 文字として数えるだけの特別なキー
+
+
+def key_kind(key, ctrl: bool, alt: bool, shift: bool) -> str | None:
+    """キーを記録用の名前にする。普通の文字は "" （数えるだけ）、修飾キーそのものは None（記録しない）。
+    文字そのものは返さない。Ctrl・Alt と一緒の英数字だけ、ショートカットとして "ctrl+S" のように返す。"""
+    name = getattr(key, "name", None)
+    if name is not None:  # 特別なキー（keyboard.Key）
+        if name in MODIFIERS:
+            return None
+        if name in CHAR_KEYS and not (ctrl or alt):
+            return ""
+        mods = [m for m, on in (("ctrl", ctrl), ("alt", alt), ("shift", shift)) if on]
+        return "+".join(mods + [name])
+    if ctrl or alt:
+        vk = getattr(key, "vk", None)
+        if vk is not None and (0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A):
+            mods = [m for m, on in (("ctrl", ctrl), ("alt", alt), ("shift", shift)) if on]
+            return "+".join(mods + [chr(vk)])
+        return "+".join(m for m, on in (("ctrl", ctrl), ("alt", alt)) if on) + "+?"
+    return ""
+
+
 class Reader:
     """画面の様子を 1 回分ずつ取る。"""
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
+        self.name_value_classes = frozenset(cfg.name_value_classes)
         self.clicks: queue.Queue[tuple[int, int, str, float, int | None]] = queue.Queue()
+        self.keys: queue.Queue[tuple[str, float, int | None]] = queue.Queue()
+        self.mods = {"ctrl": False, "alt": False, "shift": False}
+        self.chars = 0  # 対象のソフトで、前の特別なキーの後に打った文字の数
         self.listener = mouse.Listener(on_click=self._on_click)
         self.listener.start()
+        self.key_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        self.key_listener.start()
         self.last_find = 0.0
         # 記録の区切りに使う対象のプロセス（どれか 1 つ）。RacroS III は画面ごとに別のプロセスなので、
         # 窓・クリックは「対象の実行ファイル名のどのプロセスか」で判定する（_is_target_pid）。
@@ -254,6 +300,28 @@ class Reader:
         # 座標と、クリックの瞬間にその座標にあった窓のプロセス（Win32 API で取る）を積む。
         if pressed:
             self.clicks.put((int(x), int(y), str(button).replace("Button.", ""), time.time(), pid_at(x, y)))
+
+    def _set_mod(self, key, on: bool) -> None:
+        name = getattr(key, "name", None) or ""
+        for m in ("ctrl", "alt", "shift"):
+            if name.startswith(m):
+                self.mods[m] = on
+
+    def _on_press(self, key) -> None:
+        # pynput の別スレッド。前面の窓のプロセスを Win32 API で取り、名前の判定は snapshot で行う。
+        try:
+            self._set_mod(key, True)
+            kind = key_kind(key, self.mods["ctrl"], self.mods["alt"], self.mods["shift"])
+            if kind is not None:
+                self.keys.put((kind, time.time(), pid_of_window(foreground_window())))
+        except Exception:
+            pass
+
+    def _on_release(self, key) -> None:
+        try:
+            self._set_mod(key, False)
+        except Exception:
+            pass
 
     def _target(self) -> psutil.Process | None:
         now = time.time()
@@ -285,37 +353,72 @@ class Reader:
         return self.pid_names[pid]
 
     def snapshot(self) -> Snapshot:
+        """読み取りは段階（窓・欄・クリック 1 つずつ）に分け、失敗した段階だけを捨てて s.errors に残す。
+        1 か所の失敗で、その回のクリックやキーをまとめて失わないようにする。"""
         proc = self._target()
         clicks_raw = []
         while not self.clicks.empty():
             clicks_raw.append(self.clicks.get_nowait())
+        keys_raw = []
+        while not self.keys.empty():
+            keys_raw.append(self.keys.get_nowait())
         if proc is None:
             return Snapshot(target_pid=None)
         pid = proc.pid
         s = Snapshot(target_pid=pid, target_exe=proc.name(), target_path=self.proc_path)
 
-        fg = auto.GetForegroundControl()
-        fg_pid = fg.ProcessId if fg is not None else None
-        fg_name = self._target_name(fg_pid)
+        def fail(stage: str, ex: Exception) -> None:
+            s.errors.append({"stage": stage, "error": f"{type(ex).__name__}: {ex}"[:300]})
+
+        fg = None
+        fg_pid = None
+        fg_name = ""
+        try:
+            fg = auto.GetForegroundControl()
+            fg_pid = fg.ProcessId if fg is not None else None
+            fg_name = self._target_name(fg_pid)
+            if fg is not None and fg_name:
+                r = _rect(fg.BoundingRectangle)
+                if r is not None:
+                    class_name = fg.ClassName or ""
+                    s.window = Window(
+                        handle=fg.NativeWindowHandle, title=fg.Name or "", class_name=class_name, rect=r,
+                        pid=fg_pid, exe=fg_name, buttons=dialog_buttons(fg) if class_name == "#32770" else (),
+                    )
+        except Exception as ex:
+            fail("window", ex)
+            fg_name = ""
+
         if fg is not None and fg_name:
-            r = _rect(fg.BoundingRectangle)
-            if r is not None:
-                s.window = Window(handle=fg.NativeWindowHandle, title=fg.Name or "", class_name=fg.ClassName or "", rect=r, pid=fg_pid, exe=fg_name)
-            focus = auto.GetFocusedControl()
-            if focus is not None and focus.ProcessId == fg_pid:
-                s.focus = element_of(focus)
+            try:
+                focus = auto.GetFocusedControl()
+                if focus is not None and focus.ProcessId == fg_pid:
+                    s.focus = element_of(focus, self.name_value_classes)
+            except Exception as ex:
+                fail("focus", ex)
 
         for x, y, button, at, click_pid in clicks_raw:
             # クリックの瞬間に対象のソフトの窓でなければ捨てる（分からなければ捨てる）
-            if not self._target_name(click_pid):
+            exe = self._target_name(click_pid)
+            if not exe:
                 continue
             try:
                 c = auto.ControlFromPoint(x, y)
-            except Exception:
-                c = None
-            # 対象のソフトの上のクリックだけを残す（クリックの瞬間と同じプロセスの部品）
-            if c is not None and c.ProcessId == click_pid:
-                s.clicks.append(Click(x=x, y=y, button=button, element=element_of(c), at=at))
+                # 対象のソフトの上のクリックだけを残す（クリックの瞬間と同じプロセスの部品）
+                if c is not None and c.ProcessId == click_pid:
+                    s.clicks.append(Click(x=x, y=y, button=button, element=element_of(c, self.name_value_classes), at=at, exe=exe))
+            except Exception as ex:
+                fail("click", ex)
+
+        for kind, at, key_pid in keys_raw:
+            exe = self._target_name(key_pid)
+            if not exe:  # 他のアプリで打ったキーは数えもしない
+                continue
+            if kind == "":
+                self.chars += 1
+                continue
+            s.keys.append(Key(key=kind, chars_before=self.chars, at=at, exe=exe))
+            self.chars = 0
         return s
 
     def screenshot(self, window: Window, path: Path) -> bool:
@@ -327,6 +430,15 @@ class Reader:
 
     def stop(self) -> None:
         self.listener.stop()
+        self.key_listener.stop()
+
+
+def dialog_buttons(w) -> tuple[str, ...]:
+    """確認のダイアログのボタンの名前（はい(Y)・いいえ(N) など）。文面は読まない。"""
+    try:
+        return tuple((ch.Name or "")[:20] for ch in w.GetChildren() if ch.ControlTypeName == "ButtonControl")
+    except Exception:
+        return ()
 
 
 def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
@@ -353,11 +465,18 @@ def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
         f.write(f"# process {proc.name()} pid={proc.pid} path={exe_path(proc)}\n")
         for i, w in enumerate(windows):
             for c, depth in auto.WalkControl(w, includeTop=True, maxDepth=max_depth):
-                e = element_of(c)
+                e = element_of(c, frozenset(cfg.name_value_classes))
                 if e is None:
                     continue
                 have = [n for n, pid in patterns if _has(c, pid)]
-                v = "" if e.value is None else (" value=" + ("***" if e.is_password else repr(e.value[:80])))
+                if e.value is None:
+                    v = ""
+                elif e.is_password:
+                    v = " value=***"
+                elif e.masked:
+                    v = f" value=***({len(e.value)} 文字)"
+                else:
+                    v = " value=" + repr(e.value[:80])
                 if e.value is not None and e.value_source == "legacy":
                     v += " (legacy)"
                 f.write(
