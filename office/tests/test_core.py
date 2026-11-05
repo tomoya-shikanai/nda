@@ -161,6 +161,19 @@ class RecorderFixTest(unittest.TestCase):
         self.assertEqual((e.data["toolbar_button"], e.data["exe"], e.screenshot), ("印刷", "M_NOU.exe", "click"))
         self.assertEqual(e.data["toolbar_dx"], 465)
 
+    def test_初めて入った欄では撮る(self):
+        t = Tracker()
+        w = Window(handle=1, title="x", class_name="F", rect=(100, 0, 1636, 1075), exe="M_NOU.exe")
+        a = Element(control_type="EditControl", class_name="NumEdit", rect=(153, 566, 225, 590), masked=True, value="1")
+        b = Element(name="b", control_type="EditControl", class_name="TextEdit", rect=(237, 566, 748, 590), masked=True, value="")
+        (e1,) = [e for e in t.observe(Snapshot(target_pid=10, window=w, focus=a)) if e.kind == "focus"]
+        self.assertEqual((e1.screenshot, e1.field_key), ("field", ("m_nou.exe", "NumEdit", 53, 566, 72, 24)))
+        (e2,) = [e for e in t.observe(Snapshot(target_pid=10, window=w, focus=b)) if e.kind == "focus"]
+        self.assertEqual(e2.screenshot, "field")  # 撮れなかった a は次に入ったとき撮り直す
+        t.field_shot_done(e1.field_key)
+        (e3,) = [e for e in t.observe(Snapshot(target_pid=10, window=w, focus=a)) if e.kind == "focus"]
+        self.assertIsNone(e3.screenshot)
+
     def test_窓の題名の客の名前を伏せる(self):
         t = Tracker()
         w = Window(handle=1, title="[ 山田　太郎 ] - [ 納品請求書 ] - RacroSⅢ", class_name="F", rect=(0, 0, 1, 1), exe="M_NOU.exe")

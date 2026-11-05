@@ -122,7 +122,12 @@ class Event:
     kind: str
     data: dict[str, Any]
     screenshot: str | None = None  # 撮る理由（撮らないなら None）
+    # 初めて入った欄の目印（画面の実行ファイル・クラス・窓の中の位置）。撮れたら Tracker.field_shot_done に返す
+    field_key: tuple | None = None
 
+
+# 初めて入った欄では画面を 1 枚撮る。欄の見出しと位置を対応づけ、欄の地図を作るため（画像は PC の中だけ）
+FIELD_SHOT_CLASSES = {"NumEdit", "TextEdit", "ThunderRT6TextBox"}
 
 SCREENSHOT_CONTROL_TYPES = {"ButtonControl", "MenuItemControl", "TabItemControl", "ListItemControl", "HyperlinkControl"}
 
@@ -196,6 +201,11 @@ class Tracker:
         # 今の部品にフォーカスがある間に、一度でもパスワード欄・保護された欄と判定されたか。
         # 立ったら部品を離れるまで下ろさない（保護中に読んだ値を後で before・after に出さない）
         self.focus_protected = False
+        self.shot_fields: set[tuple] = set()
+
+    def field_shot_done(self, key: tuple) -> None:
+        """初めて入った欄の画面が撮れた。同じ欄ではもう撮らない（撮れなければ次に入ったときに撮り直す）。"""
+        self.shot_fields.add(key)
 
     def observe(self, s: Snapshot) -> list[Event]:
         events: list[Event] = []
@@ -246,7 +256,13 @@ class Tracker:
             d = s.focus.to_dict()
             if s.window is not None and s.window.exe:
                 d["exe"] = s.window.exe
-            events.append(Event("focus", d))
+            fk = None
+            if s.focus.class_name in FIELD_SHOT_CLASSES and s.focus.rect is not None and s.window is not None:
+                r, w = s.focus.rect, s.window.rect
+                fk = (s.window.exe.lower(), s.focus.class_name, r[0] - w[0], r[1] - w[1], r[2] - r[0], r[3] - r[1])
+                if fk in self.shot_fields:
+                    fk = None
+            events.append(Event("focus", d, screenshot="field" if fk else None, field_key=fk))
             self.focus = s.focus
             self.focus_value_at_enter = s.focus.value
             self.focus_protected = s.focus.is_password

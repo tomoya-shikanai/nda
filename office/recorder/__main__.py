@@ -45,6 +45,8 @@ def run() -> None:
                     p = store.screenshot_path(e.screenshot)
                     if p is not None and reader.screenshot(tracker.window, p):
                         store.write(type(e)("screenshot", {"file": p.name, "for": e.kind}))
+                        if e.field_key is not None:
+                            tracker.field_shot_done(e.field_key)
             if indicator is not None:
                 indicator.show(s.target_pid is not None)
             if time.time() - last_cleanup > 3600:
