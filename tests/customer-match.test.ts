@@ -259,3 +259,13 @@ test("一覧なしの伏せ字（文の単位）: ナンバーを含む文と前
   assert.ok(!file.includes("田中") && !file.includes("12 34"));
   assert.equal(s.invoice?.lines[0]?.qty, 4);
 });
+
+test("Codex 2 回目 1: 敬称の直前に空白（半角・全角・続く）があっても名前を伏せる", () => {
+  for (const t of ["山田 さんの車、脱着4本。", "山田　様の車です。", "山田  さま", "ヤマダ　 さん"]) {
+    const [out] = maskCustomerInfo([t]);
+    assert.ok(!out.includes("山田") && !out.includes("ヤマダ"), `${t} → ${out}`);
+  }
+  assert.equal(maskCustomerInfo(["山田 さんの車、脱着4本。"])[0], `${MASK_NAME}さんの車、脱着4本。`);
+  // 空白の前が名前の字でなければ伏せない
+  assert.equal(maskCustomerInfo(["4本、 さんで"])[0], "4本、 さんで");
+});

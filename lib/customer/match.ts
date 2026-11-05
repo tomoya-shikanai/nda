@@ -94,7 +94,10 @@ const NOT_NAMES = ["お客", "客", "皆", "みな", "奥", "父", "母", "兄",
  * 止めるのは、名前に使う字でないもの（句読点・数字など）・文頭・助詞（漢字・カタカナ・英字の後の「の」など）・前の敬称の終わり。
  * 間の空白・「・」1 字は、前後が名前の字なら続きとみなす。伏せすぎる側に倒す。無ければ null。
  */
-function nameBefore(text: string, at: number): Span | null {
+function nameBefore(text: string, honorificAt: number): Span | null {
+  // 敬称の直前の空白（半角・全角、続いても）は飛ばしてから名前の字を探す（「山田 さん」「山田　様」）
+  let at = honorificAt;
+  while (at > 0 && /\s/.test(text[at - 1])) at--;
   // 助詞とみなすのは、直前が漢字・カタカナ・英字のとき（「山田の」）。ひらがなの続き・文頭の「や」「の」は名前の字（「やまだ」「のぞみ」）。
   // ただし助詞の後ろ、敬称までがひらがなだけなら、その字は名前の一部とみなして止めない（「山田はなこ」「佐藤のぞみ」。伏せすぎる側）
   const hiraganaOnly = (j: number) => /^[\u3041-\u3096]+$/.test(text.slice(j + 1, at));
@@ -108,7 +111,7 @@ function nameBefore(text: string, at: number): Span | null {
     else if (/[\s・]/.test(text[i - 1] ?? "") && i - 2 >= 0 && !stop(i - 2)) i -= 2;
     else break;
   }
-  return { start: i, end: at };
+  return { start: i, end: honorificAt };
 }
 
 /** 敬称の前の名前らしい部分（伏せる範囲）。 */
