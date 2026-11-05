@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, test } from "node:test";
@@ -16,7 +16,7 @@ import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { answerQuery, answerRequest, processBox } from "../lib/office/fake";
 import { applyToFactory, buildCustomerQuery, expireQuery, QUERY_TIMEOUT_SEC, RESEND_EVERY_SEC } from "../lib/office/flow";
 import { clearLabels, getLabel } from "../lib/office/labels";
-import { type BoxWriter, folderBox, type OfficeLink, officeFromEnv, submitInvoice, tickOffice } from "../lib/office/link";
+import { BOX_MARKER, type BoxWriter, folderBox, type OfficeLink, officeFromEnv, submitInvoice, tickOffice } from "../lib/office/link";
 import { handleOfficeReply, tokenMatches } from "../lib/office/reply";
 import {
   CustomerAnswer,
@@ -103,6 +103,9 @@ const post = async (m: ToFactory) => {
 async function env() {
   const dir = await tmp();
   const box = join(await tmp(), "in");
+  // 事務所側が受け箱と目印を置く（§9-4。工場は作らない）
+  await mkdir(box, { recursive: true });
+  await writeFile(join(box, BOX_MARKER), "");
   process.env.NDA_SESSION_DIR = dir;
   const office: OfficeLink = { box: folderBox(box), timeoutMs: 1000 };
   return { dir, box, office };
@@ -291,7 +294,7 @@ test("二重の id は 2 回目から何もしない。別の問い合わせへ�
   assert.ok(twice.accepted && twice.duplicate);
 });
 
-test("受け箱に置けなければ「事務所につながりません」。ほかの質問は続けられる", async () => {
+test("受け箱に置けなければ「事務所の PC に届きません」。ほかの質問は続けられる", async () => {
   const { dir } = await env();
   const broken: BoxWriter = {
     kind: "broken",
@@ -308,7 +311,7 @@ test("受け箱に置けなければ「事務所につながりません」。�
     id: `p${seq++}`,
   });
   assert.equal(s.customerQuery?.status, "unreachable");
-  assert.equal(toMonitorView(s).customer, "事務所につながりません");
+  assert.equal(toMonitorView(s).customer, "事務所の PC に届きません（書き込めません）");
   assert.equal(s.questions[0].reason, "qty", "明細の質問が先");
   const s1 = await replySession({ dir, session: s, utterance: say("4本"), ledger, office: { box: broken, timeoutMs: 1000 } });
   assert.deepEqual(s1.answers.at(-1)?.action, { kind: "setQty", value: 4, unit: "本" });
@@ -387,7 +390,7 @@ test("状態: stopped の理由で札が変わる。置けなければ sending �
   const flaky: OfficeLink = {
     box: {
       kind: "flaky",
-      async put(name, body) {
+      async put(name: string, body: string) {
         if (fail) throw new Error("つながらない");
         await office.box.put(name, body);
       },
@@ -399,7 +402,7 @@ test("状態: stopped の理由で札が変わる。置けなければ sending �
   assert.equal(sending.status, "sending");
   assert.equal(sending.office?.lastError, "受け箱に置けませんでした（Error）");
   assert.equal(toMonitorView(sending).say, SAY.sendFailed);
-  assert.equal(toMonitorView(sending).office, "事務所に送れていません。つながったら送ります");
+  assert.equal(toMonitorView(sending).office, "事務所の PC に届きません（書き込めません）。つながったら送ります");
   // 30 秒たつまでは送り直さない
   fail = false;
   const early = await tickOffice(dir, flaky, sending, new Date(t0.getTime() + (RESEND_EVERY_SEC - 1) * 1000));
@@ -482,5 +485,58 @@ test("書き出した JSON Schema（office/box/schema）は zod と同じ（pnpm
   for (const [name, schema] of Object.entries(officeJsonSchemas())) {
     const file = JSON.parse(await readFile(join(ROOT, "office", "box", "schema", `${name}.json`), "utf8"));
     assert.deepEqual(file, JSON.parse(JSON.stringify(schema)), name);
+  }
+});
+
+test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が外れた）は「見えません」、書けないは「書き込めません」。工場は受け箱を作らない", async () => {
+  const { dir } = await env();
+  const root = await tmp();
+  const start = (box: string) =>
+    startSession({
+      dir,
+      transcript: fict(["仮田さんの1111。脱着4本。"]),
+      ledger,
+      extract: extractor(),
+      office: { box: folderBox(box), timeoutMs: 1000 },
+      id: `m${seq++}`,
+    });
+
+  // フォルダが無い
+  const missing = join(root, "unmounted", "in");
+  const s1 = await start(missing);
+  assert.equal(s1.customerQuery?.status, "unreachable");
+  assert.equal(s1.customerQuery?.retryReason, "boxMissing");
+  assert.equal(toMonitorView(s1).customer, "事務所の PC に届きません（共有フォルダが見えません）");
+  await assert.rejects(readdir(missing), "工場は受け箱を作らない");
+
+  // フォルダはあるが目印が無い（mount 先の空のフォルダ）
+  const empty = join(root, "empty");
+  await mkdir(empty);
+  const s2 = await start(empty);
+  assert.equal(s2.customerQuery?.retryReason, "boxMissing");
+  assert.deepEqual(await readdir(empty), [], "外れた mount 先に書かない");
+
+  // 書けない
+  const ro = join(root, "readonly");
+  await mkdir(ro);
+  await writeFile(join(ro, BOX_MARKER), "");
+  await chmod(ro, 0o500);
+  try {
+    const s3 = await start(ro);
+    assert.equal(s3.customerQuery?.retryReason, "writeFailed");
+    assert.equal(toMonitorView(s3).customer, "事務所の PC に届きません（書き込めません）");
+    assert.equal(toMonitorView(s3).say, SAY.unreachable);
+
+    // 承認の後の依頼も同じ札
+    const decided = { ...s3, customer: { customerNo: "c", carNo: "k" }, questions: [] };
+    await writeSession(dir, decided);
+    const done = approvedSession(decided);
+    const sd = await submitInvoice(dir, { box: folderBox(ro), timeoutMs: 1000 }, done);
+    assert.equal(sd.status, "sending");
+    assert.equal(toMonitorView(sd).office, "事務所の PC に届きません（書き込めません）。つながったら送ります");
+    const sm = await submitInvoice(dir, { box: folderBox(missing), timeoutMs: 1000 }, approvedSession({ ...decided, id: `m${seq++}` }));
+    assert.equal(toMonitorView(sm).office, "事務所の PC に届きません（共有フォルダが見えません）。つながったら送ります");
+  } finally {
+    await chmod(ro, 0o700);
   }
 });

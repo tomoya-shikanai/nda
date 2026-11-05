@@ -86,8 +86,14 @@ function customerSay(s: Session): string | null {
   if (q.status === "pending") return SAY.checking;
   if (q.status === "expired") return SAY.noReply;
   if (q.status === "unreachable") return SAY.unreachable;
-  if (q.retryReason !== null) return SAY.notFound;
+  if (q.status === "answered" && q.retryReason !== null) return SAY.notFound;
   return null;
+}
+
+/** 受け箱（事務所の PC の共有フォルダ）に置けなかったときの札（§4・§9-4）。見えない・書けないを分ける。 */
+function unreachableBadge(reason: string | null): string {
+  if (reason === "boxMissing") return "事務所の PC に届きません（共有フォルダが見えません）";
+  return "事務所の PC に届きません（書き込めません）";
 }
 
 function customerBadge(s: Session | null, label: string | null): string | null {
@@ -96,8 +102,8 @@ function customerBadge(s: Session | null, label: string | null): string | null {
   const q = s.customerQuery;
   if (q?.status === "pending") return "お客様を確かめています…";
   if (q?.status === "expired") return "事務所から返事がありません";
-  if (q?.status === "unreachable") return "事務所につながりません";
-  if (q?.retryReason) return "お客様が決まりませんでした";
+  if (q?.status === "unreachable") return unreachableBadge(q.retryReason);
+  if (q?.status === "answered" && q.retryReason) return "お客様が決まりませんでした";
   return "お客様: 未指定";
 }
 
@@ -107,7 +113,8 @@ function officeBadge(s: Session | null): string | null {
     case "done":
       return s.customerRequired ? "事務所に送ります" : null;
     case "sending":
-      return s.office?.lastError ? "事務所に送れていません。つながったら送ります" : "事務所に送っています";
+      if (!s.office?.lastError) return "事務所に送っています";
+      return `${unreachableBadge(s.office.lastError.includes("BoxMissingError") ? "boxMissing" : "writeFailed")}。つながったら送ります`;
     case "sent":
       return "事務所に届きました。入れています";
     case "entered":

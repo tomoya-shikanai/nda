@@ -52,11 +52,14 @@ export function expireQuery(s: Session, now: Date): Session {
   return { ...s, customerQuery: { ...q, status: "expired" }, updatedAt: now.toISOString() };
 }
 
-/** 置けなかった問い合わせを unreachable にする（その問い合わせを今も待っているときだけ）。 */
-export function queryUnreachable(s: Session, queryId: string, now: Date): Session {
+/**
+ * 置けなかった問い合わせを unreachable にする（その問い合わせを今も待っているときだけ）。
+ * reason は boxMissing（共有フォルダが見えない）か writeFailed（書けない）。retryReason に残す。
+ */
+export function queryUnreachable(s: Session, queryId: string, now: Date, reason: "boxMissing" | "writeFailed" = "writeFailed"): Session {
   const q = s.customerQuery;
   if (q === null || q.id !== queryId || q.status !== "pending") return s;
-  return { ...s, customerQuery: { ...q, status: "unreachable" }, updatedAt: now.toISOString() };
+  return { ...s, customerQuery: { ...q, status: "unreachable", retryReason: reason }, updatedAt: now.toISOString() };
 }
 
 export type Applied =
