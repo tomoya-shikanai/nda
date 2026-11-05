@@ -124,6 +124,8 @@ const answer = (q: { id: string; sessionId: string }, result: CustomerAnswer["re
   queryId: q.id,
   result,
 });
+/** 作業の話の後に、2 文あけて客を言う（ナンバーの文と前後の文は伏せるので、作業の文を離す）。 */
+const TALK = "脱着4本。お願いします。えっと。仮田さんの1111。";
 const FOUND = { status: "found" as const, customerNo: "cust-001", carNo: "car-cust-001", label: "仮田 様・架空の軽トラ" };
 
 // --- 型 ---
@@ -138,7 +140,7 @@ test("型: 4 種と封筒は zod が正。往復で変わらず、形の違う�
   });
   assert.ok(q);
   assert.deepEqual(CustomerQuery.parse(JSON.parse(JSON.stringify(q))), q);
-  assert.deepEqual(q.said, ["仮田さんの1111。"], "4 桁を含む文だけ");
+  assert.deepEqual(q.said, ["仮田さんの1111"], "4 桁を含む文と直前の文だけ（ここは直前が無い）");
   assert.deepEqual(q.plate4, ["1111"]);
   const a = answer(q, FOUND);
   assert.deepEqual(CustomerAnswer.parse(a), a);
@@ -196,7 +198,7 @@ test("照合は抽出を待たずに置く。抽出より先に答えが返っ�
     await processBox({ box, customers, post });
     assert.deepEqual((await readSession(dir, id))?.customer, { customerNo: "cust-001", carNo: "car-cust-001" });
   });
-  const s = await startSession({ dir, transcript: fict(["仮田さんの1111。脱着4本。"]), ledger, extract, office, id });
+  const s = await startSession({ dir, transcript: fict([TALK]), ledger, extract, office, id });
   assert.deepEqual(s.customer, { customerNo: "cust-001", carNo: "car-cust-001" });
   assert.equal(s.customerQuery?.status, "answered");
   assert.deepEqual(s.questions, [], "客の質問は消えている");
@@ -208,7 +210,7 @@ test("照合は抽出を待たずに置く。抽出より先に答えが返っ�
 
 test("照合の答えが抽出の後に返る: 客の質問が残り、答えで消えて承認待ちになる", async () => {
   const { dir, box, office } = await env();
-  const s = await startSession({ dir, transcript: fict(["仮田さんの1111。脱着4本。"]), ledger, extract: extractor(), office, id: `p${seq++}` });
+  const s = await startSession({ dir, transcript: fict([TALK]), ledger, extract: extractor(), office, id: `p${seq++}` });
   assert.equal(s.customer, null);
   assert.deepEqual(
     s.questions.map((q) => q.text),
@@ -226,11 +228,11 @@ test("照合の答えが抽出の後に返る: 客の質問が残り、答えで
 
 test("said は作業ファイルに残らない（受け箱の問い合わせにだけある）。label も作業ファイルに残らない", async () => {
   const { dir, box, office } = await env();
-  const s = await startSession({ dir, transcript: fict(["仮田さんの1111。脱着4本。"]), ledger, extract: extractor(), office, id: `p${seq++}` });
+  const s = await startSession({ dir, transcript: fict([TALK]), ledger, extract: extractor(), office, id: `p${seq++}` });
   const qs = await readBox(box);
   assert.equal(qs.length, 1);
   assert.equal(qs[0].kind, "customer.query");
-  assert.deepEqual(qs[0].kind === "customer.query" && qs[0].said, ["仮田さんの1111。"]);
+  assert.deepEqual(qs[0].kind === "customer.query" && qs[0].said, ["えっと", "仮田さんの1111"], "4 桁を含む文と直前の文の原文");
   const file = await readFile(join(dir, `${s.id}.json`), "utf8");
   for (const w of ["仮田", "1111", "said"]) assert.ok(!file.includes(w), w);
   await processBox({ box, customers, post });
@@ -242,7 +244,7 @@ test("said は作業ファイルに残らない（受け箱の問い合わせに
 
 test("事務所が無ければ照合しない（問い合わせを置かず、客を聞かずに承認できる）。伏せ字は効く", async () => {
   const { dir, box } = await env();
-  const s = await startSession({ dir, transcript: fict(["山田さんの9876。脱着4本。"]), ledger, extract: extractor(), id: `p${seq++}` });
+  const s = await startSession({ dir, transcript: fict(["脱着4本。お願いします。えっと。山田さんの9876。"]), ledger, extract: extractor(), id: `p${seq++}` });
   assert.equal(s.customerRequired, false);
   assert.deepEqual(await boxFiles(box), []);
   assert.ok(!JSON.stringify(s).includes("山田") && !JSON.stringify(s).includes("9876"));
@@ -255,7 +257,7 @@ test("事務所が無ければ照合しない（問い合わせを置かず、�
 
 test("照合の期限: 10 秒で expired、遅れて来た答えは stale で捨てる。声は言い直しを頼む", async () => {
   const { dir, box, office } = await env();
-  const s = await startSession({ dir, transcript: fict(["仮田さんの1111。脱着4本。"]), ledger, extract: extractor(), office, id: `p${seq++}` });
+  const s = await startSession({ dir, transcript: fict([TALK]), ledger, extract: extractor(), office, id: `p${seq++}` });
   const [q] = await readBox(box);
   const late = new Date(Date.parse(s.customerQuery?.sentAt ?? "") + QUERY_TIMEOUT_SEC * 1000);
   assert.equal(expireQuery(s, new Date(late.getTime() - 1)).customerQuery?.status, "pending");
@@ -276,7 +278,7 @@ test("照合の期限: 10 秒で expired、遅れて来た答えは stale で捨
 
 test("二重の id は 2 回目から何もしない。別の問い合わせへの答え・retry の答え", async () => {
   const { dir, box, office } = await env();
-  const s = await startSession({ dir, transcript: fict(["仮田さんの1111。脱着4本。"]), ledger, extract: extractor(), office, id: `p${seq++}` });
+  const s = await startSession({ dir, transcript: fict([TALK]), ledger, extract: extractor(), office, id: `p${seq++}` });
   const [q] = await readBox(box);
   assert.deepEqual(await (await reply(answer({ id: randomUUID(), sessionId: s.id }, FOUND))).json(), { accepted: false, why: "stale" });
   const retry = answer(q, { status: "retry", reason: "none" });
@@ -304,7 +306,7 @@ test("受け箱に置けなければ「事務所の PC に届きません」。�
   };
   const s = await startSession({
     dir,
-    transcript: fict(["仮田さんの1111。ゴムバルブも替えた。"]),
+    transcript: fict(["ゴムバルブも替えた。お願いします。えっと。仮田さんの1111。"]),
     ledger,
     extract: extractor(),
     office: { box: broken, timeoutMs: 1000 },
@@ -341,7 +343,7 @@ function approvedSession(s: Session): Session {
 /** 客が決まって承認待ちの作業。 */
 async function ready() {
   const e = await env();
-  const s0 = await startSession({ dir: e.dir, transcript: fict(["仮田さんの1111。脱着4本。"]), ledger, extract: extractor(), office: e.office, id: `p${seq++}` });
+  const s0 = await startSession({ dir: e.dir, transcript: fict([TALK]), ledger, extract: extractor(), office: e.office, id: `p${seq++}` });
   await processBox({ box: e.box, customers, post });
   const s = await readSession(e.dir, s0.id);
   assert.ok(s);
@@ -494,7 +496,7 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
   const start = (box: string) =>
     startSession({
       dir,
-      transcript: fict(["仮田さんの1111。脱着4本。"]),
+      transcript: fict([TALK]),
       ledger,
       extract: extractor(),
       office: { box: folderBox(box), timeoutMs: 1000 },

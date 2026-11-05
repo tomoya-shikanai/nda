@@ -10,7 +10,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, test } from "node:test";
-import { type Customer, CustomerList, identifyCustomer, MASK_NAME, MASK_PLATE, maskCustomerInfo } from "../lib/customer/match";
+import { type Customer, CustomerList, identifyCustomer, MASK_NAME, MASK_PLATE, maskCustomerInfo, plateSentences } from "../lib/customer/match";
 import { enumerateCandidates } from "../lib/invoice/candidates";
 import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { type Extractor, replySession, startSession } from "../lib/session/run";
@@ -141,7 +141,7 @@ test("Codex 指摘 1: 一覧に無い名前（さん・様・さま）と 4 桁�
 
 test("Codex 指摘 1・#25: 一覧なしの伏せ字で、客の名前と 4 桁は抽出にも保存にも画面にも残らず、4 桁は数量の候補にならない", async () => {
   {
-    const { dir, s, seen } = await start(["山田さん、ナンバー9876。脱着4本。"]);
+    const { dir, s, seen } = await start(["脱着4本。以上。えっと。山田さん、ナンバー9876。"]);
     const t = seen[0].segments[0].text;
     assert.ok(!t.includes("山田") && !t.includes("9876"), t);
     assert.deepEqual(
@@ -220,32 +220,35 @@ test("自動のセキュリティ点検: 姓とひらがなの名の間の「は
 
 // --- 自動のセキュリティ点検: 敬称の無い姓（一覧なし） ---
 
-test("一覧なしの伏せ字: 4 桁を含む句と、その前後の品目の語の無い句を伏せる。敬称の無い姓が残らず、品目と数量は残る", async () => {
-  const words = ledger.flatMap((e) => [e.item, ...e.aliases]);
-  const m = (texts: string[]) => maskCustomerInfo(texts, words);
-  for (const [t, keep] of [
-    ["田中 1234", []],
-    ["田中、1234。脱着4本", ["脱着4本"]],
-    ["脱着4本、田中1234", ["脱着4本"]],
-    ["1234の田中", []],
-    ["田中さん1234、脱着4本", ["脱着4本"]],
-    ["タイヤ交換4本、田中、1234", ["タイヤ交換4本"]],
-    ["1234、田中。脱着4本", ["脱着4本"]],
-    ["脱着4本、1234、田中", ["脱着4本"]],
-  ] as const) {
-    const [out] = m([t]);
-    assert.ok(!out.includes("田中") && !out.includes("1234"), `${t} → ${out}`);
-    for (const k of keep) assert.ok(out.includes(k), `${t} → ${out}`);
-  }
-  // 発話をまたぐ（前の発話の最後の句が姓）
-  assert.deepEqual(m(["田中です", "1234。脱着4本。"]), [MASK_NAME, `${MASK_PLATE}。脱着4本。`]);
-  assert.deepEqual(m(["脱着4本、1234", "田中です"]), [`脱着4本、${MASK_PLATE}`, MASK_NAME]);
-  // 4 桁が無ければ句は伏せない。円の 4 桁は伏せない
-  assert.deepEqual(m(["田中、脱着4本、1650円"]), ["田中、脱着4本、1650円"]);
+test("一覧なしの伏せ字（文の単位）: ナンバーを含む文と前後の文を丸ごと伏せる。品目の語があっても例外にしない。2 文以上離れた作業の文は残る", async () => {
+  const m = (texts: string[]) => maskCustomerInfo(texts);
+  const gone = (out: string[], ...ws: string[]) => {
+    for (const w of ws) assert.ok(!out.join("|").includes(w), `${w} が残った: ${out.join("|")}`);
+  };
+  // Codex の 2 例と自動点検の 2 例
+  gone(m(["1234、田中。脱着4本。"]), "田中", "1234");
+  gone(m(["田中、ナンバーは、1234。脱着4本。"]), "田中", "1234");
+  gone(m(["田中 12 34"]), "田中", "12 34");
+  gone(m(["田中 1 2 3 4"]), "田中", "1 2 3 4");
+  gone(m(["田中、一二三四"]), "田中", "一二三四");
+  // 前後の文も丸ごと（品目の語があっても）
+  assert.deepEqual(m(["田中です。1234です。脱着4本。"]), [`${MASK_PLATE}。${MASK_PLATE}。${MASK_PLATE}。`]);
+  // 発話をまたぐ
+  const cross = m(["田中です", "1234", "脱着4本です"]);
+  gone(cross, "田中", "1234", "脱着");
+  // 2 文以上離れた作業の文は残る。ナンバーの無い作業の文は残る。円の 4 桁は伏せない
+  assert.deepEqual(m(["脱着4本。以上。田中、1234。"]), [`脱着4本。${MASK_PLATE}。${MASK_PLATE}。`]);
+  assert.deepEqual(m(["脱着4本、組替1650円。"]), ["脱着4本、組替1650円。"]);
+  assert.deepEqual(m(["田中、脱着4本。"]), ["田中、脱着4本。"], "4 桁が無ければ文は伏せない（敬称の無い姓の既知の限界）");
 
-  // 作業でも: 抽出と作業ファイルに姓が残らず、明細は作れる
-  const { dir, s, seen } = await start(["田中、1234。脱着4本。"]);
+  // said は 4 桁の文と直前の文の原文
+  assert.deepEqual(plateSentences(["脱着4本。田中です。12 34です。以上。"]), { said: ["田中です", "12 34です"], plate4: ["1234"] });
+  assert.deepEqual(plateSentences(["田中です", "一一一一"]), { said: ["田中です", "一一一一"], plate4: ["1111"] });
+
+  // 作業でも: 抽出と作業ファイルに姓と 4 桁が残らず、離れた作業の文から明細を作る
+  const { dir, s, seen } = await start(["脱着4本。以上。田中、ナンバーは12 34。"]);
   assert.ok(!seen[0].segments[0].text.includes("田中"));
-  assert.ok(!JSON.stringify(await readSession(dir, s.id)).includes("田中"));
+  const file = JSON.stringify(await readSession(dir, s.id));
+  assert.ok(!file.includes("田中") && !file.includes("12 34"));
   assert.equal(s.invoice?.lines[0]?.qty, 4);
 });

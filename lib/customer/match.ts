@@ -16,7 +16,6 @@
  * 一覧の名前を含む文に否定・訂正の合図がある（「見本さんじゃなくて」）、一覧の名前と同じ発話に一覧に無いさん付けの名前がある。
  */
 import { z } from "zod";
-import { normalizeText } from "../invoice/candidates";
 import { CORRECTION_CUES, NEGATION_CUES } from "../invoice/resolve";
 
 export const Customer = z.object({
@@ -146,12 +145,11 @@ const overlaps = (a: Span, b: Span) => a.start < b.end && b.start < a.end;
 /**
  * 発話の文（1 つ以上）から客を探し、名前らしい部分と 4 桁の数を伏せ字にする（決め方と伏せ方は冒頭の注）。
  */
-export function identifyCustomer(texts: string[], customers: Customer[], itemWords?: string[]): Identified {
+export function identifyCustomer(texts: string[], customers: Customer[], extra?: (Span & { mask: string })[][]): Identified {
   const plates = new Set(customers.map((c) => c.plate4));
   const named = new Set<string>();
   const saidPlates = new Set<string>();
   let blocked = false;
-  const phraseSpans = itemWords === undefined ? texts.map(() => []) : platePhrases(texts, itemWords);
   const out = texts.map((text, ti) => {
     const f = fold(text);
     const spans: (Span & { mask: string })[] = [];
@@ -178,7 +176,7 @@ export function identifyCustomer(texts: string[], customers: Customer[], itemWor
       if (plates.has(m[0])) saidPlates.add(m[0]);
       spans.push({ start: f.at[i], end: f.at[i + 3] + 1, mask: MASK_PLATE });
     }
-    spans.push(...phraseSpans[ti]);
+    spans.push(...(extra?.[ti] ?? []));
     return mask(text, spans);
   });
   const hits = customers.filter((c) => named.has(c.id) && saidPlates.has(c.plate4));
@@ -201,69 +199,106 @@ function mask(text: string, spans: (Span & { mask: string })[]): string {
   return s;
 }
 
-/** 文の 4 桁の数（前後が数字でなく「円」が続かないもの。算用・全角・漢数字の 1 字ずつ）。 */
-function plates4(sentence: string): string[] {
-  const f = fold(sentence);
-  return [...f.s.matchAll(/[0-9]+/g)]
-    .filter((m) => m[0].length === 4 && f.s[(m.index ?? 0) + 4] !== "円")
-    .map((m) => m[0]);
-}
+/** 数字の間に挟まってもよい区切り（詰める）。 */
+const DIGIT_GAP = /[\s\-‐－−ー・,，.]/;
 
 /**
- * 事務所に問い合わせる文（docs/design/pi-office.md §3）: 4 桁の数を含む文（。！？で区切る）だけを、伏せ字にする前の原文で返す。
- * 作業の話（明細の説明）は事務所に行かない。4 桁が 1 つも無ければ said も plate4 も空。入力は書き換えない。
+ * 文の中の数字の並び。NFKC にし、漢数字の 1 字を算用数字にそろえ、数字の間の空白・「-」などを詰める（「12 34」「1 2 3 4」「一二三四」）。
+ * yen は並びの後（空白を飛ばして）に「円」が続くか。
  */
-export function plateSentences(texts: string[]): { said: string[]; plate4: string[] } {
-  const said: string[] = [];
-  const plate4: string[] = [];
-  for (const text of texts) {
-    for (const m of text.matchAll(SENTENCE)) {
-      const sentence = m[0].trim();
-      if (sentence === "") continue;
-      const ps = plates4(sentence);
-      if (ps.length === 0) continue;
-      said.push(sentence);
-      for (const p of ps) if (!plate4.includes(p)) plate4.push(p);
+function digitRuns(sentence: string): { digits: string; yen: boolean }[] {
+  const chars = [...sentence].map((c) => {
+    const n = c.normalize("NFKC");
+    const k = KANJI_DIGITS.indexOf(c);
+    return k >= 0 ? String(k) : n;
+  });
+  const out: { digits: string; yen: boolean }[] = [];
+  let i = 0;
+  while (i < chars.length) {
+    if (!/^[0-9]$/.test(chars[i])) {
+      i++;
+      continue;
     }
+    let digits = "";
+    let j = i;
+    let last = i;
+    while (j < chars.length && (/^[0-9]$/.test(chars[j]) || DIGIT_GAP.test(chars[j]))) {
+      if (/^[0-9]$/.test(chars[j])) {
+        digits += chars[j];
+        last = j;
+      }
+      j++;
+    }
+    let k = last + 1;
+    while (k < chars.length && /\s/.test(chars[k])) k++;
+    out.push({ digits, yen: chars[k] === "円" });
+    i = last + 1;
   }
-  return { said, plate4 };
+  return out;
 }
 
-/** 句の区切り（読点・句点・！？・空白）。 */
-const PHRASE = /[^、。！？!?,，\s]+/g;
+/** 文の 4 桁の数（ナンバー。円が続かないもの）。 */
+const plates4 = (sentence: string) => digitRuns(sentence).filter((r) => !r.yen && r.digits.length === 4).map((r) => r.digits);
+/** ナンバーかもしれない数（円が続かない 4 桁以上）。伏せ字はこれで決める（伏せすぎる側）。 */
+const hasPlateLike = (sentence: string) => digitRuns(sentence).some((r) => !r.yen && r.digits.length >= 4);
 
-/**
- * 4 桁の数（ナンバー）を含む句を丸ごと伏せ、その前後の句も、料金表の語（品目名・別名・言い換え）を含まなければ伏せる。
- * 敬称の無い姓（「田中 1234」「田中、1234。」「1234の田中」「1234、田中」）を一覧なしで伏せるため（伏せすぎる側）。
- * 前後の句は同じ発話の隣の句。句が発話の端なら、前（後）の発話の最後（最初）の句。品目の語を含む句は残す（「脱着4本、田中1234」の「脱着4本」）。
- */
-function platePhrases(texts: string[], itemWords: string[]): (Span & { mask: string })[][] {
-  const words = [...new Set(itemWords.map(normalizeText).filter((w) => w !== ""))];
-  const hasItem = (p: string) => {
-    const n = normalizeText(p);
-    return words.some((w) => n.includes(w));
-  };
-  const phrases = texts.map((t) => [...t.matchAll(PHRASE)].map((m) => ({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length, text: m[0] })));
-  const out: (Span & { mask: string })[][] = texts.map(() => []);
-  phrases.forEach((ps, ti) => {
-    ps.forEach((p, pi) => {
-      if (plates4(p.text).length === 0) return;
-      out[ti].push({ start: p.start, end: p.end, mask: MASK_PLATE });
-      const prevTi = pi > 0 ? ti : ti - 1;
-      const prev = pi > 0 ? ps[pi - 1] : phrases[ti - 1]?.at(-1);
-      if (prev !== undefined && !hasItem(prev.text)) out[prevTi].push({ start: prev.start, end: prev.end, mask: MASK_NAME });
-      const nextTi = pi < ps.length - 1 ? ti : ti + 1;
-      const next = pi < ps.length - 1 ? ps[pi + 1] : phrases[ti + 1]?.[0];
-      if (next !== undefined && !hasItem(next.text)) out[nextTi].push({ start: next.start, end: next.end, mask: MASK_NAME });
-    });
+type Sentence = { ti: number; start: number; end: number; text: string };
+
+/** 発話を文に分ける（。！？と発話の区切り）。end は句点の前。空の文は入れない。 */
+function sentencesOf(texts: string[]): Sentence[] {
+  const out: Sentence[] = [];
+  texts.forEach((t, ti) => {
+    for (const m of t.matchAll(SENTENCE)) {
+      if (m[0] === "") continue;
+      const start = m.index ?? 0;
+      const body = m[0].replace(/[。！？!?]$/, "");
+      if (body.trim() === "") continue;
+      out.push({ ti, start, end: start + body.length, text: body });
+    }
   });
   return out;
 }
 
 /**
- * 一覧なしの伏せ字。工場はこれだけを使う（一覧は事務所にある）。敬称の前の名前らしい部分と 4 桁に加え、
- * 4 桁を含む句と、その直前の品目の語の無い句を伏せる（itemWords は料金表の品目名・別名・言い換えの語）。
+ * 事務所に問い合わせる文（docs/design/pi-office.md §3）: 4 桁の数を含む文と、その直前の文を、伏せ字にする前の原文で返す
+ * （「田中です。1234です。」の名前も届くように）。作業の話のほかの文は事務所に行かない。4 桁が 1 つも無ければ said も plate4 も空。
  */
-export function maskCustomerInfo(texts: string[], itemWords: string[]): string[] {
-  return identifyCustomer(texts, [], itemWords).texts;
+export function plateSentences(texts: string[]): { said: string[]; plate4: string[] } {
+  const ss = sentencesOf(texts);
+  const pick = new Set<number>();
+  const plate4: string[] = [];
+  ss.forEach((x, k) => {
+    const ps = plates4(x.text);
+    if (ps.length === 0) return;
+    if (k > 0) pick.add(k - 1);
+    pick.add(k);
+    for (const p of ps) if (!plate4.includes(p)) plate4.push(p);
+  });
+  const said = [...pick].sort((a, b) => a - b).map((k) => ss[k].text.trim());
+  return { said, plate4 };
+}
+
+/**
+ * ナンバーかもしれない数（円が続かない 4 桁以上）を含む文と、その直前・直後の文を丸ごと伏せる範囲（発話ごと）。
+ * 品目の語があっても例外にしない（抜けた作業は聞き返しで補う）。敬称の無い姓（「田中、ナンバーは、1234。」「1234、田中。」）を一覧なしで伏せるため。
+ * 前後の文は発話をまたぐ。ナンバーから 2 文以上離れた敬称の無い姓は伏せられない（docs/anonymization.md の既知の限界）。
+ */
+function plateSentenceSpans(texts: string[]): (Span & { mask: string })[][] {
+  const ss = sentencesOf(texts);
+  const hit = new Set<number>();
+  ss.forEach((x, k) => {
+    if (!hasPlateLike(x.text)) return;
+    for (const j of [k - 1, k, k + 1]) if (j >= 0 && j < ss.length) hit.add(j);
+  });
+  const out: (Span & { mask: string })[][] = texts.map(() => []);
+  for (const k of hit) out[ss[k].ti].push({ start: ss[k].start, end: ss[k].end, mask: MASK_PLATE });
+  return out;
+}
+
+/**
+ * 一覧なしの伏せ字。工場はこれだけを使う（一覧は事務所にある）。敬称の前の名前らしい部分と 4 桁に加え、
+ * ナンバーかもしれない数を含む文とその前後の文を丸ごと伏せる。
+ */
+export function maskCustomerInfo(texts: string[]): string[] {
+  return identifyCustomer(texts, [], plateSentenceSpans(texts)).texts;
 }
