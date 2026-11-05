@@ -319,7 +319,7 @@ test("受け箱に置けなければ「事務所の PC に届きません」。�
   assert.equal(s.questions[0].reason, "qty", "明細の質問が先");
   const s1 = await replySession({ dir, session: s, utterance: say("4本"), ledger, office: { box: broken, timeoutMs: 1000 } });
   assert.deepEqual(s1.answers.at(-1)?.action, { kind: "setQty", value: 4, unit: "本" });
-  assert.equal(toMonitorView(s1).say, SAY.unreachable);
+  assert.equal(toMonitorView(s1).say, SAY.unreachable("writeFailed"));
   // sftp の口は置かずに失敗する（事務所の PC で確かめるまで）
   const o = officeFromEnv({ NDA_OFFICE_SFTP: "user@nda-office:C:/nda/box/in" } as unknown as NodeJS.ProcessEnv);
   await assert.rejects(o?.box.put("x.json", "{}") ?? Promise.reject(new Error("null")));
@@ -405,8 +405,8 @@ test("状態: stopped の理由で札が変わる。置けなければ sending �
   const sending = await replySession({ dir, session: s, utterance: say("請求書頼む"), ledger, office: flaky, now: () => t0 });
   assert.equal(sending.status, "sending");
   assert.equal(sending.office?.lastError, "受け箱に置けませんでした（Error）");
-  assert.equal(toMonitorView(sending).say, SAY.sendFailed);
-  assert.equal(toMonitorView(sending).office, "事務所の PC に届きません（書き込めません）。つながったら送ります");
+  assert.equal(toMonitorView(sending).say, SAY.sendFailed("writeFailed"));
+  assert.equal(toMonitorView(sending).office, "事務所に届きません・つながったら送ります");
   // 30 秒たつまでは送り直さない
   fail = false;
   const early = await tickOffice(dir, flaky, sending, new Date(t0.getTime() + (RESEND_EVERY_SEC - 1) * 1000));
@@ -513,6 +513,7 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
   assert.equal(s1.customerQuery?.status, "unreachable");
   assert.equal(s1.customerQuery?.retryReason, "boxMissing");
   assert.equal(toMonitorView(s1).customer, "お客様: 事務所に届きません");
+  assert.equal(toMonitorView(s1).say, "事務所に届きません（共有フォルダが見えません）。お客様はあとでもう一度聞きます");
   await assert.rejects(readdir(missing), "工場は受け箱を作らない");
 
   // フォルダはあるが目印が無い（mount 先の空のフォルダ）
@@ -531,7 +532,7 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
     const s3 = await start(ro);
     assert.equal(s3.customerQuery?.retryReason, "writeFailed");
     assert.equal(toMonitorView(s3).customer, "お客様: 事務所に届きません");
-    assert.equal(toMonitorView(s3).say, SAY.unreachable);
+    assert.equal(toMonitorView(s3).say, SAY.unreachable("writeFailed"));
 
     // 承認の後の依頼も同じ札
     const decided = { ...s3, customer: { customerNo: "c", carNo: "k" }, questions: [] };
@@ -540,11 +541,11 @@ test("§9-4 共有フォルダ: 受け箱が無い・目印が無い（mount が
     await writeSession(dir, done);
     const sd = await submitInvoice(dir, { box: folderBox(ro, NOMOUNT), timeoutMs: 1000 }, done);
     assert.equal(sd.status, "sending");
-    assert.equal(toMonitorView(sd).office, "事務所の PC に届きません（書き込めません）。つながったら送ります");
+    assert.equal(toMonitorView(sd).office, "事務所に届きません・つながったら送ります");
     const other = approvedSession({ ...decided, id: `m${seq++}` });
     await writeSession(dir, other);
     const sm = await submitInvoice(dir, { box: folderBox(missing, NOMOUNT), timeoutMs: 1000 }, other);
-    assert.equal(toMonitorView(sm).office, "事務所の PC に届きません（共有フォルダが見えません）。つながったら送ります");
+    assert.equal(toMonitorView(sm).say, "承認しました。事務所に届きません（共有フォルダが見えません）。つながったら送ります");
   } finally {
     await chmod(ro, 0o700);
   }

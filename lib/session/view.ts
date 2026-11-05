@@ -62,7 +62,7 @@ export const SAY = {
   // 事務所への入力（§4・§5）
   submit: "承認しました。事務所に送ります",
   sending: "事務所に送っています",
-  sendFailed: "承認しました。事務所につながったら送ります",
+  sendFailed: (reason: string | null) => `承認しました。事務所に届きません（${unreachableReason(reason)}）。つながったら送ります`,
   sent: "事務所に届きました。入れています",
   entered: (n: number) => `${n}行入れました。保存は人が押してください`,
   stopped: (reason: string | null) =>
@@ -74,7 +74,8 @@ export const SAY = {
   // 客の照合（§4）
   checking: "お客様を事務所で確かめています",
   noReply: "事務所から返事がありません。名前とナンバーの下4桁をもう一度お願いします",
-  unreachable: "事務所につながりません。お客様はあとでもう一度聞きます",
+  /** 受け箱（事務所の PC の共有フォルダ）に置けなかった。札・帯・声で「事務所に届きません」にそろえ、理由は声の側に入れる。 */
+  unreachable: (reason: string | null) => `事務所に届きません（${unreachableReason(reason)}）。お客様はあとでもう一度聞きます`,
   notFound: "お客様が決まりませんでした。名前とナンバーの下4桁をもう一度お願いします",
 } as const;
 
@@ -85,16 +86,18 @@ function customerSay(s: Session): string | null {
   if (q === null) return null;
   if (q.status === "pending") return SAY.checking;
   if (q.status === "expired") return SAY.noReply;
-  if (q.status === "unreachable") return SAY.unreachable;
+  if (q.status === "unreachable") return SAY.unreachable(q.retryReason);
   if (q.status === "answered" && q.retryReason !== null) return SAY.notFound;
   return null;
 }
 
-/** 受け箱（事務所の PC の共有フォルダ）に置けなかったときの札（§4・§9-4）。見えない・書けないを分ける。 */
-function unreachableBadge(reason: string | null): string {
-  if (reason === "boxMissing") return "事務所の PC に届きません（共有フォルダが見えません）";
-  return "事務所の PC に届きません（書き込めません）";
+/** 受け箱（事務所の PC の共有フォルダ）に置けなかった理由（§4・§9-4）。見えない・書けないを分ける。 */
+function unreachableReason(reason: string | null): string {
+  return reason === "boxMissing" ? "共有フォルダが見えません" : "書き込めません";
 }
+
+/** 依頼の置けなかった理由（office.lastError の種類名から）。 */
+const sendFailReason = (lastError: string) => (lastError.includes("BoxMissingError") ? "boxMissing" : "writeFailed");
 
 function customerBadge(s: Session | null, label: string | null): string | null {
   if (s === null || !s.customerRequired) return null;
@@ -114,7 +117,7 @@ function officeBadge(s: Session | null): string | null {
       return s.customerRequired ? "事務所に送ります" : null;
     case "sending":
       if (!s.office?.lastError) return "事務所に送っています";
-      return `${unreachableBadge(s.office.lastError.includes("BoxMissingError") ? "boxMissing" : "writeFailed")}。つながったら送ります`;
+      return "事務所に届きません・つながったら送ります";
     case "sent":
       return "事務所に届きました。入れています";
     case "entered":
@@ -155,7 +158,7 @@ function sayOf(s: Session | null): string {
     case "done":
       return s.customerRequired ? SAY.submit : SAY.done(s.invoice?.lines.length ?? 0);
     case "sending":
-      return s.office?.lastError ? SAY.sendFailed : SAY.sending;
+      return s.office?.lastError ? SAY.sendFailed(sendFailReason(s.office.lastError)) : SAY.sending;
     case "sent":
       return SAY.sent;
     case "entered":
