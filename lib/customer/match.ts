@@ -108,8 +108,14 @@ function nameBefore(text: string, honorificAt: number): Span | null {
   let i = at - 1;
   for (;;) {
     if (i - 1 >= 0 && !stop(i - 1)) i--;
-    else if (/[\s・]/.test(text[i - 1] ?? "") && i - 2 >= 0 && !stop(i - 2)) i -= 2;
-    else break;
+    else {
+      // 名前の間のつなぎ: 空白の連続（半角・全角まじり可）か「・」1 字。その前が名前の字なら続ける
+      let g = i;
+      if (text[g - 1] === "・") g--;
+      else while (g > 0 && /\s/.test(text[g - 1])) g--;
+      if (g < i && g - 1 >= 0 && !stop(g - 1)) i = g - 1;
+      else break;
+    }
   }
   return { start: i, end: honorificAt };
 }

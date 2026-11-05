@@ -284,3 +284,11 @@ test("Codex 2 回目 2: 読点で区切ったナンバーも拾って伏せ、pl
   assert.deepEqual(maskCustomerInfo(["組替1650円、脱着4本。"]), ["組替1650円、脱着4本。"]);
   assert.ok(maskCustomerInfo(["田中、1234、1650円"])[0].includes(MASK_PLATE));
 });
+
+test("Codex 3 回目: 姓と名の間の空白が 2 個以上（半角・全角まじり）でも姓まで伏せる", () => {
+  for (const t of ["山田  太郎さんのオイル交換です。", "山田　　太郎 様", "山田 　太郎さん", "マイケル・ジョーダンさん"]) {
+    const [out] = maskCustomerInfo([t]);
+    assert.ok(!/山田|太郎|マイケル|ジョーダン/.test(out), `${t} → ${out}`);
+  }
+  assert.equal(maskCustomerInfo(["山田  太郎さんのオイル交換です。"])[0], `${MASK_NAME}さんのオイル交換です。`);
+});
