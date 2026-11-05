@@ -213,7 +213,8 @@ class LegacyValueTest(unittest.TestCase):
     def test_ValuePattern_が無い部品は_legacy_から読む(self):
         e = self.win.element_of(_Control(legacy_value="3300"))
         self.assertEqual((e.value, e.value_source), ("3300", "legacy"))
-        self.assertEqual(e.to_dict()["value"], "3300")
+        self.assertEqual(e.to_dict()["value"], "***")  # 値は記録に残さない
+        self.assertEqual(e.to_dict()["value_len"], 4)
         self.assertEqual(e.to_dict()["value_source"], "legacy")
 
     def test_ValuePattern_の値が取れないときも_legacy_から読む(self):
@@ -313,7 +314,7 @@ class NameValueTest(unittest.TestCase):
 
     def test_Name_に出る値は文字数だけ残す(self):
         e = self.win.element_of(self._ctl("TextEdit", "山田太郎"), self.NV)
-        self.assertEqual((e.name, e.value, e.value_source, e.masked), ("", "山田太郎", "name", True))
+        self.assertEqual((e.name, e.value, e.value_source), ("", "山田太郎", "name"))
         d = e.to_dict()
         self.assertEqual((d["name"], d["value"], d["value_len"]), ("", "***", 4))
         self.assertNotIn("山田", str(d))
@@ -325,7 +326,7 @@ class NameValueTest(unittest.TestCase):
 
     def test_対象でないクラスは_Name_をそのまま残す(self):
         e = self.win.element_of(self._ctl("Button", "保存"), self.NV)
-        self.assertEqual((e.name, e.masked), ("保存", False))
+        self.assertEqual((e.name, e.value_source), ("保存", None))
 
     def test_既定の設定で_TextEdit_と_NumEdit_を伏せる(self):
         from recorder.config import Config
@@ -697,6 +698,128 @@ class MultiProcessTest(unittest.TestCase):
         self.win.grab_front = lambda *a: self.fail("撮ってはいけない")
         w = Window(handle=300, title="x", class_name="X", rect=(0, 0, 1, 1), pid=OTHER)
         self.assertFalse(self.reader.screenshot(w, Path("x.jpg")))
+
+
+class PidReuseTest(unittest.TestCase):
+    """pid は使い回される。対象かどうかは覚えずに、押した瞬間と部品を読むときに調べる。"""
+
+    SCREEN = 43
+
+    def setUp(self):
+        from recorder.config import Config
+
+        self.win = _import_win(self)
+        self.reader = self.win.Reader(Config(target_exe=["RS_MENU.exe", "M_NOU.exe"]))
+        self.reader.proc = _TargetProcess(PID, name="RS_MENU.exe")
+        self.names = {self.SCREEN: "M_NOU.exe"}
+        names = self.names
+
+        class _P:
+            def __init__(self, pid):
+                if pid not in names:
+                    raise ProcessLookupError(pid)
+                self.pid = pid
+
+            def name(self):
+                return names[self.pid]
+
+        sys.modules["psutil"].Process = _P
+        self.auto = sys.modules["uiautomation"]
+        self.auto.GetForegroundControl = lambda: None
+        self.auto.GetFocusedControl = lambda: None
+        self.win.foreground_window = lambda: 100
+
+    def test_押した後に_pid_が他のアプリに使い回されたクリックは捨てる(self):
+        btn = _Control(control_type="ButtonControl")
+        btn.ProcessId = self.SCREEN
+        self.auto.ControlFromPoint = lambda x, y: btn
+        self.win.pid_at = lambda x, y: self.SCREEN
+        self.reader._on_click(5, 6, "Button.left", True)
+        self.names[self.SCREEN] = "chrome.exe"  # M_NOU が閉じ、同じ pid で他のアプリが起動した
+        self.assertEqual(self.reader.snapshot().clicks, [])
+
+    def test_他のアプリで押したキーは後で_pid_が対象になっても残さない(self):
+        self.names[self.SCREEN] = "chrome.exe"
+        self.win.pid_of_window = lambda hwnd: self.SCREEN
+        for k in (_KeyCode("a", 0x41), _SpecialKey("enter")):
+            self.reader._on_press(k)
+        self.names[self.SCREEN] = "M_NOU.exe"
+        self.assertEqual(self.reader.snapshot().keys, [])
+        self.assertEqual(self.reader.chars, 0)
+
+    def test_対象の名前は覚えない(self):
+        self.win.pid_of_window = lambda hwnd: self.SCREEN
+        self.reader._on_press(_SpecialKey("tab"))
+        self.names[self.SCREEN] = "chrome.exe"
+        self.reader._on_press(_SpecialKey("enter"))
+        self.assertEqual([k.key for k in self.reader.snapshot().keys], ["tab"])
+
+    def test_区切りのプロセスが終わったら同じ_pid_でも対象にしない(self):
+        self.reader.proc.is_running = lambda: False
+        self.assertEqual(self.reader._target_name(PID), "")
+
+
+class GrabMovedTest(unittest.TestCase):
+    def setUp(self):
+        self.win = _import_win(self)
+        self.win.foreground_window = lambda: 100
+        self.win.pid_of_window = lambda hwnd: PID
+        sys.modules["PIL.ImageGrab"].grab = lambda bbox=None, all_screens=False: _Image()
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.path = Path(d.name) / "x.jpg"
+
+    def test_撮っている間に窓が動いたら保存しない(self):
+        rects = iter([(0, 0, 800, 600), (0, 0, 400, 300)])
+        self.win.window_rect = lambda hwnd: next(rects)
+        self.assertFalse(self.win.grab_front(100, PID, self.path, 70))
+        self.assertFalse(self.path.exists())
+
+    def test_窓が動かなければ保存する(self):
+        self.win.window_rect = lambda hwnd: (0, 0, 800, 600)
+        self.assertTrue(self.win.grab_front(100, PID, self.path, 70))
+
+
+class ListAndDumpMaskTest(unittest.TestCase):
+    def setUp(self):
+        from recorder.config import Config
+
+        self.win = _import_win(self)
+        self.cfg = Config(target_exe=["RacroS.exe"])
+
+    def test_list_は窓の題名を出さない(self):
+        windows = [_Window(PID, "山田太郎 様 - メール"), _Window(OTHER, "山田太郎の見積")]
+
+        class _P:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def name(self):
+                return "x.exe"
+
+        sys.modules["psutil"].Process = _P
+        sys.modules["uiautomation"].GetRootControl = lambda: types.SimpleNamespace(GetChildren=lambda: windows)
+        out = self.win.list_targets()
+        self.assertIn("x.exe", out)
+        self.assertNotIn("山田", out)
+
+    def test_dump_は名前と値を伏せる(self):
+        sys.modules["psutil"].process_iter = lambda attrs=None: [_TargetProcess(PID)]
+        w = _Window(PID, "[ 山田太郎 ] - [ 車検証 ] - RacroSⅢ", handle=100)
+        w.ControlTypeName, w.AutomationId, w.IsPassword = "WindowControl", "", False
+        w.GetPattern = lambda pid: None
+        label = _Control(control_type="TextControl", value="山田花子")
+        label.Name = "山田太郎 様"
+        auto = sys.modules["uiautomation"]
+        auto.GetRootControl = lambda: types.SimpleNamespace(GetChildren=lambda: [w])
+        auto.WalkControl = lambda w, includeTop=True, maxDepth=25: iter([(w, 0), (label, 1)])
+        self.win.foreground_window = lambda: None
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        text = self.win.dump_tree(self.cfg, Path(d.name)).read_text(encoding="utf-8")
+        self.assertNotIn("山田", text)
+        self.assertIn("[ 車検証 ] - RacroSⅢ", text)
+        self.assertIn("value=***(4 文字)", text)
 
 
 if __name__ == "__main__":

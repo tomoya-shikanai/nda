@@ -17,7 +17,7 @@ from PIL import ImageGrab
 from pynput import keyboard, mouse
 
 from .config import Config
-from .core import Click, Element, Key, Snapshot, Window, mask_title
+from .core import Click, Element, Key, Snapshot, Window
 
 
 def set_dpi_aware() -> None:
@@ -122,7 +122,8 @@ def grab_front(hwnd: int, pid: int, path: Path, quality: int) -> bool:
         if rect is None:
             return False
         img = ImageGrab.grab(bbox=rect, all_screens=True)
-        if not is_front(hwnd, pid):
+        # 撮っている間に窓が動いた・縮んだら、前の範囲に他のアプリが写っている
+        if not is_front(hwnd, pid) or window_rect(hwnd) != rect:
             return False
         img.convert("RGB").save(path, "JPEG", quality=quality)
         return True
@@ -178,7 +179,8 @@ def _read_value(c) -> tuple[str | None, str | None, bool]:
 
 def element_of(c, name_value_classes: frozenset[str] = frozenset()) -> Element | None:
     """name_value_classes の部品（RacroS III の TextEdit・NumEdit）は、入力した値が Name に出る。
-    Name を値として扱い（伏せて文字数だけ残す）、Name は空にする。入力のたびに別の部品に見えないようにもなる。"""
+    Name を値として扱い、Name は空にする。入力のたびに別の部品に見えないようにもなる。
+    値はどの部品でも記録には残さない（Element.to_dict で *** と文字数にする）。"""
     if c is None:
         return None
     try:
@@ -200,7 +202,6 @@ def element_of(c, name_value_classes: frozenset[str] = frozenset()) -> Element |
                 value=name,
                 value_source="name",
                 is_password=is_password,
-                masked=True,
                 rect=_rect(c.BoundingRectangle),
             )
         return Element(
@@ -306,8 +307,8 @@ class Reader:
         self.cfg = cfg
         self.uia_timeout_set = shorten_uia_timeouts(cfg.uia_timeout_ms) if cfg.uia_timeout_ms > 0 else False
         self.name_value_classes = frozenset(cfg.name_value_classes)
-        self.clicks: queue.Queue[tuple[int, int, str, float, int | None]] = queue.Queue()
-        self.keys: queue.Queue[tuple[str, float, int | None]] = queue.Queue()
+        self.clicks: queue.Queue[tuple[int, int, str, float, int | None, str]] = queue.Queue()
+        self.keys: queue.Queue[tuple[str, float, str]] = queue.Queue()
         self.mods = {"ctrl": False, "alt": False, "shift": False}
         self.chars = 0  # 対象のソフトで、前の特別なキーの後に打った文字の数
         self.listener = mouse.Listener(on_click=self._on_click)
@@ -319,14 +320,14 @@ class Reader:
         # 窓・クリックは「対象の実行ファイル名のどのプロセスか」で判定する（_is_target_pid）。
         self.proc: psutil.Process | None = None
         self.proc_path = ""
-        self.pid_names: dict[int, str] = {}  # pid → 実行ファイル名（対象でなければ ""）。2 秒ごとに作り直す
-        self.last_scan = 0.0
 
     def _on_click(self, x, y, button, pressed) -> None:
         # pynput の別スレッドで呼ばれる。ここでは UIA を触らない。
-        # 座標と、クリックの瞬間にその座標にあった窓のプロセス（Win32 API で取る）を積む。
+        # 座標と、クリックの瞬間にその座標にあった窓のプロセス（Win32 API で取る）と、その実行ファイル名を積む。
+        # 名前は後で調べると、プロセスが終わって pid が他のアプリに使い回されていることがあるので、その場で調べる
         if pressed:
-            self.clicks.put((int(x), int(y), str(button).replace("Button.", ""), time.time(), pid_at(x, y)))
+            pid = pid_at(x, y)
+            self.clicks.put((int(x), int(y), str(button).replace("Button.", ""), time.time(), pid, self._target_name(pid)))
 
     def _set_mod(self, key, on: bool) -> None:
         name = getattr(key, "name", None) or ""
@@ -335,12 +336,14 @@ class Reader:
                 self.mods[m] = on
 
     def _on_press(self, key) -> None:
-        # pynput の別スレッド。前面の窓のプロセスを Win32 API で取り、名前の判定は snapshot で行う。
+        # pynput の別スレッド。押した瞬間に前面の窓のプロセスが対象かを確かめ、他のアプリのキーは積まない
         try:
             self._set_mod(key, True)
             kind = key_kind(key, self.mods["ctrl"], self.mods["alt"], self.mods["shift"])
             if kind is not None:
-                self.keys.put((kind, time.time(), pid_of_window(foreground_window())))
+                exe = self._target_name(pid_of_window(foreground_window()))
+                if exe:
+                    self.keys.put((kind, time.time(), exe))
         except Exception:
             pass
 
@@ -362,22 +365,18 @@ class Reader:
         return self.proc
 
     def _target_name(self, pid: int | None) -> str:
-        """pid が対象の実行ファイル名のプロセスなら、その名前を返す。違う・分からなければ ""。"""
-        if pid is None:
+        """pid が対象の実行ファイル名のプロセスなら、その名前を返す。違う・分からなければ ""。
+        pid は使い回されるので、結果を覚えずに毎回調べる（pynput のスレッドからも呼ぶ）。"""
+        if not pid:
             return ""
-        if self.proc is not None and pid == self.proc.pid:
-            return self.proc.name()
-        now = time.time()
-        if now - self.last_scan >= 2.0:  # pid の使い回しに備えて、覚えた結果は 2 秒で捨てる
-            self.last_scan = now
-            self.pid_names = {}
-        if pid not in self.pid_names:
-            try:
-                name = psutil.Process(pid).name()
-            except Exception:  # 読めないプロセスは対象にしない
-                name = ""
-            self.pid_names[pid] = name if is_target(name, self.cfg) else ""
-        return self.pid_names[pid]
+        try:
+            proc = self.proc
+            if proc is not None and pid == proc.pid and proc.is_running():  # is_running は起動時刻まで比べる
+                return proc.name()
+            name = psutil.Process(pid).name()
+        except Exception:  # 読めないプロセスは対象にしない
+            return ""
+        return name if is_target(name, self.cfg) else ""
 
     def snapshot(self) -> Snapshot:
         """読み取りは段階（窓・欄・クリック 1 つずつ）に分け、失敗した段階だけを捨てて s.errors に残す。
@@ -424,23 +423,19 @@ class Reader:
             except Exception as ex:
                 fail("focus", ex)
 
-        for x, y, button, at, click_pid in clicks_raw:
+        for x, y, button, at, click_pid, exe in clicks_raw:
             # クリックの瞬間に対象のソフトの窓でなければ捨てる（分からなければ捨てる）
-            exe = self._target_name(click_pid)
             if not exe:
                 continue
             try:
                 c = auto.ControlFromPoint(x, y)
-                # 対象のソフトの上のクリックだけを残す（クリックの瞬間と同じプロセスの部品）
-                if c is not None and c.ProcessId == click_pid:
+                # 対象のソフトの上のクリックだけを残す（クリックの瞬間と同じプロセスで、今も対象の名前の部品）
+                if c is not None and c.ProcessId == click_pid and self._target_name(click_pid):
                     s.clicks.append(Click(x=x, y=y, button=button, element=element_of(c, self.name_value_classes), at=at, exe=exe))
             except Exception as ex:
                 fail("click", ex)
 
-        for kind, at, key_pid in keys_raw:
-            exe = self._target_name(key_pid)
-            if not exe:  # 他のアプリで打ったキーは数えもしない
-                continue
+        for kind, at, exe in keys_raw:  # 他のアプリで打ったキーは積んでいない（数えもしない）
             if kind == "":
                 self.chars += 1
                 continue
@@ -496,18 +491,14 @@ def dump_tree(cfg: Config, out: Path, max_depth: int = 25) -> Path | None:
                 if e is None:
                     continue
                 have = [n for n, pid in patterns if _has(c, pid)]
-                if e.value is None:
-                    v = ""
-                elif e.is_password:
-                    v = " value=***"
-                elif e.masked:
-                    v = f" value=***({len(e.value)} 文字)"
-                else:
-                    v = " value=" + repr(e.value[:80])
-                if e.value is not None and e.value_source == "legacy":
-                    v += " (legacy)"
+                d = e.to_dict()  # 名前・値は記録と同じく伏せる
+                v = ""
+                if "value" in d:
+                    v = " value=***" + (f"({d['value_len']} 文字)" if "value_len" in d else "")
+                    v += f" ({d['value_source']})" if "value_source" in d else ""
+                n = d["name"][:80] + (f"({d['name_len']} 文字)" if "name_len" in d else "")
                 f.write(
-                    f"{'  ' * depth}{e.control_type} class={e.class_name!r} name={e.to_dict()['name'][:80]!r} "
+                    f"{'  ' * depth}{e.control_type} class={e.class_name!r} name={n!r} "
                     f"id={e.automation_id!r} rect={e.rect} patterns={have}{v}\n"
                 )
             try:
@@ -529,12 +520,13 @@ def _has(c, pid) -> bool:
 
 
 def list_targets() -> str:
-    """対象の実行ファイル名を確かめるため、窓を持つプロセスを一覧にする。"""
+    """対象の実行ファイル名を確かめるため、窓を持つプロセスを一覧にする。
+    窓の題名は出さない（他のアプリの題名に客の名前やメールの件名などが入り得る）。"""
     lines = []
     for w in auto.GetRootControl().GetChildren():
         try:
             p = psutil.Process(w.ProcessId)
-            lines.append(f"{p.name():30} pid={p.pid:<6} class={w.ClassName!r:40} title={mask_title(w.Name or '')!r}")
+            lines.append(f"{p.name():30} pid={p.pid:<6} class={w.ClassName!r}")
         except Exception:
             continue
     return "\n".join(sorted(set(lines)))

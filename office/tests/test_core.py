@@ -53,9 +53,10 @@ class TrackerTest(unittest.TestCase):
         t.observe(Snapshot(target_pid=10, window=W1, focus=Element(**{**NAME.__dict__, "value": "タイヤ組替"})))
         ev = t.observe(Snapshot(target_pid=10, window=W1, focus=PRICE))
         self.assertEqual(kinds(ev), ["value_changed", "focus"])
-        self.assertEqual(ev[0].data["before"], "")
-        self.assertEqual(ev[0].data["after"], "タイヤ組替")
-        self.assertEqual(ev[0].data["element"]["automation_id"], "edtItem")
+        d = ev[0].data
+        self.assertEqual((d["before"], d["after"], d["before_len"], d["after_len"]), (MASK, MASK, 0, 5))
+        self.assertEqual(d["element"]["automation_id"], "edtItem")
+        self.assertNotIn("タイヤ", json.dumps([e.data for e in ev], ensure_ascii=False))
 
     def test_値が変わっていなければ残さない(self):
         t = Tracker()
@@ -107,18 +108,18 @@ class TrackerTest(unittest.TestCase):
         t.observe(Snapshot(target_pid=10, focus=NAME))
         t.observe(Snapshot(target_pid=10, focus=Element(**{**NAME.__dict__, "value": "タイヤ組替"})))
         ev = t.observe(Snapshot(target_pid=10, focus=PRICE))
-        self.assertEqual(ev[0].data["after"], "タイヤ組替")
+        self.assertEqual(ev[0].data["after_len"], 5)  # 文字数は残る
 
-    def test_長い値は切り詰める(self):
-        e = Element(name="備考", value="あ" * 1000)
-        self.assertEqual(len(e.to_dict()["value"]), 500)
+    def test_長い名前は切り詰める(self):
+        e = Element(name="あ" * 1000, control_type="ButtonControl")
+        self.assertEqual(len(e.to_dict()["name"]), 500)
 
 
 class RecorderFixTest(unittest.TestCase):
     """#48: 伏せる値・キー・ツールバー・exe・段階ごとの失敗。"""
 
     def _masked(self, v):
-        return Element(control_type="PaneControl", class_name="TextEdit", value=v, value_source="name", masked=True)
+        return Element(control_type="PaneControl", class_name="TextEdit", value=v, value_source="name")
 
     def test_伏せる欄の値の変化は文字数だけ残す(self):
         t = Tracker()
@@ -164,8 +165,8 @@ class RecorderFixTest(unittest.TestCase):
     def test_初めて入った欄では撮る(self):
         t = Tracker()
         w = Window(handle=1, title="x", class_name="F", rect=(100, 0, 1636, 1075), exe="M_NOU.exe")
-        a = Element(control_type="EditControl", class_name="NumEdit", rect=(153, 566, 225, 590), masked=True, value="1")
-        b = Element(name="b", control_type="EditControl", class_name="TextEdit", rect=(237, 566, 748, 590), masked=True, value="")
+        a = Element(control_type="EditControl", class_name="NumEdit", rect=(153, 566, 225, 590), value="1")
+        b = Element(name="b", control_type="EditControl", class_name="TextEdit", rect=(237, 566, 748, 590), value="")
         (e1,) = [e for e in t.observe(Snapshot(target_pid=10, window=w, focus=a)) if e.kind == "focus"]
         self.assertEqual((e1.screenshot, e1.field_key), ("field", ("m_nou.exe", "NumEdit", 53, 566, 72, 24)))
         (e2,) = [e for e in t.observe(Snapshot(target_pid=10, window=w, focus=b)) if e.kind == "focus"]
@@ -186,6 +187,37 @@ class RecorderFixTest(unittest.TestCase):
         bar = Element(name="[ 山田　太郎 ] - [ 車検証 ] - RacroSⅢ", control_type="TitleBarControl")
         self.assertEqual(form.to_dict()["name"], "*** - [ 車検証 ] - RacroSⅢ")
         self.assertEqual(bar.to_dict()["name"], "*** - [ 車検証 ] - RacroSⅢ")
+
+    def test_どの部品の値も文字数だけ残す(self):
+        # name_value_classes 以外の欄（ThunderRT6TextBox・ComboBox など）の ValuePattern の値も残さない
+        for e in (
+            Element(name="", control_type="EditControl", class_name="ThunderRT6TextBox", value="山田太郎", value_source="value"),
+            Element(name="", control_type="ComboBoxControl", class_name="ThunderRT6ComboBox", value="山田太郎", value_source="legacy"),
+        ):
+            d = e.to_dict()
+            self.assertEqual((d["value"], d["value_len"]), (MASK, 4))
+            self.assertNotIn("山田", json.dumps(d, ensure_ascii=False))
+        e = Element(control_type="EditControl", value="")
+        self.assertEqual(e.to_dict()["value_len"], 0)
+
+    def test_ボタンなど以外の部品の名前は文字数だけ残す(self):
+        # 一覧の行の客の名前・ダイアログの文面・欄の値が名前に出る部品
+        for ct in ("ListItemControl", "TextControl", "DataItemControl", "EditControl", "PaneControl", "CustomControl", ""):
+            d = Element(name="山田太郎 様の車検の予約を消しますか", control_type=ct).to_dict()
+            self.assertEqual((d["name"], d["name_len"]), (MASK, 18), ct)
+            self.assertNotIn("山田", json.dumps(d, ensure_ascii=False), ct)
+        for ct in ("ButtonControl", "MenuItemControl", "TabItemControl", "CheckBoxControl"):
+            d = Element(name="保存", control_type=ct).to_dict()
+            self.assertEqual(d["name"], "保存", ct)
+            self.assertNotIn("name_len", d, ct)
+        self.assertNotIn("name_len", Element(name="", control_type="PaneControl").to_dict())
+
+    def test_ダイアログの文面をクリックしても文面は残さない(self):
+        t = Tracker()
+        t.observe(Snapshot(target_pid=10))
+        text = Element(name="山田太郎 のデータを削除しますか", control_type="TextControl", class_name="Static")
+        (e,) = t.observe(Snapshot(target_pid=10, clicks=[Click(1, 2, "left", text, 0, exe="M_CAR.exe")]))
+        self.assertNotIn("山田", json.dumps(e.data, ensure_ascii=False))
 
     def test_キーは種類と文字の数だけ残す(self):
         t = Tracker()

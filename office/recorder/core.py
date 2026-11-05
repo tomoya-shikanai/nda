@@ -3,7 +3,7 @@
 画面の様子（Snapshot）を受け取り、前回と比べて「何が起きたか」（イベント）を返す。
 記録するのは対象のソフト（RacroS III）の操作だけ。他のアプリの操作は記録しない。
 キー入力の文字そのものは記録しない。Tab・Enter・F キーなどの種類と、その前に打った文字の数だけを残す。
-欄の値は、欄から離れたときの変化として残す（パスワード欄は伏せる。値が Name に出る部品は文字数だけ）。
+欄の値は、欄から離れたときの変化として残す（値は *** と文字数だけ。パスワード欄は文字数も残さない）。
 """
 
 from __future__ import annotations
@@ -32,8 +32,6 @@ class Element:
     is_password: bool = False
     value_source: str | None = None  # "value"（ValuePattern）か "legacy"（LegacyIAccessiblePattern）か "name"
     rect: tuple[int, int, int, int] | None = None
-    # 値を記録に残さず、文字数だけを残す（入力した値が Name に出る部品。客の名前などが入る）
-    masked: bool = False
 
     def key(self) -> tuple[str, str, str, str]:
         """同じ部品かどうかの判定に使う（値と位置は含めない）。"""
@@ -41,25 +39,40 @@ class Element:
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
-            # 窓・題名の帯の部品は、名前が窓の題名と同じなので、客の名前を伏せる
-            "name": (mask_title(self.name) if self.control_type in TITLE_CONTROL_TYPES else self.name)[:MAX_VALUE],
+            **record_name(self.control_type, self.name),
             "automation_id": self.automation_id,
             "control_type": self.control_type,
             "class_name": self.class_name,
         }
         if self.value is not None:
-            if self.is_password:
-                d["value"] = MASK
-            elif self.masked:
-                d["value"] = MASK
+            # 欄の値は客の名前などが入り得るので、どの部品でも残さない。パスワード欄は文字数も残さない
+            d["value"] = MASK
+            if not self.is_password:
                 d["value_len"] = len(self.value)
-            else:
-                d["value"] = self.value[:MAX_VALUE]
             if self.value_source is not None:
                 d["value_source"] = self.value_source
         if self.rect is not None:
             d["rect"] = list(self.rect)
         return d
+
+
+# 名前が画面の決まった文字（ボタンの名前・メニュー・タブなど）の部品。これ以外の部品の名前は、
+# 一覧の行の客の名前・ダイアログの文面・欄の値などが入り得るので、*** と文字数だけを残す
+NAME_CONTROL_TYPES = {
+    "ButtonControl", "SplitButtonControl", "MenuBarControl", "MenuControl", "MenuItemControl", "TabControl",
+    "TabItemControl", "CheckBoxControl", "RadioButtonControl", "ToolBarControl", "HeaderControl", "HeaderItemControl",
+    "ScrollBarControl", "GroupControl",
+}
+
+
+def record_name(control_type: str, name: str) -> dict[str, Any]:
+    """部品の名前を記録に残す形にする（{"name": ...} と、伏せたら {"name_len": ...}）。"""
+    if control_type in TITLE_CONTROL_TYPES:
+        # 窓・題名の帯の部品は、名前が窓の題名と同じなので、客の名前を伏せる
+        return {"name": mask_title(name)[:MAX_VALUE]}
+    if control_type in NAME_CONTROL_TYPES or not name:
+        return {"name": name[:MAX_VALUE]}
+    return {"name": MASK, "name_len": len(name)}
 
 
 @dataclass(frozen=True)
@@ -279,13 +292,9 @@ class Tracker:
         hide = self.focus_protected or f.is_password
         if hide:
             f = replace(f, is_password=True)
-        d: dict[str, Any] = {"element": f.to_dict()}
-        if hide:
-            d["before"] = d["after"] = MASK
-        elif f.masked:
-            d.update(before=MASK, after=MASK, before_len=len(before or ""), after_len=len(f.value))
-        else:
-            d.update(before=(before or "")[:MAX_VALUE], after=f.value[:MAX_VALUE])
+        d: dict[str, Any] = {"element": f.to_dict(), "before": MASK, "after": MASK}
+        if not hide:
+            d.update(before_len=len(before or ""), after_len=len(f.value))
         return [Event("value_changed", d)]
 
     def flush(self) -> list[Event]:
