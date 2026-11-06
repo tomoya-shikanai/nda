@@ -157,6 +157,8 @@ class BuildPlanTest(unittest.TestCase):
         # 金額が 1 円単位にならない作業の行は手順を作らない
         with self.assertRaisesRegex(PlanError, "1 円単位"):
             build_plan(_job(qty=1.5, unitPrice=101), ITEMS, cols)
+        # 部品の行は数量と単価を別々に打つので、1 円単位にならなくても手順を作る（Codex の指摘）
+        self.assertIn({"field": "明細1.単価", "action": "type", "value": "101"}, build_plan(_job(qty=1.5, unitPrice=101), ITEMS, COLUMNS))
 
     def test_bad_labor_columns_fail(self):
         base = copy.deepcopy(COLUMNS)

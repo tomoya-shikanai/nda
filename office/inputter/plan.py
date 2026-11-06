@@ -161,9 +161,9 @@ def _line_values(i: int, line: object, items: dict[str, int]) -> dict:
     if item not in items:
         raise PlanError(f"{where}: 品目の表に無い。項目CD を推測しないので手順を作らない")
     tenths = qty_tenths(qty) * int(price)
-    if tenths % 10:
-        raise PlanError(f"{where}: 数量 × 単価 が 1 円単位にならない")
-    return {"code": items[item], "name": item, "qty": qty, "unit_price": int(price), "amount": tenths // 10}
+    # 金額は作業の行の技術料に打つときだけ使う。1 円単位にならなければ None（作業の行なら build_plan で止める）
+    amount = tenths // 10 if tenths % 10 == 0 else None
+    return {"code": items[item], "name": item, "qty": qty, "unit_price": int(price), "amount": amount}
 
 
 def expected_lines(job: object, items: dict[str, int]) -> list[dict]:
@@ -190,7 +190,10 @@ def build_plan(job: object, items_data: object, columns_data: object | None = No
     labor_codes = set(cfg.get("labor_codes", []))
     for n, v in enumerate(expected_lines(job, items), start=1):
         free = v["code"] == FREE_ENTRY_CODE
-        cols = cfg["labor_columns"] if v["code"] in labor_codes else cfg["columns"]
+        labor = v["code"] in labor_codes
+        if labor and v["amount"] is None:
+            raise PlanError(f"明細 {n}（{v['name']}）: 数量 × 単価 が 1 円単位にならないので、技術料に打てない")
+        cols = cfg["labor_columns"] if labor else cfg["columns"]
         for col in cols:
             field = f"明細{n}.{col['field']}"
             src = col["source"]
