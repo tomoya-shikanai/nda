@@ -15,8 +15,10 @@ from . import guard
 
 COLUMNS_PATH = Path(__file__).with_name("columns.json")
 # 列に入れるもの。none はその欄に何も打たず、次の欄へ進むだけ
-SOURCES = ("code", "name", "qty", "unit_price", "none")
+SOURCES = ("code", "name", "qty", "unit_price", "amount", "none")
 REQUIRED_SOURCES = ("code", "name", "qty", "unit_price")
+# 作業の行（labor_codes の項目CD）は、担当の後に点数・技術料へ進む。技術料に 数量 × 単価 の金額を直に打つ（2026-11-06 に店で決めた）
+LABOR_REQUIRED_SOURCES = ("code", "name", "amount")
 FREE_ENTRY_CODE = 0
 
 
@@ -57,12 +59,9 @@ def load_items(data: object) -> dict[str, int]:
     return items
 
 
-def load_columns(data: object) -> dict:
-    if not isinstance(data, dict):
-        raise PlanError("欄の設定が dict でない")
-    cols = data.get("columns")
+def _check_cols(cols: object, what: str, required: tuple[str, ...], banned: tuple[str, ...]) -> None:
     if not isinstance(cols, list) or not cols:
-        raise PlanError("欄の設定に columns が無い")
+        raise PlanError(f"欄の設定に {what} が無い")
     seen_fields, seen_sources = set(), []
     for c in cols:
         if not isinstance(c, dict) or not isinstance(c.get("field"), str) or not c["field"]:
@@ -73,10 +72,27 @@ def load_columns(data: object) -> dict:
             raise PlanError(f"欄 {c['field']} が 2 回ある")
         seen_fields.add(c["field"])
         seen_sources.append(c["source"])
-    for s in REQUIRED_SOURCES:
-        # 数量・単価の欄が設定から抜けると、黙って入れずに済ませてしまうので止める
+    for s in required:
+        # 数量・単価（作業の行は金額）の欄が設定から抜けると、黙って入れずに済ませてしまうので止める
         if seen_sources.count(s) != 1:
-            raise PlanError(f"欄の設定に source {s} の欄がちょうど 1 つ無い")
+            raise PlanError(f"欄の設定の {what} に source {s} の欄がちょうど 1 つ無い")
+    for s in banned:
+        if s in seen_sources:
+            raise PlanError(f"欄の設定の {what} に source {s} の欄がある")
+
+
+def load_columns(data: object) -> dict:
+    if not isinstance(data, dict):
+        raise PlanError("欄の設定が dict でない")
+    _check_cols(data.get("columns"), "columns", REQUIRED_SOURCES, ("amount",))
+    labor = data.get("labor_columns")
+    codes = data.get("labor_codes", [])
+    if labor is not None:
+        _check_cols(labor, "labor_columns", LABOR_REQUIRED_SOURCES, ("qty", "unit_price"))
+    if not isinstance(codes, list) or not all(_is_int(c) and c > 0 for c in codes) or len(set(codes)) != len(codes):
+        raise PlanError("欄の設定の labor_codes が、正の整数の重ならない list でない")
+    if codes and labor is None:
+        raise PlanError("欄の設定に labor_codes があるのに labor_columns が無い")
     if not isinstance(data.get("advance_key"), str):
         raise PlanError("欄の設定に advance_key（次の欄へ進むキー）が無い")
     if not isinstance(data.get("row_end_keys", []), list):
@@ -144,7 +160,10 @@ def _line_values(i: int, line: object, items: dict[str, int]) -> dict:
         raise PlanError(f"{where}: 単価が 0 以上の整数（円）でない: {price!r}")
     if item not in items:
         raise PlanError(f"{where}: 品目の表に無い。項目CD を推測しないので手順を作らない")
-    return {"code": items[item], "name": item, "qty": qty, "unit_price": int(price)}
+    tenths = qty_tenths(qty) * int(price)
+    if tenths % 10:
+        raise PlanError(f"{where}: 数量 × 単価 が 1 円単位にならない")
+    return {"code": items[item], "name": item, "qty": qty, "unit_price": int(price), "amount": tenths // 10}
 
 
 def expected_lines(job: object, items: dict[str, int]) -> list[dict]:
@@ -168,9 +187,11 @@ def build_plan(job: object, items_data: object, columns_data: object | None = No
     cfg = load_columns(load_json(COLUMNS_PATH) if columns_data is None else columns_data)
     advance = {"action": "key", "value": cfg["advance_key"]}
     steps: list[dict] = []
+    labor_codes = set(cfg.get("labor_codes", []))
     for n, v in enumerate(expected_lines(job, items), start=1):
         free = v["code"] == FREE_ENTRY_CODE
-        for col in cfg["columns"]:
+        cols = cfg["labor_columns"] if v["code"] in labor_codes else cfg["columns"]
+        for col in cols:
             field = f"明細{n}.{col['field']}"
             src = col["source"]
             if src == "code":
@@ -181,6 +202,8 @@ def build_plan(job: object, items_data: object, columns_data: object | None = No
                 text = _qty_text(v["qty"])
             elif src == "unit_price":
                 text = str(v["unit_price"])
+            elif src == "amount":
+                text = str(v["amount"])
             else:
                 text = None
             if text is not None:

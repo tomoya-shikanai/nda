@@ -1,5 +1,5 @@
 {
-  "_status": "未確認。項目CD → 作業内容 → 作業区分 の順だけが業務の記録で分かっている。その先の欄の順（担当・数量・単価に Enter で入るか、使用部品名を飛ばすか）、行の終わりのキー、自由入力の行の項目CD の扱いは、画面の dump で確かめて直す",
+  "_status": "部品の行（columns）と作業の行（labor_columns）の欄の順。2026-11-06 に店で watch（読むだけ）で、作業の行の 担当 → 点数 → 技術料 → 次の行の項目CD を確かめた。部品の行の 担当 → 数量 → 単価 は記録（11/5）から。labor_codes は DB で技術料にだけ入っている項目CD（277 履き替え・278 組替・279 バランス・309 アルミのバランス）。送る前に人が confirmed を true にする",
   "confirmed": false,
   "advance_key": "Enter",
   "columns": [
@@ -9,6 +9,15 @@
     {"field": "担当", "source": "none"},
     {"field": "数量", "source": "qty"},
     {"field": "単価", "source": "unit_price"}
+  ],
+  "labor_codes": [277, 278, 279, 309],
+  "labor_columns": [
+    {"field": "項目CD", "source": "code"},
+    {"field": "作業内容", "source": "name"},
+    {"field": "作業区分", "source": "none"},
+    {"field": "担当", "source": "none"},
+    {"field": "点数", "source": "none"},
+    {"field": "技術料", "source": "amount"}
   ],
   "row_end_keys": []
 }

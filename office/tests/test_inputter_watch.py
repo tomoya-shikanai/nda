@@ -77,6 +77,24 @@ class WatchTest(unittest.TestCase):
             self.w.step()
         self.assertEqual(self.desk.sent, sent_before)
 
+    def test_read_error_is_logged_and_watch_goes_on(self):
+        class Flaky(_ReadOnly):
+            fail = True
+
+            def foreground(self):
+                if Flaky.fail:
+                    Flaky.fail = False
+                    raise OSError("UIA の時間切れのまね")
+                return super().foreground()
+
+        w = watch.Watcher(Flaky(self.desk), self.k, KP_DATA, self.events.append)
+        w.step_safely()
+        self.assertEqual(self.events[-1], {"kind": "read_error", "error": "OSError"})
+        w.step_safely()
+        self.assertEqual(self.events[-1]["kind"], "focus")
+        self.assertEqual(w.counts["読めなかった"], 1)
+        self.assertNotIn("時間切れ", watch.line(self.events[0]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -162,7 +162,7 @@ def _cmd_watch(args) -> int:
             end = time.time() + args.minutes * 60
             try:
                 while time.time() < end:
-                    w.step()
+                    w.step_safely()
                     time.sleep(0.05)
             except KeyboardInterrupt:
                 pass

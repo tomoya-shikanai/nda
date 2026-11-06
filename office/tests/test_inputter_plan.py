@@ -129,10 +129,50 @@ class BuildPlanTest(unittest.TestCase):
         self.assertEqual(
             expected_lines(JOB, ITEMS["items"]),
             [
-                {"code": 101, "name": "架空の作業A", "qty": 4, "unit_price": 1000},
-                {"code": 0, "name": "架空の処分", "qty": 2, "unit_price": 300},
+                {"code": 101, "name": "架空の作業A", "qty": 4, "unit_price": 1000, "amount": 4000},
+                {"code": 0, "name": "架空の処分", "qty": 2, "unit_price": 300, "amount": 600},
             ],
         )
+
+    def test_labor_line_types_amount_into_gijutsuryo(self):
+        cols = copy.deepcopy(COLUMNS)
+        cols["labor_codes"] = [101]
+        cols["labor_columns"] = [
+            {"field": "項目CD", "source": "code"},
+            {"field": "作業内容", "source": "name"},
+            {"field": "点数", "source": "none"},
+            {"field": "技術料", "source": "amount"},
+        ]
+        row1 = [s for s in build_plan(JOB, ITEMS, cols) if s["field"].startswith("明細1.")]
+        self.assertEqual(row1, [
+            {"field": "明細1.項目CD", "action": "type", "value": "101"},
+            {"field": "明細1.項目CD", **E},
+            {"field": "明細1.作業内容", **E},
+            {"field": "明細1.点数", **E},
+            {"field": "明細1.技術料", "action": "type", "value": "4000"},  # 4 本 × 1000 円
+            {"field": "明細1.技術料", **E},
+        ])
+        # 2 行目（作業でない項目CD）は部品の行の欄のまま
+        self.assertIn({"field": "明細2.単価", "action": "type", "value": "300"}, build_plan(JOB, ITEMS, cols))
+        # 金額が 1 円単位にならない作業の行は手順を作らない
+        with self.assertRaisesRegex(PlanError, "1 円単位"):
+            build_plan(_job(qty=1.5, unitPrice=101), ITEMS, cols)
+
+    def test_bad_labor_columns_fail(self):
+        base = copy.deepcopy(COLUMNS)
+        base["labor_codes"] = [101]
+        base["labor_columns"] = [{"field": "項目CD", "source": "code"}, {"field": "作業内容", "source": "name"},
+                                 {"field": "技術料", "source": "amount"}]
+        bad = []
+        c = copy.deepcopy(base); c["labor_columns"].append({"field": "数量", "source": "qty"}); bad.append(c)
+        c = copy.deepcopy(base); c["labor_columns"] = c["labor_columns"][:2]; bad.append(c)
+        c = copy.deepcopy(base); del c["labor_columns"]; bad.append(c)
+        c = copy.deepcopy(base); c["labor_codes"] = [101, 101]; bad.append(c)
+        c = copy.deepcopy(base); c["labor_codes"] = ["101"]; bad.append(c)
+        c = copy.deepcopy(base); c["columns"].append({"field": "技術料", "source": "amount"}); bad.append(c)
+        for i, cols in enumerate(bad):
+            with self.subTest(i=i), self.assertRaises(PlanError):
+                build_plan(JOB, ITEMS, cols)
 
     def test_shipped_config_and_example_items(self):
         self.assertIs(load_json(COLUMNS_PATH)["confirmed"], False)  # 画面で確かめるまで未確認のまま

@@ -12,7 +12,7 @@ from inputter.send import FocusInfo, Stop, TopWindow, WindowInfo
 
 KEYPATH = load_json(send.KEYPATH_PATH)
 COLUMNS = load_json(COLUMNS_PATH)
-ITEMS = {"items": {"架空の部品A": 101, "架空の部品B": 2345, "架空の自由入力": 0}}
+ITEMS = {"items": {"架空の部品A": 101, "架空の部品B": 2345, "架空の自由入力": 0, "架空の作業L": 277}}
 WIN_LEFT, WIN_TOP = 192, 0
 
 
@@ -22,6 +22,7 @@ def job(*lines):
 
 LINE_A = {"item": "架空の部品A", "qty": 4, "unit": "本", "unitPrice": 7777}
 LINE_B = {"item": "架空の部品B", "qty": Decimal("1.5"), "unit": "L", "unitPrice": 1234}
+LINE_L = {"item": "架空の作業L", "qty": 4, "unit": "本", "unitPrice": 555}  # 277 は columns.json の labor_codes
 
 
 def kp(data=None):
@@ -35,13 +36,14 @@ def groups_for(*lines):
 class FakeDesktop:
     """伝票の画面の偽物。Enter で keypath の順に次の欄へ進み、文字は今の欄の Name に足される。"""
 
-    def __init__(self, k, rows=15):
+    def __init__(self, k, rows=15, kinds=()):
         self.k = k
         self.window = WindowInfo(hwnd=100, pid=7, exe="M_NOU.exe", class_name="ThunderRT6FormDC",
                                  title="[ 架空 ] - [ 整備伝票発行 ] - RacroSⅢ", rect=(WIN_LEFT, WIN_TOP, 1728, 1040))
         self.fields = []  # (row, keypath の欄)
         for r in range(1, rows + 2):
-            for f in k.path:
+            kind = kinds[r - 1] if r <= len(kinds) else "part"
+            for f in (k.labor_path if kind == "labor" else k.path):
                 self.fields.append((r, f))
         self.names = {}
         self.pos = 0  # フォーカスのある欄
@@ -362,6 +364,46 @@ class RunTest(unittest.TestCase):
                 d.fields[d.pos] = (1, labor)
         self.desk.hooks.append(to_labor)
         self.assertStops("明細1.数量 を待ったが来ない", sent_max=7)
+
+    def test_labor_row_types_amount_into_gijutsuryo(self):
+        self.desk = FakeDesktop(self.k, kinds=("labor", "part"))
+        g = groups_for(LINE_L, LINE_A)
+        self.assertEqual([x.target.field for x in g[:6]],
+                         ["明細1.項目CD", "明細1.作業内容", "明細1.作業区分", "明細1.担当", "明細1.点数", "明細1.技術料"])
+        self.assertEqual((g[5].target.x, g[5].text, g[4].text), (1149, "2220", None))
+        log = run(self.desk, g)
+        expected = [("char", c) for c in "277"] + [("key", "Enter")] * 5 + [("char", c) for c in "2220"] + [("key", "Enter")]
+        expected += [("char", c) for c in "101"] + [("key", "Enter")] * 4
+        expected += [("char", c) for c in "4"] + [("key", "Enter")] + [("char", c) for c in "7777"] + [("key", "Enter")]
+        self.assertEqual(self.desk.sent, expected)
+        self.assertNotIn("2220", "\n".join(log))
+
+    def test_labor_row_stops_if_screen_goes_to_qty(self):
+        # 作業の行なのに、担当の Enter の後に数量へ進んだら（マスタが部品の扱いなど）、何も打たずに止める
+        self.desk = FakeDesktop(self.k, kinds=("part",))
+        self.assertStops("明細1.点数 を待ったが来ない", groups=groups_for(LINE_L), sent_max=7)
+
+    def test_zero_shown_in_empty_number_field_is_empty(self):
+        # 数の欄は空でも 0・0.0・0.00 と出る。0 は空と見て打つ。0 でない値が入っていたら止める
+        self.desk = FakeDesktop(self.k, kinds=("labor",))
+        self.desk.format = lambda f, name: ("0.00" if f["field"] == "点数" else "0") if name == "" and f["class"] == "NumEdit" else name
+        run(self.desk, groups_for(LINE_L))
+        self.desk = FakeDesktop(self.k, kinds=("labor",))
+        self.desk.format = lambda f, name: "100" if name == "" and f["field"] == "技術料" else name
+        self.assertStops("空でない", groups=groups_for(LINE_L), sent_max=8)
+
+    def test_labor_steps_must_match_a_whole_path(self):
+        good = build_plan(job(LINE_L), ITEMS, COLUMNS)
+        mixed = copy.deepcopy(good)
+        for st in mixed:  # 作業の行の技術料を、部品の行の単価の欄の名前にすり替える
+            st["field"] = st["field"].replace("技術料", "単価")
+        with self.assertRaisesRegex(send.SendError, "どちらとも合わない"):
+            send.prepare(mixed, kp(), COLUMNS)
+        # keypath の作業の行が未確認なら、作業の行の columns は断る
+        d = copy.deepcopy(KEYPATH)
+        d["rows"]["branch_after_担当"]["labor"]["unknown"] = True
+        with self.assertRaisesRegex(send.SendError, "未確認"):
+            send.prepare(good, kp(d), COLUMNS)
 
     def test_position_tolerance(self):
         g = groups_for(LINE_A)

@@ -118,6 +118,7 @@ class Group:
     target: Target
     text: str | None
     key: str
+    row: int = 1  # 明細の何行目か
 
 
 def mask(text: str | None) -> str:
@@ -144,8 +145,9 @@ class Keypath:
     first_row_y: int
     row_height: int
     visible_rows: int
-    path: tuple[dict, ...]  # 1 行の欄の順（項目CD → … → 単価）
+    path: tuple[dict, ...]  # 部品の行の欄の順（項目CD → … → 数量 → 単価）
     stop_titles: tuple[str, ...]
+    labor_path: tuple[dict, ...] | None = None  # 作業の行の欄の順（項目CD → … → 点数 → 技術料）。未確認なら None
 
 
 def load_keypath(data: object) -> Keypath:
@@ -154,6 +156,8 @@ def load_keypath(data: object) -> Keypath:
     try:
         screen, rows = data["screen"], data["rows"]
         path = list(rows["fields"]) + list(rows["branch_after_担当"]["part"]["fields"])
+        labor = rows["branch_after_担当"]["labor"]
+        labor_path = None if labor.get("unknown") is True else list(rows["fields"]) + list(labor["fields"])
         row_end = rows["row_end"]["steps"]
     except (KeyError, TypeError) as e:
         raise SendError(f"keypath に要る項目が無い: {e}") from None
@@ -166,18 +170,21 @@ def load_keypath(data: object) -> Keypath:
     if row_end != []:
         # 行の終わりに足すキーは今は無い（単価の Enter で次の行へ移る）。足すなら、ここと試験を直してから
         raise SendError("keypath の rows.row_end.steps が空でない。行の終わりのキーは送らない")
-    names = []
-    for f in path:
-        if not isinstance(f, dict) or not isinstance(f.get("field"), str) or not f["field"]:
-            raise SendError(f"keypath の欄に field が無い: {f!r}")
-        if f.get("class") not in ("NumEdit", "TextEdit"):
-            raise SendError(f"keypath の欄 {f['field']} のクラスが NumEdit・TextEdit でない: {f.get('class')!r}")
-        _int(f.get("x"), f"{f['field']}.x")
-        if f.get("width") is not None:
-            _int(f.get("width"), f"{f['field']}.width", 1)
-        names.append(f["field"])
-    if len(set(names)) != len(names):
-        raise SendError("keypath の 1 行の欄に、同じ名前が 2 回ある")
+    for p in (path, labor_path or []):
+        names = []
+        for f in p:
+            if not isinstance(f, dict) or not isinstance(f.get("field"), str) or not f["field"]:
+                raise SendError(f"keypath の欄に field が無い: {f!r}")
+            if f.get("class") not in ("NumEdit", "TextEdit"):
+                raise SendError(f"keypath の欄 {f['field']} のクラスが NumEdit・TextEdit でない: {f.get('class')!r}")
+            _int(f.get("x"), f"{f['field']}.x")
+            if f.get("width") is not None:
+                _int(f.get("width"), f"{f['field']}.width", 1)
+            names.append(f["field"])
+        if len(set(names)) != len(names):
+            raise SendError("keypath の 1 行の欄に、同じ名前が 2 回ある")
+    if labor_path is not None and [f["field"] for f in labor_path] == [f["field"] for f in path]:
+        raise SendError("keypath の作業の行の欄が、部品の行と同じ並び（見分けられない）")
     stop = data.get("stop_on_windows", [])
     if not isinstance(stop, list) or not all(isinstance(s, str) and s for s in stop):
         raise SendError("keypath の stop_on_windows が文字の list でない")
@@ -193,6 +200,7 @@ def load_keypath(data: object) -> Keypath:
         visible_rows=_int(rows.get("visible_rows"), "rows.visible_rows", 1, 100),
         path=tuple(path),
         stop_titles=tuple(stop),
+        labor_path=tuple(labor_path) if labor_path is not None else None,
     )
 
 
@@ -227,13 +235,14 @@ def next_row_target(kp: Keypath, rows: int) -> Target | None:
 # ---- 手順の照らし合わせ（送る前に全体を） ----
 
 _INT_TEXT = re.compile(r"[0-9]+")
+TYPED_SOURCES = ("code", "qty", "unit_price", "amount")  # 数の欄で打つもの
 _QTY_TEXT = re.compile(r"[0-9]+(\.[0-9])?")
 
 
 def _check_text(t: Target, text: str) -> str | None:
     if t.numeric:
         pattern = _QTY_TEXT if t.source == "qty" else _INT_TEXT
-        if t.source not in ("code", "qty", "unit_price"):
+        if t.source not in TYPED_SOURCES:
             return "この欄には打たない（keypath で何も打たずに進む欄）"
         if not pattern.fullmatch(text):
             return "数の欄に、数字（数量は小数点 1 つまで）でない文字を打とうとしている"
@@ -255,6 +264,14 @@ def check_columns(columns: object, kp: Keypath) -> None:
     want = [(f["field"], f.get("source")) for f in kp.path]
     if len(got) != len(cols) or got != want:
         raise SendError("columns.json の欄と入れる元（source）が、keypath の 1 行の欄の順・元と合わない")
+    labor = columns.get("labor_columns")
+    if labor is not None:
+        if kp.labor_path is None:
+            raise SendError("columns.json に作業の行（labor_columns）があるが、keypath の作業の行の道は未確認")
+        got = [(c.get("field"), c.get("source")) for c in labor if isinstance(c, dict)] if isinstance(labor, list) else None
+        want = [(f["field"], f.get("source")) for f in kp.labor_path]
+        if got is None or len(got) != len(labor) or got != want:
+            raise SendError("columns.json の作業の行の欄と入れる元が、keypath の作業の行の順・元と合わない")
     if columns.get("advance_key") != kp.advance_key or columns.get("row_end_keys", []) != []:
         raise SendError("columns.json の advance_key か row_end_keys が keypath と合わない")
 
@@ -275,15 +292,25 @@ def prepare(steps: object, kp: Keypath, columns: object) -> list[Group]:
             groups[-1][1].append(s)
         else:
             groups.append((s["field"], [s]))
-    n_fields = len(kp.path)
-    if len(groups) % n_fields:
-        raise SendError(f"手順の欄の数（{len(groups)}）が、1 行の欄の数（{n_fields}）の倍数でない")
-    rows = len(groups) // n_fields
-    if rows > kp.visible_rows:
-        raise SendError(f"明細が {rows} 行ある。{kp.visible_rows} 行を超える明細の位置は未確認なので送らない")
+    # 行ごとに、欄の並びが部品の行か作業の行のどちらかと全部同じであること。途中で混ざる並びは断る
+    paths = [kp.path] + ([kp.labor_path] if kp.labor_path is not None else [])
+    placed: list[tuple[int, dict]] = []
+    row = 0
+    while len(placed) < len(groups):
+        row += 1
+        if row > kp.visible_rows:
+            raise SendError(f"明細が {kp.visible_rows} 行を超える。超える明細の位置は未確認なので送らない")
+        start = len(placed)
+        for p in paths:
+            names = [f"明細{row}.{f['field']}" for f in p]
+            if [g[0] for g in groups[start:start + len(p)]] == names:
+                placed.extend((row, f) for f in p)
+                break
+        else:
+            raise SendError(f"明細{row} の欄の並びが、keypath の部品の行・作業の行のどちらとも合わない")
     out: list[Group] = []
     for gi, (field, gsteps) in enumerate(groups):
-        t = _target(kp, gi // n_fields + 1, kp.path[gi % n_fields])
+        t = _target(kp, *placed[gi])
         if field != t.field:
             raise SendError(f"手順の欄 {field} が、keypath の順の {t.field} と合わない")
         acts = [s["action"] for s in gsteps]
@@ -297,10 +324,10 @@ def prepare(steps: object, kp: Keypath, columns: object) -> list[Group]:
             problem = _check_text(t, text)
             if problem:
                 raise SendError(f"{field}: {problem}")
-        elif t.numeric and t.source in ("code", "qty", "unit_price"):
+        elif t.numeric and t.source in TYPED_SOURCES:
             # 項目CD が空のまま進む（自由入力の行）・数量や単価を打たずに進むのは、道筋が未確認なので送らない
             raise SendError(f"{field}: keypath では打つ欄なのに、何も打たずに進もうとしている")
-        out.append(Group(target=t, text=text, key=key))
+        out.append(Group(target=t, text=text, key=key, row=placed[gi][0]))
     return out
 
 
@@ -313,7 +340,7 @@ def dry_run_lines(groups: list[Group], kp: Keypath) -> list[str]:
         if g.text is None and t.require_nonempty:
             what += "（Name が空でないことを確かめてから）"
         lines.append(f"{t.field:<14} {t.class_name} ({t.x}, {t.y}) ±{kp.tolerance}{w}  {what}")
-    nxt = next_row_target(kp, len(groups) // len(kp.path))
+    nxt = next_row_target(kp, groups[-1].row) if groups else None
     if nxt is not None:
         lines.append(f"{'（入れ終えた後）':<14} {nxt.class_name} ({nxt.x}, {nxt.y}) にフォーカスが来るのを確かめて止まる")
     return lines
@@ -350,6 +377,13 @@ def readback_matches(t: Target, sent: str, name: str) -> bool:
         except PlanError:
             return False
     return a == b and a == a.to_integral_value()
+
+
+def _empty(t: Target, name: str) -> bool:
+    """打つ前の欄が空か。数の欄は空でも 0・0.0・0.00 と出る（2026-11-06 の watch で、点数・数量が小数つきの 0 の形で出た）。"""
+    if name == "":
+        return True
+    return t.numeric and parse_number(name) == 0
 
 
 def prefix_matches(t: Target, prefix: str, name: str) -> bool:
@@ -564,7 +598,7 @@ class Sender:
             t = g.target
             f = self._wait_focus(t)
             if g.text is not None:
-                if f.name != "":
+                if not _empty(t, f.name):
                     raise Stop(f"{t.field}: 打つ前の欄が空でない（読み返し {mask(f.name)}）")
                 for i, ch in enumerate(g.text):
                     if i:
@@ -577,7 +611,7 @@ class Sender:
             elif t.require_nonempty:
                 self._wait_name(t, lambda name: name != "", "名前が入っていない（マスタの品目でない）")
             self._send_key(t, g.key)
-        rows = len(self.groups) // len(self.kp.path)
+        rows = self.groups[-1].row
         nxt = next_row_target(self.kp, rows)
         if nxt is not None:
             self._wait_focus(nxt)

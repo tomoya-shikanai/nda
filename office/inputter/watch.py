@@ -101,7 +101,16 @@ class Watcher:
         self.last_key = None
         self.prev: Seen | None = None
         self.dialogs = 0
-        self.counts = {"順どおり": 0, "順と違う": 0, "keypath に無い位置": 0}
+        self.counts = {"順どおり": 0, "順と違う": 0, "keypath に無い位置": 0, "読めなかった": 0}
+
+    def step_safely(self) -> None:
+        """読み取りの失敗（UIA の時間切れなど）で落ちずに、記録して次の回に読み直す。watch は何も送らないので待ち直してよい。"""
+        try:
+            self.step()
+        except Exception as ex:
+            self.counts["読めなかった"] += 1
+            self.last_key = None  # 読み直した欄を、同じ欄でも出し直す
+            self.out({"kind": "read_error", "error": type(ex).__name__})
 
     def _window_ok(self, w: WindowInfo | None) -> bool:
         return (w is not None and w.exe.lower() == self.kp.exe.lower() and w.class_name == self.kp.window_class
@@ -153,4 +162,6 @@ def line(e: dict) -> str:
         return f"{e['field']:14} 値が変わった: {e['shape']}"
     if e["kind"] == "dialog":
         return f"ダイアログ・小窓（#32770）の数: {e['count']}"
+    if e["kind"] == "read_error":
+        return f"読めなかった（{e['error']}）。次の回に読み直す"
     return f"伝票の画面の外（{e.get('exe')}）"
