@@ -6,6 +6,9 @@
   python -m inputter send <job.json> --items <items.json> --send
       … 実際に送る。keypath.json と columns.json の confirmed が両方 true のときだけ動く
 
+  python -m inputter watch [--minutes 30]
+      … 人が伝票の画面で Enter を押す間、フォーカスの道を読むだけで keypath と照らす（何も送らない）
+
 send の欄の順・位置は inputter/keypath.json と inputter/columns.json に固定（差し替えない）。
 """
 
@@ -112,6 +115,63 @@ def _cmd_send(args) -> int:
     return 0
 
 
+class _ReadOnly:
+    """WinDesktop の読む部分だけを見せる（watch はキーを送る関数を持たない）。"""
+
+    def __init__(self, desk) -> None:
+        self._d = desk
+
+    def foreground(self):
+        return self._d.foreground()
+
+    def focused(self):
+        return self._d.focused()
+
+    def visible_windows(self):
+        return self._d.visible_windows()
+
+
+def _cmd_watch(args) -> int:
+    import os
+    import time
+    from pathlib import Path
+
+    from . import watch
+
+    if sys.platform != "win32":
+        print("watch は Windows でだけ。", file=sys.stderr)
+        return 2
+    kp_data = load_json(sendmod.KEYPATH_PATH)
+    kp = sendmod.load_keypath(kp_data)
+    out_dir = Path(os.path.expandvars(r"%LOCALAPPDATA%\nda-recorder\watch"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / time.strftime("watch-%Y%m%d-%H%M%S.jsonl")
+    from .winsend import WinDesktop
+
+    desk = WinDesktop()
+    try:
+        with open(out_path, "a", encoding="utf-8") as fp:
+            def out(e: dict) -> None:
+                e = {"at": time.strftime("%H:%M:%S"), **e}
+                fp.write(json.dumps(e, ensure_ascii=False) + "\n")
+                fp.flush()
+                print(e["at"] + " " + watch.line(e), flush=True)
+
+            w = watch.Watcher(_ReadOnly(desk), kp, kp_data, out)
+            print("読むだけで見ています。キーもクリックも送りません。伝票の画面で、人が Enter を押してください。Ctrl+C で終わる。")
+            end = time.time() + args.minutes * 60
+            try:
+                while time.time() < end:
+                    w.step()
+                    time.sleep(0.05)
+            except KeyboardInterrupt:
+                pass
+            print(f"まとめ: {w.counts}  記録: {out_path}")
+    finally:
+        desk.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if _send_flag_problem(argv):
@@ -127,7 +187,11 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("job")
     sp.add_argument("--items", required=True)
     sp.add_argument("--send", action="store_true", help="実際に送る（keypath・columns の confirmed が要る）")
+    wp = sub.add_parser("watch", help="人が押す Enter の道を、読むだけで keypath と照らす", allow_abbrev=False)
+    wp.add_argument("--minutes", type=float, default=30)
     args = p.parse_args(argv)
+    if args.cmd == "watch":
+        return _cmd_watch(args)
     return _cmd_plan(args) if args.cmd == "plan" else _cmd_send(args)
 
 
