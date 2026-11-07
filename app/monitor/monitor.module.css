@@ -2,6 +2,8 @@
    文字の大きさの決め方は docs/design/companion.md。最小は 34u（3m で読める下限の目安）。 */
 
 .screen {
+  /* 日本語を文節で折る（「脱着で／すか」と切らない）。html の lang="ja" が要る */
+  word-break: auto-phrase;
   --u: min(calc(100vw / 1920), calc(100vh / 1080));
   --ink: #1d1b26;
   --paper: #f4f1e8;
@@ -27,6 +29,8 @@
 .s_asking { --accent: #ffc400; --accent-ink: #1d1b26; }
 .s_done { --accent: #23772d; }
 .s_awaiting { --accent: #0f7f65; }
+/* 依頼を事務所の受け箱に置けていない（送り直し中）。成功の緑と分ける */
+.s_trouble { --accent: #c2410c; --accent-ink: #fff; }
 
 .top {
   height: calc(120 * var(--u));
@@ -38,6 +42,8 @@
 }
 
 .brand {
+  flex: none;
+  white-space: nowrap;
   font-size: calc(52 * var(--u));
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -50,6 +56,8 @@
 }
 
 .status {
+  flex: none;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: calc(20 * var(--u));

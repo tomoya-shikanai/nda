@@ -4,6 +4,10 @@
  * 確認事項が 0 件でも asking で止める。done にするのは承認だけ（W4）。
  * 抽出の失敗は固定の文と例外の種類名だけを保存する。抽出のトークン数とかかった秒数を保存する（文の中身は入れない。事前登録の副の指標）。
  * 明細が 0 行の作業への返事は、作業の話の続きとして文字起こしに足して抽出し直す（continueSession）。
+ *
+ * 客（#25、docs/design/pi-office.md §5・§9-3）: 工場は客の一覧を持たない。名前らしい部分と 4 桁は一覧なしで伏せ字にしてから保存・抽出する。
+ * 事務所がつながっていれば（office）、4 桁を含む文の原文だけで照合を問い合わせる。問い合わせは抽出を待たずに置き、抽出と並べて走らせる。
+ * 答えは POST /api/office/reply が作業に当てるので、抽出の後に書くときは作業を読み直して、先に当たった客を消さない。
  */
 import { randomUUID } from "node:crypto";
 import { addAmbiguousLines } from "../invoice/ambiguous";
@@ -14,11 +18,14 @@ import { toQuestions } from "../invoice/questions";
 import type { InvoiceRefs } from "../invoice/schema";
 import type { LedgerEntry } from "../ledger/lookup";
 import { type Segment, type Transcript, TranscriptSchema } from "../stt/types";
-import { type Customer, identifyCustomer } from "../customer/match";
+import { maskCustomerInfo } from "../customer/match";
+import { buildCustomerQuery, pendingQuery } from "../office/flow";
+import { type OfficeLink, sendQuery, submitInvoice } from "../office/link";
 import { answerBase, answerSession } from "./answer";
 import { customerPending, withCustomerQuestion } from "./customer";
 import { isApproval } from "./approval";
-import { type Answer, type ExtractionCost, newSession, type Session, transition, writeSession } from "./store";
+import { withSessionLock } from "./lock";
+import { type Answer, type ExtractionCost, newSession, readSession, type Session, transition, writeSession } from "./store";
 
 /** POST の body の文字起こしの形。正は lib/stt/types.ts。 */
 export { TranscriptSchema };
@@ -54,7 +61,7 @@ async function extractWithCost(
 }
 
 /** 抽出の結果から、明細・質問・参照を組む（startSession と continueSession で同じ）。 */
-function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[], c: { customerRequired: boolean; customerId: string | null }) {
+function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[], c: Pick<Session, "customerRequired" | "customer">) {
   const { candidates } = out;
   // 言い換えの言葉の行を補う（足した参照も保存する。答えの後の組み直しが同じ行を作るため）
   const refs = addAmbiguousLines(out, t, ledger);
@@ -63,6 +70,22 @@ function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[], c: { custom
   return { candidates, refs, invoice, questions };
 }
 
+/** 事務所の返しで変わる欄。抽出の後に書くとき、作業ファイルの今の値を使う（返しが先に当たっていても消さない）。 */
+const OFFICE_FIELDS = ["customer", "customerQuery", "appliedIds"] as const;
+
+async function withLatestOffice(dir: string, s: Session): Promise<Session> {
+  const latest = await readSession(dir, s.id);
+  if (latest === null) return s;
+  const out = { ...s };
+  for (const k of OFFICE_FIELDS) (out as Record<string, unknown>)[k] = latest[k];
+  return out;
+}
+
+const maskSegments = (t: Transcript): Transcript => {
+  const texts = maskCustomerInfo(t.segments.map((g) => g.text));
+  return { ...t, segments: t.segments.map((g, i) => ({ ...g, text: texts[i] })) };
+};
+
 export async function startSession(x: {
   dir: string;
   transcript: Transcript;
@@ -70,34 +93,52 @@ export async function startSession(x: {
   extract?: Extractor;
   now?: () => Date;
   id?: string;
-  /** 客の一覧。null・省略なら客の照合なし。あれば名前と下 4 桁を伏せ字にしてから保存・抽出し、客が決まるまで承認させない。 */
-  customers?: Customer[] | null;
+  /** 事務所。null・省略なら客の照合なし（客を聞かずに承認できる）。 */
+  office?: OfficeLink | null;
 }): Promise<Session> {
   const now = x.now ?? (() => new Date());
-  const customers = x.customers ?? null;
-  let transcript = x.transcript;
-  let customer = { customerRequired: false, customerId: null as string | null };
-  if (customers !== null) {
-    const found = identifyCustomer(transcript.segments.map((g) => g.text), customers);
-    transcript = { ...transcript, segments: transcript.segments.map((g, i) => ({ ...g, text: found.texts[i] })) };
-    customer = { customerRequired: true, customerId: found.customerId };
-  }
-  let s: Session = { ...newSession(x.id ?? randomUUID(), now()), ...customer };
+  const office = x.office ?? null;
+  const id = x.id ?? randomUUID();
+  const segs = x.transcript.segments;
+  // 原文は問い合わせ（メモリ）にだけ入れ、作業には伏せ字にした文字起こしだけを入れる
+  const query =
+    office === null || segs.length === 0
+      ? null
+      : buildCustomerQuery({
+          id: randomUUID(),
+          sessionId: id,
+          texts: segs.map((g) => g.text),
+          from: { recordingId: x.transcript.recordingId, startSec: segs[0].startSec, endSec: Math.max(...segs.map((g) => g.endSec)) },
+          now: now(),
+        });
+  const transcript = maskSegments(x.transcript);
+  let s: Session = {
+    ...newSession(id, now()),
+    customerRequired: office !== null,
+    customerQuery: query ? pendingQuery(query) : null,
+  };
   s = transition(s, "listening", now());
   s = { ...transition(s, "thinking", now()), transcript };
   await writeSession(x.dir, s);
 
+  // 照合は抽出を待たずに置く（§9-3）。答えは reply の route が作業に当てる
+  const asking = office !== null && query !== null ? sendQuery(x.dir, office, query) : Promise.resolve(true);
   const r = await extractWithCost(x.extract ?? extractInvoice, transcript, x.ledger);
-  if (!r.ok) {
-    const failed = { ...transition(s, "idle", now()), error: extractionError(r.error), extraction: r.cost };
-    await writeSession(x.dir, failed);
-    throw r.error;
-  }
-  s = { ...transition(s, "drafting", now()), ...draft(r.out, transcript, x.ledger, s), extraction: r.cost };
-  await writeSession(x.dir, s);
-  s = transition(s, "asking", now());
-  await writeSession(x.dir, s);
-  return s;
+  await asking;
+  // 抽出の後は作業の排他の中で読み直して書く（照合の答えが先に当たっていても消さない）
+  return withSessionLock(id, async () => {
+    s = await withLatestOffice(x.dir, s);
+    if (!r.ok) {
+      const failed = { ...transition(s, "idle", now()), error: extractionError(r.error), extraction: r.cost };
+      await writeSession(x.dir, failed);
+      throw r.error;
+    }
+    s = { ...transition(s, "drafting", now()), ...draft(r.out, transcript, x.ledger, s), extraction: r.cost };
+    await writeSession(x.dir, s);
+    s = transition({ ...s, questions: withCustomerQuestion(s.questions, s) }, "asking", now());
+    await writeSession(x.dir, s);
+    return s;
+  });
 }
 
 /** 抽出で 1 行も取れなかった作業が、質問中（asking）か。返事は作業の話の続きとして扱う。答えで行を除いて 0 行になった作業は含めない。 */
@@ -139,9 +180,10 @@ export async function continueSession(x: {
   await writeSession(x.dir, drafting);
 
   const r = await extractWithCost(x.extract ?? extractInvoice, transcript, x.ledger);
+  const latest = await withLatestOffice(x.dir, drafting);
   if (!r.ok) {
     const back = {
-      ...transition(drafting, "asking", now()),
+      ...transition(latest, "asking", now()),
       transcript: s.transcript,
       answers: [...s.answers, answer({ kind: "unread", reason: extractionError(r.error) })],
       extraction: r.cost,
@@ -149,7 +191,7 @@ export async function continueSession(x: {
     await writeSession(x.dir, back);
     return back;
   }
-  const next = transition({ ...drafting, ...draft(r.out, transcript, x.ledger, s), extraction: r.cost }, "asking", now());
+  const next = transition({ ...latest, ...draft(r.out, transcript, x.ledger, latest), extraction: r.cost }, "asking", now());
   await writeSession(x.dir, next);
   return next;
 }
@@ -157,42 +199,58 @@ export async function continueSession(x: {
 /**
  * 質問中の作業への返事の 1 発話を当てて保存する。明細が 0 行なら作業の話の続き（continueSession）、
  * それ以外と承認の言葉は従来どおり answerSession（承認の言葉は抽出し直さない）。
- * 客の照合が有効な作業では、先に返事の名前と下 4 桁を伏せ字にする。客が未定で、返事が一覧の 1 件に合えば、客を決めて終わる。
+ * 返事は先に名前らしい部分と 4 桁を伏せ字にする。客が未定で事務所がつながっていて、返事に 4 桁を含む文があれば、
+ * その文の原文で照合を問い合わせて終わる（答えは reply の route が当てる）。承認したら、すぐ入力の依頼を受け箱に置く（§9-2）。
  */
-export async function replySession(x: {
+type ReplyInput = {
   dir: string;
   session: Session;
   utterance: Segment;
   ledger: LedgerEntry[];
   extract?: Extractor;
   now?: () => Date;
-  customers?: Customer[] | null;
-}): Promise<Session> {
+  office?: OfficeLink | null;
+};
+
+/** 作業の排他の中で作業ファイルを読み直してから当てる（同時の答え・承認で片方を消さない、依頼を 2 件出さない）。 */
+export async function replySession(x: ReplyInput): Promise<Session> {
+  return withSessionLock(x.session.id, async () => {
+    const fresh = await readSession(x.dir, x.session.id);
+    return replyLocked({ ...x, session: fresh ?? x.session });
+  });
+}
+
+async function replyLocked(x: ReplyInput): Promise<Session> {
   const now = x.now ?? (() => new Date());
+  const office = x.office ?? null;
   const s = x.session;
-  let utterance = x.utterance;
-  if (s.customerRequired && x.customers) {
-    const found = identifyCustomer([utterance.text], x.customers);
-    utterance = { ...utterance, text: found.texts[0] };
-    if (customerPending(s) && found.customerId !== null) {
-      if (s.status !== "asking") throw new Error(`asking でないので答えを受けられない: ${s.status}`);
-      const base = answerBase(s, utterance, now());
+  const utterance = { ...x.utterance, text: maskCustomerInfo([x.utterance.text])[0] };
+  if (office !== null && s.customerRequired && customerPending(s)) {
+    if (s.status !== "asking") throw new Error(`asking でないので答えを受けられない: ${s.status}`);
+    const base = answerBase(s, utterance, now());
+    const query = buildCustomerQuery({
+      id: randomUUID(),
+      sessionId: s.id,
+      texts: [x.utterance.text],
+      from: { recordingId: base.provenance.recordingId, startSec: utterance.startSec, endSec: utterance.endSec },
+      now: now(),
+    });
+    if (query !== null) {
       const answer: Answer = {
         ...base,
         questionIndex: s.questions.findIndex((q) => q.reason === "customer"),
         lineIndex: -1,
-        action: { kind: "setCustomer", id: found.customerId },
+        action: { kind: "askOffice", queryId: query.id },
       };
-      const decided = { ...s, customerId: found.customerId };
-      const questions = withCustomerQuestion(s.questions, decided);
-      const next: Session = { ...decided, answers: [...s.answers, answer], questions, updatedAt: base.at };
+      const next: Session = { ...s, answers: [...s.answers, answer], customerQuery: pendingQuery(query), updatedAt: base.at };
       await writeSession(x.dir, next);
-      return next;
+      await sendQuery(x.dir, office, query);
+      return (await readSession(x.dir, s.id)) ?? next;
     }
   }
-  const y = { ...x, utterance };
-  if (isEmptyDraft(s) && !isApproval(utterance.text)) return continueSession(y);
+  if (isEmptyDraft(s) && !isApproval(utterance.text)) return continueSession({ ...x, utterance });
   const next = answerSession(s, utterance, x.ledger, now());
   await writeSession(x.dir, next);
+  if (office !== null && next.status === "done") return submitInvoice(x.dir, office, next, now());
   return next;
 }

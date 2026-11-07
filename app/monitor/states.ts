@@ -1,10 +1,36 @@
-// モニターの 6 つの状態と、試作（?mock=1）で見せる架空の中身。状態の並びは lib/session/store.ts が正。
+// モニターの 6 つの状態（承認の後の 4 つは表情を借りる）と、試作（?mock=1）で見せる架空の中身。状態の並びは lib/session/store.ts が正。
 
-import { SESSION_STATES, type SessionStatus } from "../../lib/session/store";
+import type { SessionStatus } from "../../lib/session/store";
 import { HEARD } from "../_demo/tire-change";
 
-export const STATE_KEYS = SESSION_STATES;
-export type StateKey = SessionStatus;
+/** 試作の画面と相棒の表情を持つ 6 つの状態。承認の後の 4 つ（事務所への入力）は FACE_OF で表情を借りる。 */
+export const STATE_KEYS = ["idle", "listening", "thinking", "drafting", "asking", "done"] as const satisfies readonly SessionStatus[];
+export type StateKey = (typeof STATE_KEYS)[number];
+
+/** 承認の後の状態の札（docs/design/pi-office.md §5）と、借りる表情。 */
+export const AFTER_LABELS: Record<Exclude<SessionStatus, StateKey>, string> = {
+  sending: "事務所に送っている",
+  sent: "事務所で入れている",
+  entered: "入れた",
+  stopped: "事務所で止まった",
+};
+const FACE_OF: Record<Exclude<SessionStatus, StateKey>, StateKey> = {
+  sending: "drafting",
+  sent: "drafting",
+  entered: "done",
+  stopped: "asking",
+};
+
+/** 作業の状態から相棒の表情。承認待ちは awaiting。 */
+export function faceOf(state: SessionStatus, awaiting: boolean): FaceKey {
+  if (awaiting) return "awaiting";
+  return (STATE_KEYS as readonly string[]).includes(state) ? (state as StateKey) : FACE_OF[state as Exclude<SessionStatus, StateKey>];
+}
+
+/** 作業の状態（と承認待ち・依頼を置けていない）の札。 */
+export type LabelKey = SessionStatus | "awaiting" | "trouble";
+/** 依頼を受け箱に置けていない（送り直し中）ときの状態の札。 */
+export const TROUBLE_LABEL = "事務所に届きません";
 
 /**
  * 画面の札と相棒の表情の種類。作業の状態に、asking のうち確認事項が 0 件の「承認待ち」を足したもの
@@ -76,9 +102,9 @@ export const STATES: Record<StateKey, MonitorState> = {
     resolved: [],
   },
   done: {
-    label: "終わった",
+    label: "承認した",
     heard: "4本",
-    doing: "4 行入れました。発行は人が押してください",
+    doing: "承認しました。事務所に送ります",
     items: ["ok", "ok", "ok", "ok"],
     asks: [],
     resolved: ["エアバルブ交換 4本（答えてもらった）"],
