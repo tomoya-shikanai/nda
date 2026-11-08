@@ -119,13 +119,14 @@ sudo tailscale up --ssh   # 表示された URL を鹿内さんが Mac のブラ
 6. **本体の配置**（`52-deploy.sh`）: `origin/main` に合わせて build し、`nda.service` を入れ直す。本体を更新するたびに流す。
 7. **ずんだもんの声**（`57-voicevox.sh`）: VOICEVOX ENGINE の Linux arm64 の CPU 版（公式 Releases）を `127.0.0.1:50021` のサービスにする。遅いときの代わりは `deploy/pi/README.md` の「声の代わり」。
 8. **聞き役**（`55-listener.sh`）: §6-1。
-9. **事務所の受け箱**（`58-office-share.sh`）: 事務所の PC の共有（SMB）を `/mnt/nda-office` に automount し、本体は `NDA_OFFICE_BOX` でそこに書く（`docs/decisions.md` 2026-11-05）。
+9. **事務所の受け箱**（`58-office-share.sh`）: 事務所の PC の共有（SMB 3.0 以上、暗号化）を `/mnt/nda-office` に automount し、本体は `NDA_OFFICE_BOX` でそこに書く（`docs/decisions.md` 2026-11-05）。
 10. **sudo を絞る**（`60-sudo-tighten.sh`）: §3-5 のとおり、パスワードなしは固定の 4 命令だけにする。最後に流す。
 11. **保守の skill**: `.claude/skills/pi/` に、状態・ログ・反映・再起動の命令を書く（AwesomeSea の `sensor` skill と同じ形）。
 
 起動語は Picovoice Porcupine をやめて Vosk にした（`docs/decisions.md` 2026-11-04。§6-1）。
 
-本体は事務所の返し（`POST /api/office/reply`）を LAN で受けるため `0.0.0.0:3000` で待つ。合言葉で守るのは `/api/office/*` だけで、他の画面と API は同じ LAN から開ける（危険と次の一手は `deploy/pi/README.md` の「本体を LAN に出す危険」）。
+本体は `127.0.0.1:3000` だけで待つ。LAN に出すのは事務所の返しの関所（`0.0.0.0:3001`、`POST /api/office/reply` だけを本体へ中継）だけ（`deploy/pi/README.md` の「LAN に出すのは関所だけ」）。事務所の返し先は `http://<Pi>:3001/api/office/reply`。
+出来事の記録（`docs/logging.md`）は `/var/lib/nda/logs`（`NDA_LOG_DIR`）。本体と聞き役の両方が書く。
 
 ### 6-1. 現場の聞き役（起動語と録音）
 
@@ -150,10 +151,11 @@ Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表
 | 9 | 本体のユーザーに sudo が無い | `id -nG nda-app`、`getent passwd nda-app` | `sudo` 等のグループに入っていない。シェルが `nologin` |
 | 10 | 本体が専用のユーザーで動く | `systemctl show -p User,MainPID nda.service`、`ps -o user= -p <PID>` | `nda-app` |
 | 11 | パスワードなしの sudo が固定の命令だけ | `sudo -n -l`、`sudo -n true` | `NOPASSWD:` は `systemctl start/stop/restart nda.service` と `reboot` だけ。`sudo -n true` は拒否 |
-| 12 | 本体が応答する | `curl 127.0.0.1:3000/monitor`、`ss -ltn`、合言葉なしの `POST /api/office/reply` | `/monitor` が 200、`0.0.0.0:3000` で待つ、返しは 200 以外（401 か 503） |
+| 12 | 本体と関所 | `curl 127.0.0.1:3000/monitor`、`ss -ltn`、関所の `/monitor`、関所への合言葉なしの `POST /api/office/reply` | `/monitor` が 200、本体は `127.0.0.1:3000` だけ、関所の `/monitor` は 404、返しは 401 か 503 |
 | 13 | 聞き役が動く | `systemctl --user status nda-listener`、「んだ クロード」と言う | active。ログに「起動語待ち」。合図音が Jabra から鳴り、話した声がモニターに出る |
 | 14 | ずんだもんの声 | `curl 127.0.0.1:50021/version`、短い 1 文を合成 | 応答がある。1 文 3 秒以内。モニターの台詞が Jabra から鳴る（人） |
-| 15 | 受け箱の mount | `findmnt /mnt/nda-office`、`.nda-box` | cifs で mount され、目印がある |
+| 15 | 受け箱の mount | `findmnt /mnt/nda-office`、`.nda-box` | cifs で `seal` 付きで mount され、目印がある |
+| 16 | 出来事の記録 | `stat /var/lib/nda/logs`、nda で書いてみる | `nda-app:nda 2770`、nda が書ける。一周の後に `events-*`・`listener-*` が出る |
 
 ## 8. つまずいたとき
 
@@ -167,4 +169,5 @@ Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表
 - 2026-11-04 初版。Pi 5（Traskit 4GB キット）、Jabra Speak 510、工場のモニター、Tailscale。11/5 着。
 - 2026-11-04 本体を sudo の無い `nda-app` で動かし（置き場 `/opt/nda`・`/var/lib/nda`・`/etc/nda/nda.env`）、パスワードなしの sudo を固定の 4 命令に絞った（自動セキュリティレビューの指摘）。§7 に #9〜#11 を足した。
 - 2026-11-05 §6-1 に現場の聞き役（`device/listener`）への参照を足した。起動語は Porcupine でなく Vosk。
-- 2026-11-08 今の本体に追いつかせた。Node の導入と clone（50）、配置と build（52）、聞き役（55）、VOICEVOX（57）、事務所の受け箱の mount（58）を足し、キオスクを自動再生ありに、本体を LAN に出した。§7 に #12〜#15 を足した。
+- 2026-11-08 今の本体に追いつかせた。Node の導入と clone（50）、配置と build（52）、聞き役（55）、VOICEVOX（57）、事務所の受け箱の mount（58）を足し、キオスクを自動再生ありに。§7 に #12〜#15 を足した。
+- 2026-11-08 自動のセキュリティ点検の 3 件: 本体を 127.0.0.1 に戻し、LAN には事務所の返しの関所（:3001）だけを出す。受け箱の SMB を暗号化（seal、3.0 以上）し、名前の解決の IP を鹿内さんが確かめる。出来事の記録の置き場（`/var/lib/nda/logs`、#16）を足した。

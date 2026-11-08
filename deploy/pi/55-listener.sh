@@ -33,6 +33,8 @@ MODEL_SHA256=efa092d280153a77615e9e0c7d7283e93e600de3d19d3bec686c57ef19d52eac
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT_PATH="$UNIT_DIR/nda-listener.service"
 SERVER=http://127.0.0.1:3000
+# 出来事の記録（docs/logging.md）。置き場は 50 が作る（nda-app:nda 2770）
+LOG_DIR=/var/lib/nda/logs
 
 put_file() { # 中身が違うときだけ書く。0 = 変更した、1 = 同じ
   local dest=$1 content=$2
@@ -46,6 +48,8 @@ main() {
   sudo -n true 2>/dev/null || { say "[失敗] パスワードなしの sudo が使えない"; exit 1; }
   [ "$(id -un)" = "nda" ] || { say "[失敗] nda ユーザーで流す想定（今は $(id -un)）"; exit 1; }
   [ -f "$LISTENER_DIR/listen.py" ] || { say "[失敗] ${LISTENER_DIR}/listen.py が無い（先に 50 と 52）"; exit 1; }
+  if [ -d "$LOG_DIR" ] && [ -w "$LOG_DIR" ]; then say "[済] ${LOG_DIR} に nda が書ける"
+  else say "[警告] ${LOG_DIR} に nda が書けない（期待 nda-app:nda 2770。50-service.sh を流し直す）"; fi
 
   # --- apt ---
   missing=()
@@ -115,6 +119,7 @@ Environment=NDA_SERVER_URL=${SERVER}
 Environment=NDA_INPUT_DEVICE=${NDA_LISTENER_INPUT:-Jabra}
 Environment=NDA_OUTPUT_DEVICE=${NDA_LISTENER_OUTPUT:-Jabra}
 Environment=NDA_VOSK_MODEL=${MODEL_DIR}
+Environment=NDA_LOG_DIR=${LOG_DIR}
 ${extra}# systemd の命令の行では \$ を \$\$ と書く（変数の置き換えを避ける）
 # 本体の後: /monitor が応答するまで最大 3 分待つ（待ちきれなくても聞き始める。送れないときは聞き役が言う）
 ExecStartPre=/bin/sh -c 'i=0; until curl -s -o /dev/null --max-time 2 ${SERVER}/monitor; do i=\$\$((i+1)); [ \$\$i -ge 90 ] && exit 0; sleep 2; done'

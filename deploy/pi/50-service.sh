@@ -7,13 +7,15 @@
 #       sessions/             作業の状態（NDA_SESSION_DIR）
 #       ledger.json           料金表（NDA_LEDGER_PATH。初回だけ /opt/nda/data/ledger.json から写す）
 #       next-cache/           next start が書くキャッシュ（/opt/nda/.next/cache をここへ向ける。52 が張る）
+#       logs/                 出来事の記録（NDA_LOG_DIR。nda-app:nda 2770。本体と聞き役（nda）の両方が書く。docs/logging.md）
 #     /etc/nda/nda.env        秘密の値（nda-app:nda-app、600。systemd が EnvironmentFile として読む）
 #     /mnt/nda-office         事務所の受け箱（58-office-share.sh が mount する。nda.service はここにも書ける）
 #   このスクリプトは .env の中身を読まない・作らない（権限だけ見る）。
+#   本体（next start）は 127.0.0.1:3000 だけで待つ。LAN に出すのは関所 nda-office-gate.service（0.0.0.0:3001）だけで、
+#   POST /api/office/reply だけを本体へ中継する（scripts/office-gate.ts）。
 # 流し方: ssh nda-pi 'bash -s' < deploy/pi/50-service.sh
 # 環境変数:
 #   NDA_NODE_BIN_DIR  node の置き場（既定 /usr/local/bin。既定のときだけ Node を公式の tar から入れる）
-#   NDA_BIND          next start の待ち受け（既定 0.0.0.0。事務所の返し POST /api/office/reply を LAN で受けるため。危険は README）
 #   NDA_REPO_URL      本体の取り元（既定 https://github.com/tomoya-shikanai/nda.git）
 #
 # 実機で確かめる:
@@ -30,7 +32,7 @@ ENV_DIR=/etc/nda
 ENV_FILE=/etc/nda/nda.env
 OFFICE_MNT=/mnt/nda-office
 NODE_BIN_DIR="${NDA_NODE_BIN_DIR:-/usr/local/bin}"
-BIND="${NDA_BIND:-0.0.0.0}"
+GATE_UNIT_PATH=/etc/systemd/system/nda-office-gate.service
 REPO_URL="${NDA_REPO_URL:-https://github.com/tomoya-shikanai/nda.git}"
 # Node は版と SHA-256 を固定する（https://nodejs.org/dist/v24.22.1/SHASUMS256.txt の linux-arm64.tar.xz の行。Mac の開発と同じ版）
 NODE_VERSION=24.22.1
@@ -115,9 +117,12 @@ main() {
 
   # --- 置き場 ---
   ensure_dir "$APP_DIR" nda nda 755 "本体。nda が配置し、${APP_USER} は読むだけ"
-  ensure_dir "$DATA_DIR" "$APP_USER" "$APP_USER" 750 "データ。${APP_USER} だけが書ける"
+  # 751: 他のユーザーは中を一覧できないが、logs/ へは通れる（聞き役の nda が記録を書くため）
+  ensure_dir "$DATA_DIR" "$APP_USER" "$APP_USER" 751 "データ。${APP_USER} だけが書ける（logs へ通るだけは誰でも）"
   ensure_dir "$DATA_DIR/sessions" "$APP_USER" "$APP_USER" 750 "作業の状態（NDA_SESSION_DIR）"
   ensure_dir "$DATA_DIR/next-cache" "$APP_USER" "$APP_USER" 750 "next start のキャッシュ"
+  # setgid で、中に作るファイルのグループを nda にそろえる（ファイルは書き手が 600 で作る）
+  ensure_dir "$DATA_DIR/logs" "$APP_USER" nda 2770 "出来事の記録（NDA_LOG_DIR）。本体と聞き役が書く"
   ensure_dir "$ENV_DIR" root root 755 "秘密の値の置き場"
   # 受け箱の mount 先（mount は 58。先に作っておくと nda.service の ReadWritePaths が効く）
   if findmnt -n "$OFFICE_MNT" >/dev/null 2>&1; then
@@ -181,8 +186,9 @@ Environment=NEXT_TELEMETRY_DISABLED=1
 Environment=PATH=${NODE_BIN_DIR}:/usr/bin:/bin
 Environment=NDA_SESSION_DIR=${DATA_DIR}/sessions
 Environment=NDA_LEDGER_PATH=${DATA_DIR}/ledger.json
+Environment=NDA_LOG_DIR=${DATA_DIR}/logs
 EnvironmentFile=-${ENV_FILE}
-ExecStart=${NODE_BIN_DIR}/node ${APP_DIR}/node_modules/next/dist/bin/next start -H ${BIND} -p 3000
+ExecStart=${NODE_BIN_DIR}/node ${APP_DIR}/node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3000
 Restart=always
 RestartSec=5
 UMask=0027
@@ -220,7 +226,7 @@ UNIT
     printf '%s\n' "$unit" | sudo tee "$UNIT_PATH" >/dev/null
     sudo chmod 644 "$UNIT_PATH"
     sudo systemctl daemon-reload
-    say "[変更] ${UNIT_PATH} を書いて daemon-reload した（User=${APP_USER}、next start -H ${BIND} -p 3000）"
+    say "[変更] ${UNIT_PATH} を書いて daemon-reload した（User=${APP_USER}、next start -H 127.0.0.1 -p 3000）"
     if ! systemd-analyze verify "$UNIT_PATH" >/dev/null 2>&1; then
       say "[警告] systemd-analyze verify ${UNIT_PATH} が通らない（52 で build する前は正常。あれば内容を見る）"
     fi
@@ -237,6 +243,70 @@ UNIT
     say "[変更] nda.service を enable した（停電から戻ったら自動で上がる）"
   fi
 
+  # --- 事務所の返しの関所（LAN に出すのはこれだけ） ---
+  # 中継するのは POST /api/office/reply だけ。DynamicUser で、受けるのは私設の LAN・Tailscale・自分だけ。
+  # PartOf= で、nda.service の restart（52、60 の後もパスワードなし）に合わせて入れ直される。
+  gate_unit=$(cat <<UNIT
+# deploy/pi/50-service.sh が管理する（手で編集しない）
+[Unit]
+Description=nDa 事務所の返しの関所（0.0.0.0:3001 → 127.0.0.1:3000 の POST /api/office/reply だけ）
+After=network-online.target nda.service
+Wants=network-online.target
+PartOf=nda.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=${APP_DIR}
+Environment=NDA_GATE_HOST=0.0.0.0
+Environment=NDA_GATE_PORT=3001
+Environment=NDA_GATE_UPSTREAM=http://127.0.0.1:3000
+ExecStart=${NODE_BIN_DIR}/node ${APP_DIR}/scripts/office-gate.ts
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+IPAddressDeny=any
+IPAddressAllow=localhost 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fd00::/8
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+)
+  if [ -f "$GATE_UNIT_PATH" ] && [ "$(cat "$GATE_UNIT_PATH")" = "$gate_unit" ]; then
+    say "[済] ${GATE_UNIT_PATH}"
+  else
+    printf '%s\n' "$gate_unit" | sudo tee "$GATE_UNIT_PATH" >/dev/null
+    sudo chmod 644 "$GATE_UNIT_PATH"
+    sudo systemctl daemon-reload
+    say "[変更] ${GATE_UNIT_PATH} を書いた（0.0.0.0:3001 の POST /api/office/reply だけ → 127.0.0.1:3000）"
+    if systemctl is-active --quiet nda-office-gate.service; then sudo systemctl restart nda-office-gate.service; fi
+  fi
+  if systemctl is-enabled --quiet nda-office-gate.service 2>/dev/null; then
+    say "[済] nda-office-gate.service は enable 済み"
+  else
+    sudo systemctl enable nda-office-gate.service
+    say "[変更] nda-office-gate.service を enable した"
+  fi
+
   # build の前に起動すると落ち続けるので、build 済みのときだけ起動する（build と起動は 52-deploy.sh）
   if [ ! -f "$APP_DIR/.next/BUILD_ID" ]; then
     say "[情報] まだ build していないので start しない（次は 52-deploy.sh）"
@@ -245,6 +315,10 @@ UNIT
   else
     sudo systemctl start nda.service
     say "[変更] nda.service を start した"
+  fi
+  if [ -f "$APP_DIR/scripts/office-gate.ts" ] && ! systemctl is-active --quiet nda-office-gate.service; then
+    sudo systemctl start nda-office-gate.service
+    say "[変更] nda-office-gate.service を start した"
   fi
 }
 main </dev/null

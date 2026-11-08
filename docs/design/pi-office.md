@@ -25,7 +25,7 @@
 | 向き | 運び方 | 置き場・宛先 | 守り |
 |---|---|---|---|
 | 工場→事務所 | sftp（Tailscale の `nda-office`）。1 件 1 ファイル。`.tmp` に書いて rename | `C:\nda\box\in\` | 鍵認証だけ。sshd は Tailscale の範囲だけ受ける（#39 で済み） |
-| 事務所→工場 | HTTP `POST http://nda-pi:3000/api/office/reply`（Tailscale の名前）。1 件 1 リクエスト | 工場の Next.js の既存の受け口に route を 1 つ足す | `Authorization: Bearer <合言葉>`（#42）。合図が違えば 401。`/api/office/*` だけ合言葉必須 |
+| 事務所→工場 | HTTP `POST http://nda-pi:3001/api/office/reply`（Pi の関所。本体の 3000 は LAN に出さない。2026-11-08、`deploy/pi/README.md`。#41 の事務所のプログラムの返し先はこの 3001）。1 件 1 リクエスト | 工場の Next.js の既存の受け口に route を 1 つ足す | `Authorization: Bearer <合言葉>`（#42）。合図が違えば 401。`/api/office/*` だけ合言葉必須 |
 
 選んだ理由:
 - 待ち時間: 問い合わせは sftp の書き込み（接続を使い回せば 0.1 秒）＋事務所の受け箱の見回り（0.5 秒）＋DB の照合（0.5 秒）＋HTTP（0.1 秒）で、父の待ちは 2 秒前後。工場側に見回りの常駐が要らないので、答えは着いた瞬間に作業に入る。

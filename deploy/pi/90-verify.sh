@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 90-verify.sh: docs/pi-setup.md §7 の 15 項目のうち、Pi の上で自動で確かめられるものを流して表にする。
+# 90-verify.sh: docs/pi-setup.md §7 の 16 項目のうち、Pi の上で自動で確かめられるものを流して表にする。
 # 流し方: ssh nda-pi 'bash -s' < deploy/pi/90-verify.sh
 # 結果: 合格 / 不合格 / 手動（人の目や Mac からの操作が要る）。不合格が 1 つでもあれば終了コード 1。
 # .env は権限(stat)だけ見る。中身は読まない。
@@ -10,6 +10,8 @@ APP_USER=nda-app
 ENV_FILE=/etc/nda/nda.env
 OFFICE_MNT=/mnt/nda-office
 VOICEVOX=http://127.0.0.1:50021
+LOG_DIR=/var/lib/nda/logs
+GATE=http://127.0.0.1:3001
 
 # sudo -n -l の出力から、NOPASSWD で許された命令を 1 行に 1 つずつ並べる（60-sudo-tighten.sh と同じ）
 nopasswd_cmds() {
@@ -103,13 +105,17 @@ main() {
     else add 11 "sudo は固定の命令だけ" 不合格 "sudo -l の NOPASSWD: $(printf '%s' "${got:-なし}" | tr '\n' ';')"; fi
   fi
 
-  # 12 本体が応答する（/monitor が 200、LAN に出ている、事務所の返しの受け口が合言葉なしで通らない）
+  # 12 本体が応答し、LAN に出ているのは関所（:3001）だけ。関所は reply 以外を 404、合言葉なしの reply を通さない
   mon=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:3000/monitor || true)
-  lan=$(ss -Hltn 'sport = :3000' 2>/dev/null | awk '{print $4}' | tr '\n' ' ')
-  rep=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:3000/api/office/reply || true)
-  if [ "$mon" != 200 ]; then add 12 "本体が応答する" 不合格 "/monitor が ${mon:-応答なし}（52-deploy.sh、journalctl -u nda.service）"
-  elif [ "$rep" = 200 ]; then add 12 "本体が応答する" 不合格 "合言葉なしの /api/office/reply が 200"
-  else add 12 "本体が応答する" 合格 "/monitor 200、待ち受け ${lan:-不明}、合言葉なしの返しは ${rep}"; fi
+  lst=$(ss -Hltn 2>/dev/null | awk '{print $4}' | grep -E ':(3000|3001)$' | sort -u | tr '\n' ' ' || true)
+  gmon=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$GATE/monitor" || true)
+  rep=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST -H 'content-type: application/json' -d '{}' "$GATE/api/office/reply" || true)
+  if [ "$mon" != 200 ]; then add 12 "本体と関所" 不合格 "/monitor が ${mon:-応答なし}（52-deploy.sh、journalctl -u nda.service）"
+  elif ! printf '%s' "$lst" | grep -qE '127\.0\.0\.1:3000'; then add 12 "本体と関所" 不合格 "本体が 127.0.0.1:3000 で待っていない（${lst:-なし}）"
+  elif printf '%s' "$lst" | grep -qE '(0\.0\.0\.0|\*|\[::\]):3000'; then add 12 "本体と関所" 不合格 "本体が LAN に出ている（${lst}）"
+  elif [ "$gmon" != 404 ]; then add 12 "本体と関所" 不合格 "関所の /monitor が ${gmon:-応答なし}（期待 404。journalctl -u nda-office-gate.service）"
+  elif [ "$rep" = 200 ] || [ -z "$rep" ] || [ "$rep" = 000 ] || [ "$rep" = 502 ]; then add 12 "本体と関所" 不合格 "関所の合言葉なしの reply が ${rep:-応答なし}（期待 401 か 503）"
+  else add 12 "本体と関所" 合格 "/monitor 200、待ち受け ${lst}、関所: /monitor 404・合言葉なしの reply ${rep}"; fi
   # 13 聞き役（nda のユーザーのサービス）
   la=$(systemctl --user is-active nda-listener.service 2>/dev/null || true)
   le=$(systemctl --user is-enabled nda-listener.service 2>/dev/null || true)
@@ -135,10 +141,26 @@ main() {
     timeout 20 stat "$OFFICE_MNT/." >/dev/null 2>&1 || true
     src=$(findmnt -n -t cifs -o SOURCE "$OFFICE_MNT" 2>/dev/null || true)
     if [ -z "$src" ]; then add 15 "受け箱の mount" 不合格 "mount されない（journalctl -u ${unit}.mount -n 20）"
-    elif find "$OFFICE_MNT" -maxdepth 2 -name .nda-box -print -quit 2>/dev/null | grep -q .; then add 15 "受け箱の mount" 合格 "${src}、目印 .nda-box あり"
+    elif ! findmnt -n -t cifs -o OPTIONS "$OFFICE_MNT" | tr ',' '\n' | grep -qx seal; then add 15 "受け箱の mount" 不合格 "${src} が暗号化（seal）なしで mount されている（58-office-share.sh を流し直す）"
+    elif find "$OFFICE_MNT" -maxdepth 2 -name .nda-box -print -quit 2>/dev/null | grep -q .; then add 15 "受け箱の mount" 合格 "${src}、seal、目印 .nda-box あり"
     else add 15 "受け箱の mount" 不合格 "${src} は mount されたが目印 .nda-box が無い（事務所側が置く）"; fi
   fi
 
+  # 16 出来事の記録の置き場（nda-app と聞き役の nda の両方が書ける）
+  if [ ! -d "$LOG_DIR" ]; then add 16 "出来事の記録" 不合格 "${LOG_DIR} が無い（50-service.sh）"
+  else
+    st=$(stat -c '%U:%G %a' "$LOG_DIR")
+    probe="$LOG_DIR/.verify-$$"
+    if [ "$st" != "nda-app:nda 2770" ]; then add 16 "出来事の記録" 不合格 "${LOG_DIR} が ${st}（期待 nda-app:nda 2770）"
+    elif ! ( umask 077; : > "$probe" ) 2>/dev/null; then add 16 "出来事の記録" 不合格 "nda（聞き役）が ${LOG_DIR} に書けない（再ログインか再起動の後に流し直す）"
+    else
+      rm -f "$probe"
+      today=$(date +%F)
+      ev=$([ -e "$LOG_DIR/events-$today.jsonl" ] && stat -c '%U' "$LOG_DIR/events-$today.jsonl" || echo なし)
+      li=$([ -e "$LOG_DIR/listener-$today.jsonl" ] && stat -c '%U' "$LOG_DIR/listener-$today.jsonl" || echo なし)
+      add 16 "出来事の記録" 合格 "${st}、nda が書ける。今日の本体の記録: ${ev}、聞き役の記録: ${li}（一周の後にどちらも出る）"
+    fi
+  fi
   printf '%-2s | %-22s | %-4s | %s\n' '#' 項目 結果 詳細
   printf -- '---|------------------------|------|------\n'
   for r in "${rows[@]}"; do

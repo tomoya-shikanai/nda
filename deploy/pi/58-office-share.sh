@@ -4,6 +4,8 @@
 #   systemd の mount と automount のユニットにする（x-systemd.automount と同じ形）。触れたときに mount するので、
 #   Pi の起動時に事務所の PC が止まっていても、後で PC が上がれば次の書き込みでつながる。
 #   ファイルの持ち主は nda-app（本体が書く）、グループは nda（90-verify.sh が目印を読める）。
+#   通り道は暗号化する（seal。事務所の PC 側も Set-SmbShare -EncryptData $true。README の「鹿内さんがやる設定」）。
+#   名前の解決（.local・NetBIOS）は同じ LAN の中でなりすませる。解決した IP を出すので、鹿内さんが PC の IP と同じか確かめる。
 #   資格情報は /etc/nda/office-share.cred（root:root 600。鹿内さんが書く。このスクリプトは中身を読まない）:
 #       username=<事務所の PC の共有用のユーザー>
 #       password=<そのパスワード>
@@ -14,7 +16,7 @@
 #                      だめなら NetBIOS（nmblookup）で IP を引く（そのときは IP で mount する。DHCP で変わるなら予約する）
 #   NDA_OFFICE_SHARE   （必須）共有名（\\<PC>\<共有名> の後ろ。受け箱 C:\nda\box\in を共有した名前）
 #   NDA_OFFICE_SUBDIR  共有の中の受け箱の位置（既定 空 = 共有の一番上が受け箱）
-#   NDA_OFFICE_SMB_VERS SMB の版（既定 3.0。SMB1 は使わない）
+#   NDA_OFFICE_SMB_VERS SMB の版（既定 3.0。3.0・3.02・3.1.1・3 だけ許す。暗号化（seal）に 3.0 以上が要る）
 # 実機で確かめる:
 #   - <PC 名>.local が Pi から引けるか（getent hosts）。Windows の mDNS の応答は版で違う
 #   - 共有の権限（共有用のユーザーが受け箱に書けて名前を変えられる）。目印 .nda-box が見えるか
@@ -34,6 +36,7 @@ main() {
     say "[失敗] NDA_OFFICE_HOST と NDA_OFFICE_SHARE が要る（例: ssh nda-pi 'NDA_OFFICE_HOST=JIMUSHO-PC NDA_OFFICE_SHARE=nda-box bash -s' < deploy/pi/58-office-share.sh）"
     exit 1; }
   case "$SHARE$SUBDIR" in *[[:space:]\\\'\"]*) say "[失敗] 共有名と SUBDIR に空白・\\・引用符は使えない"; exit 1 ;; esac
+  case "$VERS" in 3|3.0|3.02|3.1.1) ;; *) say "[失敗] NDA_OFFICE_SMB_VERS=${VERS} は使わない（3.0 以上だけ。暗号化に要る）"; exit 1 ;; esac
   sudo -n true 2>/dev/null || { say "[失敗] パスワードなしの sudo が使えない"; exit 1; }
   id nda-app >/dev/null 2>&1 || { say "[失敗] nda-app が無い（先に 50-service.sh）"; exit 1; }
 
@@ -58,6 +61,9 @@ main() {
     server=$ip; say "[警告] mDNS で引けず、NetBIOS で ${ip} を得た。IP で mount する（DHCP で変わるなら予約する）"
   fi
 
+  ip_now=$(getent ahostsv4 "$server" 2>/dev/null | awk 'NR==1{print $1}' || true)
+  say "[確認] 宛先 ${server} は今 ${ip_now:-$server} に解決された。事務所の PC の IP（PC で ipconfig）と同じかを鹿内さんに確かめてもらう（違えば止める）"
+
   # --- 資格情報（権限だけ見る） ---
   if sudo test -f "$CRED"; then
     st=$(sudo stat -c '%U:%G %a' "$CRED")
@@ -71,7 +77,7 @@ main() {
   [ -d "$MNT" ] || findmnt -n "$MNT" >/dev/null 2>&1 || { sudo install -d -m 755 "$MNT"; say "[変更] ${MNT} を作った"; }
   name=$(systemd-escape -p "$MNT")
   app_uid=$(id -u nda-app); nda_gid=$(id -g nda)
-  opts="credentials=${CRED},vers=${VERS},uid=${app_uid},gid=${nda_gid},file_mode=0640,dir_mode=0750,iocharset=utf8,noserverino,_netdev,nofail"
+  opts="credentials=${CRED},vers=${VERS},seal,uid=${app_uid},gid=${nda_gid},file_mode=0640,dir_mode=0750,iocharset=utf8,noserverino,_netdev,nofail"
   mount_unit=$(cat <<UNIT
 # deploy/pi/58-office-share.sh が管理する（手で編集しない）
 [Unit]
