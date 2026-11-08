@@ -53,17 +53,16 @@ main() {
   cardid=$(printf '%s' "$cardline" | sed -E 's/^ *[0-9]+ \[([^] ]+) *\].*/\1/')
   say "[情報] ALSA カード: 番号 ${cardno} / ID ${cardid}"
 
-  # --- 1. カード順の固定 ---
-  modconf="options snd_usb_audio index=0 vid=${vid} pid=${pid}"
-  if install_file /etc/modprobe.d/nda-audio.conf "$modconf"; then
-    say "[変更] /etc/modprobe.d/nda-audio.conf: ${modconf}（再起動後に効く）"
-    reboot_needed=1
+  # --- 1. カード番号は固定しない ---
+  # 以前は snd_usb_audio に index=0 を渡していたが、Pi 5 では 0 番を HDMI（vc4hdmi0）が先に取るため、
+  # 再起動の後に Jabra の登録そのものが失敗した（dmesg: cannot find the slot for index 0, error -16。2026-11-08）。
+  # 下の asound.conf は CARD=<ID> の名前で Jabra を指すので、番号は要らない。
+  reboot_needed=0
+  if [ -f /etc/modprobe.d/nda-audio.conf ]; then
+    sudo rm -f /etc/modprobe.d/nda-audio.conf
+    say "[変更] /etc/modprobe.d/nda-audio.conf を消した（index=0 の固定は Jabra の登録を壊すため）"
   else
-    say "[済] /etc/modprobe.d/nda-audio.conf"
-    reboot_needed=0
-  fi
-  if [ "$cardno" != "0" ]; then
-    say "[要再起動] 今の Jabra はカード ${cardno}。固定の設定は再起動後に効く（再起動は鹿内さんに伝えてから）"
+    say "[済] カード番号は固定しない（名前で指す）"
   fi
 
   # --- 2. 既定の機器と変換 ---
