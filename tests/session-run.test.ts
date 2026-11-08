@@ -293,7 +293,10 @@ test("(7) route: 不正な body は 400、POST は 201、GET current は同じ i
   // 何も無いときの current
   const empty = await current.GET(new Request("http://localhost/api/session/current"));
   assert.equal(empty.status, 200);
-  assert.deepEqual(await empty.json(), toMonitorView(null));
+  // 見回りの view には聞き役の状態（listener）が足される（tests/listener-state.test.ts）。ほかは同じ
+  const { listener: idle, ...emptyView } = await empty.json();
+  assert.equal(idle.state, "idle");
+  assert.deepEqual(emptyView, toMonitorView(null));
 
   assert.equal((await post.POST(req("{"))).status, 400);
   assert.equal((await post.POST(req(JSON.stringify({})))).status, 400);
@@ -312,7 +315,8 @@ test("(7) route: 不正な body は 400、POST は 201、GET current は同じ i
 
   const cur = await current.GET(new Request("http://localhost/api/session/current"));
   assert.equal(cur.status, 200);
-  const curView = (await cur.json()) as ReturnType<typeof toMonitorView>;
+  const { listener, ...curView } = (await cur.json()) as ReturnType<typeof toMonitorView>;
+  assert.equal(listener?.state, "idle");
   assert.equal(curView.id, body.id);
   assert.deepEqual(curView, body.view);
 

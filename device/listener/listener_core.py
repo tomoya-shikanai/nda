@@ -9,6 +9,7 @@ import json
 import math
 import os
 import stat
+import statistics
 import uuid
 import wave
 from array import array
@@ -81,8 +82,8 @@ class Endpointer:
 
     silence_rms: float = 500.0
     silence_sec: float = 1.5
-    max_sec: float = 30.0
-    first_voice_sec: float = 5.0
+    max_sec: float = 15.0
+    first_voice_sec: float = 8.0
     elapsed: float = 0.0
     quiet: float = 0.0
     spoke: bool = False
@@ -121,6 +122,64 @@ def beep_pcm(rate: int = RATE, freq: float = 880.0, sec: float = 0.15, volume: f
         env = min(1.0, i / ramp, (n - 1 - i) / ramp)
         a.append(int(32767 * volume * env * math.sin(2 * math.pi * freq * i / rate)))
     return a.tobytes()
+
+
+def tone_pcm(
+    rate: int = RATE, f0: float = 880.0, f1: float | None = None, sec: float = 0.15, volume: float = 0.3
+) -> bytes:
+    """1 音（f0 から f1 へ周波数を滑らかに変える。f1 が無ければ一定）。端は 10ms で上げ下げする。16bit モノラルの PCM。"""
+    f1 = f0 if f1 is None else f1
+    n = int(rate * sec)
+    ramp = max(1, int(rate * 0.01))
+    a = array("h")
+    phase = 0.0
+    for i in range(n):
+        env = min(1.0, i / ramp, (n - 1 - i) / ramp)
+        f = f0 + (f1 - f0) * i / max(1, n - 1)
+        phase += 2 * math.pi * f / rate
+        a.append(int(32767 * volume * env * math.sin(phase)))
+    return a.tobytes()
+
+
+CUES = ("wake", "end")
+
+
+def cue_pcm(kind: str, rate: int = RATE) -> bytes:
+    """合図音。wake（起動語を聞いた。短い上がりの 2 音）と end（録音の終わり。下がりの 1 音）を分ける。"""
+    if kind == "wake":
+        gap = b"\x00\x00" * int(rate * 0.05)
+        return tone_pcm(rate, 660.0, sec=0.12) + gap + tone_pcm(rate, 990.0, sec=0.12)
+    if kind == "end":
+        return tone_pcm(rate, 880.0, 440.0, sec=0.3)
+    raise ValueError(f"合図の種類が違う: {kind!r}")
+
+
+def paplay_cmd(rate: int = RATE) -> list[str]:
+    """PipeWire（PulseAudio 互換）の既定のシンクへ、stdin の raw の PCM を鳴らすコマンド。"""
+    return ["paplay", "--raw", f"--rate={rate}", "--format=s16le", "--channels=1"]
+
+
+def ambient_threshold(levels: list[float], floor: float = 500.0, factor: float = 2.5) -> float:
+    """無音の閾値を周りの音に合わせる: max(floor, 周りの RMS の中央値 × factor)。周りが無ければ floor。"""
+    xs = [x for x in levels if isinstance(x, (int, float)) and math.isfinite(x)]
+    if not xs:
+        return float(floor)
+    return max(float(floor), statistics.median(xs) * factor)
+
+
+LISTENER_STATES = ("listening", "sending", "idle")
+
+
+def state_body(state: str, until: float | None = None) -> bytes:
+    """本体に聞き役の状態を知らせる body（POST /api/listener/state）。until は残りの秒（listening のとき）。"""
+    if state not in LISTENER_STATES:
+        raise ValueError(f"状態が違う: {state!r}")
+    body: dict[str, object] = {"state": state}
+    if until is not None:
+        if not (isinstance(until, (int, float)) and math.isfinite(until) and 0 < until <= 120):
+            raise ValueError(f"until が違う: {until!r}")
+        body["until"] = round(float(until), 1)
+    return json.dumps(body).encode()
 
 
 def multipart(fields: dict[str, str], file_field: str, filename: str, content_type: str, data: bytes) -> tuple[bytes, str]:
@@ -167,6 +226,8 @@ LISTENER_EVENTS: dict[str, dict[str, object]] = {
     "wake": {"conf": "num", "accepted": "bool", "minConf": "num"},
     # 録音（秒・声が出たか）
     "record": {"sec": "num", "spoke": "bool"},
+    # 録音に使った無音の閾値と、起動語の前の周りの音（RMS の中央値）
+    "level": {"threshold": "num", "ambient": "num"},
     # 送信（ms・HTTP の状態コード。届かなければ None・結果の種類）
     "send": {"ms": "num", "status": "int?", "result": SEND_RESULTS},
 }

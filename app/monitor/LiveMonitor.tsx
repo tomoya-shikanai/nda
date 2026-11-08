@@ -1,6 +1,7 @@
 "use client";
 
-// 工場のモニター（本番の配線）。2 秒ごとに /api/session/current の MonitorView を読んで出す。
+// 工場のモニター（本番の配線）。2 秒ごとに /api/session/current の MonitorView を読んで出す（聞き役が聞いている・送っている間は 0.5 秒ごと）。
+// 聞き役が起動語の後に聞いている間は、画面いっぱいの帯「話してください」と残り秒を出す（父がいつ話してよいか分かるように）。
 // 金額は view の値だけを出す（計算しない）。読めないときは前の表示のまま「つながっていません」を出す。
 // states.ts は node:fs を使う store を import するので、ここでは型だけを使い、文言は page から受け取る。
 // 1920×1080 で明細の合計が必ず見えるよう、吹き出しと確認事項の帯の高さに上限を置き、明細の行は詰めるかスクロールし、
@@ -17,6 +18,8 @@ import type { FaceKey, LabelKey } from "./states";
 const AFTER_FACE: Record<string, FaceKey> = { sending: "drafting", sent: "drafting", entered: "done", stopped: "asking" };
 
 const POLL_MS = 2000;
+/** 聞き役が聞いている・送っている間は、合図と残り秒を遅らせないよう速く読む。 */
+const POLL_FAST_MS = 500;
 /** これより行が多ければ明細を詰める。 */
 const DENSE_LINES = 4;
 
@@ -121,7 +124,9 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<LabelKey,
 
   useEffect(() => {
     let alive = true;
+    let t: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
+      let fast = false;
       try {
         const res = await fetch("/api/session/current", { cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -131,15 +136,16 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<LabelKey,
         setView(json);
         setLoaded(true);
         setOffline(false);
+        fast = json.listener !== undefined && json.listener.state !== "idle";
       } catch {
         if (alive) setOffline(true);
       }
+      if (alive) t = setTimeout(() => void load(), fast ? POLL_FAST_MS : POLL_MS);
     };
     void load();
-    const t = setInterval(() => void load(), POLL_MS);
     return () => {
       alive = false;
-      clearInterval(t);
+      clearTimeout(t);
     };
   }, [labels]);
 
@@ -265,6 +271,18 @@ export default function LiveMonitor({ labels, hint }: { labels: Record<LabelKey,
           </div>
         </div>
       </section>
+
+      {view.listener?.state === "listening" && (
+        <div className={styles.cue} role="status" aria-live="assertive">
+          <p className={styles.cueMain}>🎤 話してください（聞いています）</p>
+          {view.listener.remainingSec !== null && <p className={styles.cueSec}>あと {view.listener.remainingSec} 秒</p>}
+        </div>
+      )}
+      {view.listener?.state === "sending" && (
+        <div className={`${styles.cue} ${styles.cueSending}`} role="status" aria-live="polite">
+          <p className={styles.cueMain}>送っています…</p>
+        </div>
+      )}
 
       <audio ref={audioRef} preload="none" />
 
