@@ -51,6 +51,8 @@ export const AnswerAction = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("approve") }),
   /** 返事の 4 桁を含む文で、事務所に客の照合を問い合わせた（原文は残さない。queryId だけ）。 */
   z.object({ kind: z.literal("askOffice"), queryId: z.string() }),
+  /** 声の指示の道（#56）で、返事の 4 桁を客の手がかりとして受けた（原文も 4 桁も残さない。手がかりはメモリにだけある）。 */
+  z.object({ kind: z.literal("customerClue") }),
   /**
    * 明細が 0 行の作業への返事を、作業の話の続きとして文字起こしの後ろに足して抽出し直した（run.ts の continueSession）。
    * offsetSec は足した発話を後ろにずらした秒数。文字起こしの時刻 − offsetSec が、返事の録音（provenance.recordingId）の時刻。
@@ -104,6 +106,7 @@ const SessionSchema = z.object({
   /** 前の版のファイルには無いので、無ければ客の照合なし。 */
   customerRequired: z.boolean().default(false),
   customer: z.object({ customerNo: z.string(), carNo: z.string() }).nullable().default(null),
+  customerClueAt: z.string().nullable().default(null),
   customerQuery: z
     .object({
       id: z.string(),
@@ -124,6 +127,8 @@ const SessionSchema = z.object({
       result: z
         .object({ id: z.string(), outcome: z.string(), reason: z.string().nullable(), enteredLines: z.number(), at: z.string() })
         .nullable(),
+      message: z.enum(["invoice.request", "estimate.instruction"]).optional(),
+      slipKind: z.enum(["invoice", "estimate"]).optional(),
     })
     .nullable()
     .default(null),
@@ -149,6 +154,10 @@ export type OfficeState = {
   /** 置けなかった理由（固定の文と種類名だけ）。 */
   lastError: string | null;
   result: { id: string; outcome: string; reason: string | null; enteredLines: number; at: string } | null;
+  /** 置いたメッセージの種類。無ければ invoice.request（前の版）。 */
+  message?: "invoice.request" | "estimate.instruction";
+  /** 声の指示の伝票の種類（送り直しでも同じ値を使う）。 */
+  slipKind?: "invoice" | "estimate";
 };
 
 export type Session = {
@@ -173,6 +182,11 @@ export type Session = {
   customerRequired: boolean;
   /** 決まった客。番号だけ（label は画面のためにメモリにだけ持つ。lib/office/labels.ts）。 */
   customer: { customerNo: string; carNo: string } | null;
+  /**
+   * 声の指示の道（#56）で客の手がかり（4 桁）を受けた時刻。手がかりの中身はメモリにだけ持つ（lib/office/clues.ts）。
+   * これがあれば客は決まったものとして扱う（客と車は事務所が DB で決める）。
+   */
+  customerClueAt: string | null;
   /** 今の照合の問い合わせ。said（原文）は入れない。 */
   customerQuery: CustomerQueryState | null;
   /** 承認後の入力の依頼と結果。 */
@@ -215,6 +229,7 @@ export function newSession(id: string, now: Date): Session {
     extraction: null,
     customerRequired: false,
     customer: null,
+    customerClueAt: null,
     customerQuery: null,
     office: null,
     appliedIds: [],
@@ -228,7 +243,7 @@ const ALLOWED: Record<SessionStatus, readonly SessionStatus[]> = {
   drafting: ["asking"],
   asking: ["drafting", "done"],
   done: ["sending", "stopped"],
-  sending: ["sent"],
+  sending: ["sent", "stopped"],
   sent: ["entered", "stopped"],
   entered: [],
   stopped: [],
