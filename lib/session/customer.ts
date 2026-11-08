@@ -7,10 +7,15 @@ import type { Question } from "../invoice/questions";
 /** 客を聞く質問（候補の名前・ナンバーは出さない）。 */
 export const CUSTOMER_QUESTION = "お客様の名前とナンバーの下4桁をお願いします";
 
-type CustomerFields = { customerRequired: boolean; customer: { customerNo: string; carNo: string } | null };
+type CustomerFields = {
+  customerRequired: boolean;
+  customer: { customerNo: string; carNo: string } | null;
+  /** 声の指示の道（#56）で客の手がかりを受けた時刻。あれば客は決まったものとして扱う（客と車は事務所が決める）。 */
+  customerClueAt?: string | null;
+};
 
-/** 客の照合が有効で、まだ決まっていないか。 */
-export const customerPending = (s: CustomerFields): boolean => s.customerRequired && s.customer === null;
+/** 客の照合が有効で、まだ決まっていないか（番号も手がかりも無い）。 */
+export const customerPending = (s: CustomerFields): boolean => s.customerRequired && s.customer === null && !s.customerClueAt;
 
 /** 明細の確認事項の数に、客が未定なら 1 を足した数。承認・done・画面の承認待ちはこれで見る。 */
 export function pendingCount(s: CustomerFields & { invoice: { confirmations: unknown[] } | null }): number {

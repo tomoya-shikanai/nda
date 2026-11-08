@@ -21,8 +21,9 @@ import { type Segment, type Transcript, TranscriptSchema } from "../stt/types";
 import { maskCustomerInfo } from "../customer/match";
 import { MODEL_MAIN } from "../claude";
 import { errorKind, logEvent } from "../log/events";
-import { buildCustomerQuery, pendingQuery } from "../office/flow";
-import { type OfficeLink, sendQuery, submitInvoice } from "../office/link";
+import { getClue, setClue } from "../office/clues";
+import { buildCustomerQuery, customerClue, pendingQuery } from "../office/flow";
+import { modeOf, type OfficeLink, sendQuery, submitInvoice } from "../office/link";
 import { answerBase, answerSession } from "./answer";
 import { customerPending, withCustomerQuestion } from "./customer";
 import { isApproval } from "./approval";
@@ -63,7 +64,7 @@ async function extractWithCost(
 }
 
 /** 抽出の結果から、明細・質問・参照を組む（startSession と continueSession で同じ）。 */
-function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[], c: Pick<Session, "customerRequired" | "customer">) {
+function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[], c: Pick<Session, "customerRequired" | "customer" | "customerClueAt">) {
   const { candidates } = out;
   // 言い換えの言葉の行を補う（足した参照も保存する。答えの後の組み直しが同じ行を作るため）
   const refs = addAmbiguousLines(out, t, ledger);
@@ -131,8 +132,9 @@ export async function startSession(x: {
   const id = x.id ?? randomUUID();
   const segs = x.transcript.segments;
   // 原文は問い合わせ（メモリ）にだけ入れ、作業には伏せ字にした文字起こしだけを入れる
+  const instruction = office !== null && modeOf(office) === "instruction";
   const query =
-    office === null || segs.length === 0
+    office === null || instruction || segs.length === 0
       ? null
       : buildCustomerQuery({
           id: randomUUID(),
@@ -141,10 +143,14 @@ export async function startSession(x: {
           from: { recordingId: x.transcript.recordingId, startSec: segs[0].startSec, endSec: Math.max(...segs.map((g) => g.endSec)) },
           now: now(),
         });
+  // 声の指示の道（#56）: 問い合わせず、話に 4 桁があればその場で手がかりとしてメモリにだけ持つ
+  const clue = instruction ? customerClue(segs.map((g) => g.text)) : null;
+  if (clue !== null) setClue(id, clue);
   const transcript = maskSegments(x.transcript);
   let s: Session = {
     ...newSession(id, now()),
     customerRequired: office !== null,
+    customerClueAt: clue === null ? null : now().toISOString(),
     customerQuery: query ? pendingQuery(query) : null,
   };
   s = transition(s, "listening", now());
@@ -237,6 +243,7 @@ export async function continueSession(x: {
  * それ以外と承認の言葉は従来どおり answerSession（承認の言葉は抽出し直さない）。
  * 返事は先に名前らしい部分と 4 桁を伏せ字にする。客が未定で事務所がつながっていて、返事に 4 桁を含む文があれば、
  * その文の原文で照合を問い合わせて終わる（答えは reply の route が当てる）。承認したら、すぐ入力の依頼を受け箱に置く（§9-2）。
+ * 声の指示の道（#56）では問い合わせず、4 桁があればその場で手がかりとして受ける（replyInstruction）。承認したら声の指示を置く。
  */
 type ReplyInput = {
   dir: string;
@@ -261,7 +268,11 @@ async function replyLocked(x: ReplyInput): Promise<Session> {
   const office = x.office ?? null;
   const s = x.session;
   const utterance = { ...x.utterance, text: maskCustomerInfo([x.utterance.text])[0] };
-  if (office !== null && s.customerRequired && customerPending(s)) {
+  if (office !== null && modeOf(office) === "instruction" && s.customerRequired) {
+    const r = await replyInstruction({ ...x, office }, s, utterance, now);
+    if (r !== null) return r;
+  }
+  if (office !== null && modeOf(office) === "query" && s.customerRequired && customerPending(s)) {
     if (s.status !== "asking") throw new Error(`asking でないので答えを受けられない: ${s.status}`);
     const base = answerBase(s, utterance, now());
     const query = buildCustomerQuery({
@@ -290,3 +301,42 @@ async function replyLocked(x: ReplyInput): Promise<Session> {
   if (office !== null && next.status === "done") return submitInvoice(x.dir, office, next, now());
   return next;
 }
+
+/**
+ * 声の指示の道（#56）の客の扱い。当てたら作業を返し、当てるものが無ければ null（従来の answerSession に任せる）。
+ * - 客が未定で、返事に 4 桁がちょうど 1 つあれば、原文の手がかりをメモリにだけ持ち、確認事項の客を消す（答えは customerClue。原文は残さない）。
+ * - 手がかりを受けたのに承認の時にメモリから消えていたら（再起動）、承認せずに客の質問へ戻す（送らない）。
+ */
+async function replyInstruction(x: ReplyInput, s: Session, utterance: Segment, now: () => Date): Promise<Session | null> {
+  if (s.status !== "asking") return null;
+  const base = answerBase(s, utterance, now());
+  if (customerPending(s)) {
+    const clue = customerClue([x.utterance.text]);
+    if (clue === null) return null;
+    setClue(s.id, clue);
+    const answer: Answer = {
+      ...base,
+      questionIndex: s.questions.findIndex((q) => q.reason === "customer"),
+      lineIndex: -1,
+      action: { kind: "customerClue" },
+    };
+    const decided: Session = { ...s, customerClueAt: base.at, answers: [...s.answers, answer], updatedAt: base.at };
+    const next = { ...decided, questions: withCustomerQuestion(s.questions, decided) };
+    await writeSession(x.dir, next);
+    return next;
+  }
+  if (s.customerClueAt !== null && s.customer === null && getClue(s.id) === null && isApproval(utterance.text)) {
+    const lost: Session = { ...s, customerClueAt: null, updatedAt: base.at };
+    const next: Session = {
+      ...lost,
+      questions: withCustomerQuestion(s.questions, lost),
+      answers: [...s.answers, { ...base, questionIndex: -1, lineIndex: -1, action: { kind: "unread", reason: CLUE_LOST } }],
+    };
+    await writeSession(x.dir, next);
+    return next;
+  }
+  return null;
+}
+
+/** 手がかりが消えていて承認しなかった答えの理由（画面の声が客の質問を言い直す）。 */
+export const CLUE_LOST = "客の手がかりが無い";

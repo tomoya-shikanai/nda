@@ -4,12 +4,23 @@
  * - 事務所の返し（customer.answer・invoice.result）を作業に当てる（二重の id・待っていない答えは当てない）
  * - 承認済みの作業から入力の依頼（invoice.request）を組む（値が 1 つでも欠ければ組まない）
  * - 照合の期限と、依頼の送り直しの判定
+ * - 声の指示（estimate.instruction、#56）: 客の返事の原文から手がかりを拾い、承認済みの明細から作業の文を組む
  */
 import { plateSentences } from "../customer/match";
 import { withCustomerQuestion } from "../session/customer";
 import { keptLines } from "../session/kept";
 import { type Session, transition } from "../session/store";
-import { type CustomerQuery, type InvoiceRequest, InvoiceRequest as InvoiceRequestSchema, type ToFactory } from "./schema";
+import type { CustomerClue } from "./clues";
+import {
+  APPROVAL_WORDS,
+  type CustomerQuery,
+  type EstimateInstruction,
+  EstimateInstruction as EstimateInstructionSchema,
+  type InvoiceRequest,
+  InvoiceRequest as InvoiceRequestSchema,
+  type SLIP_KINDS,
+  type ToFactory,
+} from "./schema";
 
 /** 照合の答えを待つ秒数。過ぎたら客の質問に戻る（§4）。事務所にも同じ秒数で答えを打ち切ってもらう。 */
 export const QUERY_TIMEOUT_SEC = 10;
@@ -206,4 +217,121 @@ export function markRetrying(s: Session, now: Date): Session {
 export function sendError(e: unknown): string {
   const kind = e instanceof Error ? e.constructor.name || e.name : typeof e;
   return `受け箱に置けませんでした（${kind}）`;
+}
+
+// --- 声の指示（estimate.instruction、#56） ---
+
+export type SlipKind = (typeof SLIP_KINDS)[number];
+
+const DIGIT_FORMS: Record<string, string> = {
+  "0": "0０〇零",
+  "1": "1１一",
+  "2": "2２二",
+  "3": "3３三",
+  "4": "4４四",
+  "5": "5５五",
+  "6": "6６六",
+  "7": "7７七",
+  "8": "8８八",
+  "9": "9９九",
+};
+
+/** 文からナンバーの 4 桁（算用数字・全角・漢数字、間の空白と「-」も）を除く。 */
+function withoutPlate(text: string, plate: string): string {
+  const pat = [...plate].map((d) => `[${DIGIT_FORMS[d]}]`).join("[\\s\\-－‐]*");
+  return text.replace(new RegExp(pat, "g"), " ");
+}
+
+/**
+ * 客の返事の原文から手がかりを拾う。4 桁の数がちょうど 1 つの時だけ（2 つ以上は決めない。推測で選ばない）。
+ * customerWords は 4 桁を含む文と直前の文から 4 桁を除いた言葉（残りが無ければ入れない）。
+ */
+export function customerClue(texts: string[]): CustomerClue | null {
+  const { said, plate4 } = plateSentences(texts);
+  if (plate4.length !== 1) return null;
+  const plateNo = plate4[0];
+  const words = said
+    .map((t) => withoutPlate(t, plateNo).replace(/\s+/g, " ").replace(/^[\s、。,.]+|[\s、。,.]+$/g, ""))
+    .filter((t) => t !== "")
+    .join("、")
+    .slice(0, 200);
+  return words === "" ? { plateNo } : { plateNo, customerWords: words };
+}
+
+/** 承認済みの明細から作業の文（「タイヤ脱着 4本 550円、エアバルブ交換 4本 330円」）。数量・単価は明細にある値だけ。 */
+export function workText(lines: { item: string; qty: number | null; unit: string | null; unitPrice: number | null }[]): string {
+  return lines
+    .map((l) =>
+      [l.item, l.qty === null ? null : `${l.qty}${l.unit ?? ""}`, l.unitPrice === null ? null : `${l.unitPrice}円`]
+        .filter((x) => x !== null)
+        .join(" ")
+        .replace(/[\r\n]+/g, " "),
+    )
+    .join("、");
+}
+
+/** 承認済みの作業と手がかりから声の指示を組む。手がかり・承認・明細が欠ければ null（推測で埋めない）。 */
+export function buildEstimateInstruction(
+  s: Session,
+  requestId: string,
+  now: Date,
+  clue: CustomerClue | null,
+  slipKind: SlipKind,
+): EstimateInstruction | null {
+  if (clue === null || s.invoice === null || s.approvedAt === null || s.invoice.lines.length === 0) return null;
+  if (!s.answers.some((a) => a.action.kind === "approve")) return null;
+  const r = EstimateInstructionSchema.safeParse({
+    v: 1,
+    id: requestId,
+    sessionId: s.id,
+    sentAt: now.toISOString(),
+    kind: "estimate.instruction",
+    attempt: s.office?.attempt ?? 1,
+    approvedAt: s.approvedAt,
+    approval: APPROVAL_WORDS,
+    vehicle: clue.customerWords === undefined ? { plateNo: clue.plateNo } : { plateNo: clue.plateNo, customerWords: clue.customerWords },
+    slipKind,
+    work: workText(s.invoice.lines),
+  });
+  return r.success ? r.data : null;
+}
+
+/** 手がかりが無い（再起動でメモリから消えた）ので送らない理由。 */
+export const NO_CLUE = "noClue";
+
+/** 声の指示を置く前の状態: done → sending（手がかりが無ければ done → stopped・noClue、組めなければ stopped・invalid）。 */
+export function beginInstruction(
+  s: Session,
+  requestId: string,
+  now: Date,
+  clue: CustomerClue | null,
+  slipKind: SlipKind,
+): { session: Session; instruction: EstimateInstruction | null } {
+  const at = now.toISOString();
+  const office = {
+    requestId,
+    attempt: 1,
+    sentAt: null,
+    firstTriedAt: at,
+    lastTriedAt: at,
+    lastError: null,
+    result: null,
+    message: "estimate.instruction" as const,
+    slipKind,
+  };
+  const withOffice = { ...s, office };
+  const instruction = buildEstimateInstruction(withOffice, requestId, now, clue, slipKind);
+  if (instruction === null) {
+    const result = { id: requestId, outcome: "stopped", reason: clue === null ? NO_CLUE : "invalid", enteredLines: 0, at };
+    return { session: transition({ ...withOffice, office: { ...office, result } }, "stopped", now), instruction: null };
+  }
+  return { session: transition(withOffice, "sending", now), instruction };
+}
+
+/** 送り直しの時に手がかりが消えていた: sending → stopped・noClue。 */
+export function stopNoClue(s: Session, now: Date): Session {
+  if (s.status !== "sending" || s.office === null) return s;
+  const at = now.toISOString();
+  const result = { id: s.office.requestId, outcome: "stopped", reason: NO_CLUE, enteredLines: 0, at };
+  return transition({ ...s, office: { ...s.office, result } }, "stopped", now);
 }

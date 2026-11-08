@@ -632,6 +632,7 @@ test("Codex 2 回目 3: 同時 2 本の承認でも依頼は 1 件だけ置か�
   const { dir, box, s } = await ready();
   process.env.NDA_OFFICE_BOX = box;
   process.env.NDA_OFFICE_BOX_REQUIRE_MOUNT = "0";
+  process.env.NDA_OFFICE_MODE = "query";
   try {
     const route = await import("../app/api/session/[id]/answer/route");
     const approve = () =>
@@ -654,6 +655,7 @@ test("Codex 2 回目 3: 同時 2 本の承認でも依頼は 1 件だけ置か�
   } finally {
     delete process.env.NDA_OFFICE_BOX;
     delete process.env.NDA_OFFICE_BOX_REQUIRE_MOUNT;
+    delete process.env.NDA_OFFICE_MODE;
   }
 });
 

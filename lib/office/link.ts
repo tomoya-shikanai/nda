@@ -6,7 +6,7 @@
  * 書き込みの失敗は BoxWriteError（画面の札を分ける）。受け箱のフォルダは工場が作らない（外れた mount 先に作ってしまうため）。
  * sftp（NDA_OFFICE_SFTP）は口だけで、置かずに失敗する（§9-4 で使わなくなった。同じ LAN でない場合の控え）。
  *
- * 問い合わせの said（原文）は、受け箱に書くためのメモリの上だけに置く。作業ファイルにもログにも書かない。
+ * 問い合わせの said（原文）と声の指示の手がかり（clues.ts）は、受け箱に書くためのメモリの上だけに置く。作業ファイルにもログにも書かない。
  * 作業ファイルの読み書きは「読む → 当てる → 書く」で、同時の書き込みのロックはまだ無い（#47）。
  */
 import { randomBytes, randomUUID } from "node:crypto";
@@ -15,8 +15,11 @@ import { join } from "node:path";
 import { logEvent, since } from "../log/events";
 import { withSessionLock } from "../session/lock";
 import { readSession, type Session, writeSession } from "../session/store";
+import { dropClue, getClue } from "./clues";
 import {
+  beginInstruction,
   beginSending,
+  buildEstimateInstruction,
   buildInvoiceRequest,
   expireQuery,
   markRetrying,
@@ -24,7 +27,9 @@ import {
   markSent,
   queryUnreachable,
   sendError,
+  type SlipKind,
   shouldResend,
+  stopNoClue,
 } from "./flow";
 import { boxFileName, type CustomerQuery, type ToOffice, ToOffice as ToOfficeSchema } from "./schema";
 
@@ -127,14 +132,30 @@ export function sftpBox(target: string): BoxWriter {
   };
 }
 
-export type OfficeLink = { box: BoxWriter; timeoutMs: number };
+/**
+ * 事務所とのやりとりの道（#56）。
+ * - instruction（環境変数の既定）: 客の照合を問い合わせず、返事の 4 桁を手がかりとしてメモリに持ち、承認後に声の指示（estimate.instruction）を置く。
+ *   事務所は返しを送らないので、置けたら sent のまま。
+ * - query: 照合の問い合わせ（customer.query）と入力の依頼（invoice.request）の往復（§3〜§5）。
+ * mode を書かずに組んだ OfficeLink は query（前からの試験）。本番は officeFromEnv が NDA_OFFICE_MODE から決める。
+ */
+export type OfficeMode = "instruction" | "query";
+export type OfficeLink = { box: BoxWriter; timeoutMs: number; mode?: OfficeMode; slipKind?: SlipKind };
 
-/** 環境変数から。NDA_OFFICE_BOX（フォルダ）か NDA_OFFICE_SFTP。どちらも無ければ null（事務所なし。客の照合もしない）。 */
+export const modeOf = (link: OfficeLink | null): OfficeMode => link?.mode ?? "query";
+
+/**
+ * 環境変数から。NDA_OFFICE_BOX（フォルダ）か NDA_OFFICE_SFTP。どちらも無ければ null（事務所なし。客の照合もしない）。
+ * NDA_OFFICE_MODE=query なら往復の道、それ以外は声の指示の道。NDA_OFFICE_SLIP_KIND=estimate なら見積、それ以外は請求書。
+ */
 export function officeFromEnv(env: NodeJS.ProcessEnv = process.env): OfficeLink | null {
+  const mode: OfficeMode = env.NDA_OFFICE_MODE === "query" ? "query" : "instruction";
+  const slipKind: SlipKind = env.NDA_OFFICE_SLIP_KIND === "estimate" ? "estimate" : "invoice";
   if (env.NDA_OFFICE_BOX) {
-    return { box: folderBox(env.NDA_OFFICE_BOX, { requireMount: requireMountFromEnv(env) }), timeoutMs: PUT_TIMEOUT_MS }; // 既定（§9-4）
+    const box = folderBox(env.NDA_OFFICE_BOX, { requireMount: requireMountFromEnv(env) }); // 既定（§9-4）
+    return { box, timeoutMs: PUT_TIMEOUT_MS, mode, slipKind };
   }
-  if (env.NDA_OFFICE_SFTP) return { box: sftpBox(env.NDA_OFFICE_SFTP), timeoutMs: PUT_TIMEOUT_MS };
+  if (env.NDA_OFFICE_SFTP) return { box: sftpBox(env.NDA_OFFICE_SFTP), timeoutMs: PUT_TIMEOUT_MS, mode, slipKind };
   return null;
 }
 
@@ -155,7 +176,7 @@ export async function putMessage(link: OfficeLink, m: ToOffice): Promise<void> {
       sessionId: msg.sessionId,
       message: msg.kind,
       messageId: msg.id,
-      attempt: msg.kind === "invoice.request" ? msg.attempt : null,
+      attempt: msg.kind === "customer.query" ? null : msg.attempt,
       ms: since(t0),
       ok: error === null,
       error,
@@ -196,14 +217,26 @@ export async function sendQuery(dir: string, link: OfficeLink, q: CustomerQuery)
   }
 }
 
-/** 置いて結果を作業に書く（sending → sent か、置けなければ sending のまま理由を残す）。 */
+/**
+ * 置いて結果を作業に書く（sending → sent か、置けなければ sending のまま理由を残す）。
+ * 声の指示は、置くたびに承認済みの作業とメモリの手がかりから組み直す（id は同じ）。手がかりが消えていれば（再起動）送らずに stopped。
+ * 置けたら手がかりを消す（送ったら持たない）。
+ */
 async function putRequest(dir: string, link: OfficeLink, s: Session, now: Date): Promise<Session> {
   const o = s.office;
   if (o === null) return s;
-  const request = buildInvoiceRequest(s, o.requestId, now);
-  if (request === null) return s;
+  let message: ToOffice | null;
+  if (o.message === "estimate.instruction") {
+    const clue = getClue(s.id);
+    if (clue === null) return (await updateSession(dir, s.id, (x) => stopNoClue(x, now))) ?? s;
+    message = buildEstimateInstruction(s, o.requestId, now, clue, o.slipKind ?? "invoice");
+  } else {
+    message = buildInvoiceRequest(s, o.requestId, now);
+  }
+  if (message === null) return s;
   try {
-    await putMessage(link, request);
+    await putMessage(link, message);
+    if (message.kind === "estimate.instruction") dropClue(s.id);
     return (await updateSession(dir, s.id, (x) => markSent(x, o.requestId, now))) ?? s;
   } catch (e) {
     return (await updateSession(dir, s.id, (x) => markSendFailed(x, o.requestId, sendError(e), now))) ?? s;
@@ -211,13 +244,22 @@ async function putRequest(dir: string, link: OfficeLink, s: Session, now: Date):
 }
 
 /**
- * 承認した作業（done）の依頼をすぐ置く（§9-2）。作業の排他の中で読み直し、done でなければ何もしない
+ * 承認した作業（done）の依頼（instruction の道では声の指示）をすぐ置く（§9-2・#56）。作業の排他の中で読み直し、done でなければ何もしない
  * （同時の承認・送り直しで、別 ID の依頼を 2 件置かない）。
  */
 export async function submitInvoice(dir: string, link: OfficeLink, s: Session, now = new Date()): Promise<Session> {
   return withSessionLock(s.id, async () => {
     const cur = (await readSession(dir, s.id)) ?? s;
     if (cur.status !== "done") return cur;
+    if (modeOf(link) === "instruction") {
+      const { session, instruction } = beginInstruction(cur, randomUUID(), now, getClue(cur.id), link.slipKind ?? "invoice");
+      await writeSession(dir, session);
+      if (instruction === null) {
+        dropClue(cur.id);
+        return session;
+      }
+      return putRequest(dir, link, session, now);
+    }
     const { session, request } = beginSending(cur, randomUUID(), now);
     await writeSession(dir, session);
     if (request === null) return session;

@@ -87,6 +87,7 @@ function buildSchemas() {
     "unrelated",
     "approve",
     "askOffice",
+    "customerClue",
     "continue",
     "unread",
   ] as const;
@@ -150,7 +151,7 @@ function buildSchemas() {
     /** 受け箱に置いた（照合の問い合わせ・入力の依頼）。 */
     "office.put": z.object({
       sessionId: Id,
-      message: z.enum(["customer.query", "invoice.request"]),
+      message: z.enum(["customer.query", "invoice.request", "estimate.instruction"]),
       messageId: Id,
       attempt: Count.nullable(),
       ms: Ms,

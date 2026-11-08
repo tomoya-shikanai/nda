@@ -82,6 +82,33 @@ export const InvoiceRequest = Envelope.extend({
 });
 export type InvoiceRequest = z.infer<typeof InvoiceRequest>;
 
+/** 伝票の種類。デモは請求書（納品書）。 */
+export const SLIP_KINDS = ["invoice", "estimate"] as const;
+/** 承認の言葉の種類（固定の文字列。発話の原文は入れない）。 */
+export const APPROVAL_WORDS = "請求書頼む";
+
+/**
+ * 工場→事務所: 声の指示（#56・#26）。事務所は客と車を DB から自分で決め（#55）、作業の文から明細を決めて、保存の手前で止まる。
+ * 客・車の番号は持たない。vehicle は手がかりだけ（plateNo はナンバーの下 4 桁、customerWords は客の返事の原文からナンバーを除いた言葉）。
+ * plateParts（ナンバーの分類・かな）は工場が拾わないので送らない（形は事務所の check_instruction が正。推測で書かない）。
+ * 型は事務所の office/box/message.py の check_instruction が正。工場は送ったら手がかりを持たない（作業ファイルにも書かない）。
+ */
+export const EstimateInstruction = Envelope.extend({
+  kind: z.literal("estimate.instruction"),
+  attempt: z.number().int().positive(),
+  approvedAt: z.string().datetime(),
+  approval: z.literal(APPROVAL_WORDS),
+  vehicle: z.object({
+    plateNo: z.string().regex(/^[0-9]{4}$/),
+    customerWords: z.string().min(1).max(200).optional(),
+    carWords: z.string().min(1).max(200).optional(),
+  }),
+  slipKind: z.enum(SLIP_KINDS),
+  /** 作業の文（改行なし、2000 字まで）。数量・単価は明細にある分だけ。 */
+  work: z.string().min(1).max(2000).regex(/^[^\r\n]*$/),
+});
+export type EstimateInstruction = z.infer<typeof EstimateInstruction>;
+
 export const INVOICE_OUTCOMES = ["entered", "stopped", "deferred", "withdrawn", "saved"] as const;
 export const INVOICE_REASONS = [
   "busy",
@@ -109,7 +136,7 @@ export const InvoiceResult = Envelope.extend({
 });
 export type InvoiceResult = z.infer<typeof InvoiceResult>;
 
-export const ToOffice = z.discriminatedUnion("kind", [CustomerQuery, InvoiceRequest]);
+export const ToOffice = z.discriminatedUnion("kind", [CustomerQuery, InvoiceRequest, EstimateInstruction]);
 export type ToOffice = z.infer<typeof ToOffice>;
 export const ToFactory = z.discriminatedUnion("kind", [CustomerAnswer, InvoiceResult]);
 export type ToFactory = z.infer<typeof ToFactory>;
@@ -122,6 +149,7 @@ export const SCHEMAS = {
   "customer.query": CustomerQuery,
   "customer.answer": CustomerAnswer,
   "invoice.request": InvoiceRequest,
+  "estimate.instruction": EstimateInstruction,
   "invoice.result": InvoiceResult,
   "to-office": ToOffice,
   "to-factory": ToFactory,

@@ -66,13 +66,17 @@ export const SAY = {
   sending: "事務所に送っています",
   sendFailed: (reason: string | null) => `承認しました。事務所に届きません（${unreachableReason(reason)}）。つながったら送ります`,
   sent: "事務所に届きました。入れています",
+  /** 声の指示の道（#56）: 事務所は返しを送らない。 */
+  sentInstruction: "事務所に送りました。保存は人が押してください",
   entered: (n: number) => `${n}行入れました。保存は人が押してください`,
   stopped: (reason: string | null) =>
     reason === "busy"
       ? "事務所のソフトが使用中でした。人が入れてください"
       : reason === "appNotRunning"
         ? "事務所のソフトが開いていません"
-        : "事務所で止まりました。人が入れてください",
+        : reason === "noClue"
+          ? "お客様の手がかりが消えたので送りませんでした。お客様の名前とナンバーの下4桁をもう一度お願いします"
+          : "事務所で止まりました。人が入れてください",
   // 客の照合（§4）
   checking: "お客様を事務所で確かめています",
   noReply: "事務所から返事がありません。名前とナンバーの下4桁をもう一度お願いします",
@@ -104,6 +108,7 @@ const sendFailReason = (lastError: string) => (lastError.includes("BoxMissingErr
 function customerBadge(s: Session | null, label: string | null): string | null {
   if (s === null || !s.customerRequired) return null;
   if (s.customer !== null) return label === null ? "お客様: 決まりました" : `お客様: ${label}`;
+  if (s.customerClueAt) return "お客様: 受けました（事務所で確かめます）";
   const q = s.customerQuery;
   if (q?.status === "pending") return "お客様: 確かめています…";
   if (q?.status === "expired") return "お客様: 事務所から返事がありません";
@@ -129,6 +134,7 @@ function officeBadge(s: Session | null): string | null {
       if (r === "busy") return "止まった: ソフトが使用中";
       if (r === "appNotRunning") return "止まった: ソフトが開いていない";
       if (r === "unknownItem") return "止まった: 品目が見つからない";
+      if (r === "noClue") return "止まった: お客様の手がかりが無い";
       return "止まった";
     }
     default:
@@ -162,7 +168,7 @@ function sayOf(s: Session | null): string {
     case "sending":
       return s.office?.lastError ? SAY.sendFailed(sendFailReason(s.office.lastError)) : SAY.sending;
     case "sent":
-      return SAY.sent;
+      return s.office?.message === "estimate.instruction" ? SAY.sentInstruction : SAY.sent;
     case "entered":
       return SAY.entered(s.office?.result?.enteredLines ?? 0);
     case "stopped":
@@ -175,7 +181,7 @@ export function yenText(n: number | null): string | null {
   return n === null ? null : `¥${n.toLocaleString("ja-JP")}`;
 }
 
-const NOT_ANSWERS = new Set(["unread", "approve", "continue", "askOffice"]);
+const NOT_ANSWERS = new Set(["unread", "approve", "continue", "askOffice", "customerClue"]);
 
 /** label は事務所が返した客の姓と車種（メモリにだけある。lib/office/labels.ts）。無ければ「決まりました」。 */
 export function toMonitorView(s: Session | null, label: string | null = null): MonitorView {
