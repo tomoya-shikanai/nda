@@ -18,7 +18,7 @@ import { toQuestions } from "../invoice/questions";
 import type { InvoiceRefs } from "../invoice/schema";
 import type { LedgerEntry } from "../ledger/lookup";
 import { type Segment, type Transcript, TranscriptSchema } from "../stt/types";
-import { maskCustomerInfo } from "../customer/match";
+import { hasLedgerWord, ledgerWords, maskCustomerInfo } from "../customer/match";
 import { MODEL_MAIN } from "../claude";
 import { errorKind, logEvent } from "../log/events";
 import { getClue, setClue } from "../office/clues";
@@ -112,8 +112,9 @@ async function withLatestOffice(dir: string, s: Session): Promise<Session> {
   return out;
 }
 
-const maskSegments = (t: Transcript): Transcript => {
-  const texts = maskCustomerInfo(t.segments.map((g) => g.text));
+/** 伏せ字。ナンバーの文の隣でも、料金表の品目の語を含む文は残す（抽出に作業を渡す）。 */
+const maskSegments = (t: Transcript, ledger: LedgerEntry[]): Transcript => {
+  const texts = maskCustomerInfo(t.segments.map((g) => g.text), ledgerWords(ledger));
   return { ...t, segments: t.segments.map((g, i) => ({ ...g, text: texts[i] })) };
 };
 
@@ -146,7 +147,7 @@ export async function startSession(x: {
   // 声の指示の道（#56）: 問い合わせず、話に 4 桁があればその場で手がかりとしてメモリにだけ持つ
   const clue = instruction ? customerClue(segs.map((g) => g.text)) : null;
   if (clue !== null) setClue(id, clue);
-  const transcript = maskSegments(x.transcript);
+  const transcript = maskSegments(x.transcript, x.ledger);
   let s: Session = {
     ...newSession(id, now()),
     customerRequired: office !== null,
@@ -267,7 +268,7 @@ async function replyLocked(x: ReplyInput): Promise<Session> {
   const now = x.now ?? (() => new Date());
   const office = x.office ?? null;
   const s = x.session;
-  const utterance = { ...x.utterance, text: maskCustomerInfo([x.utterance.text])[0] };
+  const utterance = { ...x.utterance, text: maskCustomerInfo([x.utterance.text], ledgerWords(x.ledger))[0] };
   if (office !== null && modeOf(office) === "instruction" && s.customerRequired) {
     const r = await replyInstruction({ ...x, office }, s, utterance, now);
     if (r !== null) return r;
@@ -323,6 +324,8 @@ async function replyInstruction(x: ReplyInput, s: Session, utterance: Segment, n
     const decided: Session = { ...s, customerClueAt: base.at, answers: [...s.answers, answer], updatedAt: base.at };
     const next = { ...decided, questions: withCustomerQuestion(s.questions, decided) };
     await writeSession(x.dir, next);
+    // 明細が 0 行で、同じ返事に作業も言っていれば（「仮田さん、1111。脱着4本。」）、続けて作業の話として抽出する
+    if (isEmptyDraft(next) && hasLedgerWord(utterance.text, ledgerWords(x.ledger))) return continueSession({ ...x, session: next, utterance });
     return next;
   }
   if (s.customerClueAt !== null && s.customer === null && getClue(s.id) === null && isApproval(utterance.text)) {

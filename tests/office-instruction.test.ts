@@ -341,3 +341,69 @@ test("Codex P1: 期限を過ぎた書き込みが後から失敗したら、書�
   assert.equal(ids.length, 2);
   assert.equal(ids[0], ids[1], "送り直しは同じ id");
 });
+
+// --- 客を先に聞く・最初から全部言える ---
+
+/** 抽出に渡った文字起こしを覚える偽の抽出。 */
+function seeing() {
+  const seen: Transcript[] = [];
+  const extract: Extractor = async (t, l) => {
+    seen.push(t);
+    return extractor(t, l);
+  };
+  return { seen, extract };
+}
+
+test("1 回の発話で客と作業: 手がかり 1 件・明細 2 行、抽出に渡る文に姓と 4 桁が無い", async () => {
+  const { dir, office } = await env();
+  const { seen, extract } = seeing();
+  const s = await startSession({ dir, transcript: fict(["仮田さん、1111。脱着4本、バルブ交換も4本。"]), ledger, extract, office });
+  assert.equal(getClue(s.id)?.plateNo, "1111");
+  assert.equal(s.invoice?.lines.length, 2);
+  const passed = seen.map((t) => t.segments.map((g) => g.text).join("|")).join("|");
+  assert.ok(!passed.includes("仮田") && !passed.includes("1111"), passed);
+  assert.ok(passed.includes("脱着4本") && passed.includes("バルブ交換も4本"), passed);
+  const file = JSON.stringify(await readSession(dir, s.id));
+  assert.ok(!file.includes("仮田") && !file.includes("1111"));
+  assert.ok(!s.questions.some((q) => q.reason === "customer"));
+});
+
+test("客だけ → 0 行で「作業を教えてください」。抽出し直しが失敗したら「もう一度お願いします。作業を教えてください」。続けて作業を言えば明細", async () => {
+  const { dir, office } = await env();
+  const s = await startSession({ dir, transcript: fict(["仮田さん、1111。"]), ledger, extract: extractor, office });
+  assert.equal(s.invoice?.lines.length, 0);
+  assert.equal(s.questions[0].text, "作業を教えてください");
+  assert.equal(toMonitorView(s).say, "作業を教えてください");
+  const s0 = await replySession({ dir, session: s, utterance: say("えーと"), ledger, extract: extractor, office });
+  assert.equal(toMonitorView(s0).say, "作業を教えてください");
+  const failing: Extractor = async () => {
+    throw new TypeError("偽の失敗");
+  };
+  const s1 = await replySession({ dir, session: s0, utterance: say("脱着4本"), ledger, extract: failing, office });
+  assert.equal(toMonitorView(s1).say, "もう一度お願いします。作業を教えてください");
+  const s2 = await replySession({ dir, session: s1, utterance: say("脱着4本"), ledger, extract: extractor, office });
+  assert.equal(s2.invoice?.lines.length, 1);
+});
+
+test("作業だけ → 最初の質問は客。0 行で客も無ければ最初の質問は客、返事に客と作業があれば両方とれる", async () => {
+  const { dir, office } = await env();
+  const s = await startSession({ dir, transcript: fict(["ゴムバルブも替えた。"]), ledger, extract: extractor, office });
+  assert.equal(s.questions[0].reason, "customer");
+  assert.equal(s.questions[0].text, CUSTOMER_QUESTION);
+
+  const e = await startSession({ dir, transcript: fict(["えーと。"]), ledger, extract: extractor, office });
+  assert.equal(e.invoice?.lines.length, 0);
+  assert.equal(toMonitorView(e).say, CUSTOMER_QUESTION);
+  const { seen, extract } = seeing();
+  const e1 = await replySession({ dir, session: e, utterance: say("仮田さん、1111。脱着4本、バルブ交換も4本。"), ledger, extract, office });
+  assert.equal(getClue(e.id)?.plateNo, "1111");
+  assert.equal(e1.invoice?.lines.length, 2);
+  const passed = JSON.stringify(seen);
+  assert.ok(!passed.includes("仮田") && !passed.includes("1111"), passed);
+});
+
+test("事務所なしの 0 行は今のまま「請求する作業はありませんか」", async () => {
+  const dir = await tmp();
+  const s = await startSession({ dir, transcript: fict(["えーと。"]), ledger, extract: extractor });
+  assert.equal(s.questions[0].text, "請求する作業はありませんか");
+});
