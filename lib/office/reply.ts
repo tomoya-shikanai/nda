@@ -6,11 +6,29 @@
  * 応答とログに客の情報を入れない（label はメモリにだけ持つ）。
  */
 import { createHash, timingSafeEqual } from "node:crypto";
+import { type EventFields, logEvent } from "../log/events";
 import { withSessionLock } from "../session/lock";
-import { readSession, sessionDir, writeSession } from "../session/store";
+import { readSession, type Session, sessionDir, writeSession } from "../session/store";
 import { applyToFactory } from "./flow";
 import { setLabel } from "./labels";
 import { ToFactory } from "./schema";
+
+/** 返しを受けた記録（客の番号・label は入れない。種類と ms だけ）。 */
+function logReply(msg: ToFactory, s: Session | null, result: EventFields<"office.reply">["result"], now: Date): void {
+  const sentAt = msg.kind === "customer.answer" ? s?.customerQuery?.sentAt : (s?.office?.sentAt ?? s?.office?.firstTriedAt);
+  const d = sentAt ? now.getTime() - Date.parse(sentAt) : NaN;
+  const a = msg.kind === "customer.answer" ? msg.result : null;
+  logEvent("office.reply", {
+    sessionId: msg.sessionId,
+    messageId: msg.id,
+    message: msg.kind,
+    result,
+    answer: a?.status ?? null,
+    retryReason: a?.status === "retry" ? a.reason : null,
+    outcome: msg.kind === "invoice.result" ? msg.outcome : null,
+    msSinceSent: Number.isFinite(d) && d >= 0 ? d : null,
+  });
+}
 
 const digest = (s: string) => createHash("sha256").update(s, "utf8").digest();
 
@@ -42,8 +60,12 @@ export async function handleOfficeReply(request: Request, now = new Date()): Pro
   // 作業の排他の中で読み直して当てて書く（ほかの経路の書き込みを消さない）
   return withSessionLock(msg.sessionId, async () => {
     const s = await readSession(dir, msg.sessionId);
-    if (s === null) return json({ error: "作業が無い" }, 404);
+    if (s === null) {
+      logReply(msg, null, "noSession", now);
+      return json({ error: "作業が無い" }, 404);
+    }
     const r = applyToFactory(s, msg, now);
+    logReply(msg, s, r.accepted ? (r.duplicate ? "duplicate" : "accepted") : r.why, now);
     if (!r.accepted) return json({ accepted: false, why: r.why });
     if (r.duplicate) return json({ accepted: true, duplicate: true });
     await writeSession(dir, r.session);
