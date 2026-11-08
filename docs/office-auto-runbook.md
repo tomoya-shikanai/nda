@@ -31,3 +31,11 @@
 ## 止まったとき
 - 窓はそのままにする（閉じない・中止しない）。止まった理由は端末に出る（値は出さない）。
 - 入れかけの伝票は、人が保存せずに閉じる。
+
+## コマンド（office フォルダで、venv の python）
+1. 明細だけ（画面は触らない）: `python -m estimator plan --plate <番号> --car サンバー --kind invoice "<作業の文>"`
+2. 確認済みの印: 段 2 の前に、鹿内さんが `inputter/keypath.json`・`inputter/columns.json`・`opener/openpath.json` の confirmed を true にする（試験を回すときは false に戻す）。
+3. 見回りを起動（初回は一覧で止める）: `python -m box run --send --auto --until-list`
+4. 別の端末で指示を置く: `python -m box say --plate <番号> --car サンバー --kind invoice "<作業の文>"`
+5. 一覧の読み方が合っていれば、見回りを `--until-list` なしで起動し直し、もう一度 4 を置く。5 行が入って止まる。
+- 止まったときは、端末の「閉じた」の問いに、人が伝票を保存せずに閉じてから答える。
