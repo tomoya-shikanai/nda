@@ -19,7 +19,7 @@ function logReply(msg: ToFactory, s: Session | null, result: EventFields<"office
   const d = sentAt ? now.getTime() - Date.parse(sentAt) : NaN;
   const a = msg.kind === "customer.answer" ? msg.result : null;
   logEvent("office.reply", {
-    sessionId: msg.sessionId,
+    sessionId: s === null ? null : s.id,
     messageId: msg.id,
     message: msg.kind,
     result,

@@ -70,7 +70,7 @@ class LogTest(unittest.TestCase):
         log_event("said", {"x": 1}, self.dir, NOW)
         got = self.lines()
         self.assertEqual([x["kind"] for x in got], ["log.invalid"] * 6)
-        self.assertEqual(got[-1]["of"], "?")
+        self.assertEqual(got[-1]["of"], "unknown")
         raw = Path(self.dir, "listener-2026-11-08.jsonl").read_text(encoding="utf-8")
         for bad in ("仮田", "1111", "クロード", "said"):
             self.assertNotIn(bad, raw)

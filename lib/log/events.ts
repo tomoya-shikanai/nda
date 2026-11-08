@@ -15,14 +15,61 @@ import { INVOICE_OUTCOMES, INVOICE_REASONS } from "../office/schema";
 import { UNREAD_REASONS } from "../session/answer";
 import { SESSION_STATES } from "../session/store";
 
+/** 記録してよい例外の種類名（実際に出るもの）。ほかは other。 */
+export const ERROR_KINDS = [
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "AbortError",
+  "TimeoutError",
+  "ZodError",
+  "BoxMissingError",
+  "BoxWriteError",
+  "VoicevoxError",
+  // @anthropic-ai/sdk
+  "AnthropicError",
+  "APIError",
+  "APIConnectionError",
+  "APIConnectionTimeoutError",
+  "APIUserAbortError",
+  "BadRequestError",
+  "AuthenticationError",
+  "PermissionDeniedError",
+  "NotFoundError",
+  "ConflictError",
+  "UnprocessableEntityError",
+  "RateLimitError",
+  "InternalServerError",
+  "other",
+] as const;
+export type ErrorKind = (typeof ERROR_KINDS)[number];
+
+/** 出来事の種類（log.invalid の of に使う）。buildSchemas の鍵と同じ（試験で確かめる）。 */
+export const EVENT_KINDS = [
+  "session.created",
+  "session.transition",
+  "session.approved",
+  "session.answer",
+  "session.query",
+  "session.office",
+  "stt",
+  "extract",
+  "office.put",
+  "office.reply",
+  "route.reject",
+  "tts",
+  "log.invalid",
+] as const;
+
 /**
  * 出来事ごとの形。store・answer が記録を import するので（循環）、最初に使う時に組む。
  */
 function buildSchemas() {
-  /** 作業 id・メッセージ id（UUID か英数字と - _）。 */
-  const Id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
-  /** 例外の種類名（TypeError・BoxMissingError など）。識別子の形だけ。 */
-  const ErrorKind = z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/);
+  /** 作業 id・メッセージ id。作業は randomUUID、メッセージは schema.ts が UUID と決めている。それ以外の形（名前を含み得る）は通さない。 */
+  const Id = z.string().uuid();
+  /** 例外の種類名。既知の名前の閉じた enum（errorKind が当てる）。 */
+  const ErrorKind = z.enum(ERROR_KINDS);
   const Ms = z.number().finite().nonnegative();
   const Count = z.number().int().nonnegative();
   const Status = z.enum(SESSION_STATES);
@@ -112,7 +159,8 @@ function buildSchemas() {
     }),
     /** 事務所の返しを受けた。msSinceSent は置いた時から（分からなければ null）。 */
     "office.reply": z.object({
-      sessionId: Id,
+      /** 作業が無い（noSession）なら null（事務所が送った id を残さない）。 */
+      sessionId: Id.nullable(),
       messageId: Id,
       message: z.enum(["customer.answer", "invoice.result"]),
       result: z.enum(["accepted", "duplicate", "stale", "unsupported", "noSession"]),
@@ -130,12 +178,14 @@ function buildSchemas() {
     /** 声（VOICEVOX）。 */
     tts: z.object({ ms: Ms, ok: z.boolean(), error: ErrorKind.nullable() }),
     /** 形が合わずに捨てた行（種類だけ）。 */
-    "log.invalid": z.object({ of: z.string().regex(/^[a-z.]{1,40}$/) }),
+    "log.invalid": z.object({ of: z.enum([...EVENT_KINDS, "unknown"]) }),
   } as const;
 }
 
 type Schemas = ReturnType<typeof buildSchemas>;
 export type EventKind = keyof Schemas;
+/** 試験用: 形を決めた出来事の種類。 */
+export const schemaKinds = () => Object.keys(buildSchemas()).sort();
 export type EventFields<K extends EventKind> = z.input<Schemas[K]>;
 
 let built: Record<string, z.ZodType> | null = null;
@@ -165,19 +215,22 @@ export function logEvent<K extends EventKind>(kind: K, fields: EventFields<K>, n
   const dir = logDir();
   if (dir === null) return;
   try {
-    const r = schemas()[kind].safeParse(fields);
+    const all = schemas();
+    const r = Object.hasOwn(all, kind) ? all[kind].safeParse(fields) : { success: false as const };
     if (r.success) append(dir, now, { t: now.toISOString(), kind, ...(r.data as Record<string, unknown>) });
-    else append(dir, now, { t: now.toISOString(), kind: "log.invalid", of: kind });
+    else append(dir, now, { t: now.toISOString(), kind: "log.invalid", of: (EVENT_KINDS as readonly string[]).includes(kind) ? kind : "unknown" });
   } catch {
     // 記録の失敗で本体を止めない
   }
 }
 
-/** 例外の種類名（中身の文は入れない）。 */
-export function errorKind(e: unknown): string {
-  if (!(e instanceof Error)) return typeof e;
-  const name = e.name && e.name !== "Error" ? e.name : e.constructor.name || "Error";
-  return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) ? name : "Error";
+/** 例外の種類名（中身の文は入れない）。既知の名前でなければ other（Error.name は誰でも書き換えられる）。 */
+export function errorKind(e: unknown): ErrorKind {
+  if (!(e instanceof Error)) return "other";
+  const known = (n: unknown): n is ErrorKind => typeof n === "string" && (ERROR_KINDS as readonly string[]).includes(n);
+  if (known(e.constructor?.name) && e.constructor.name !== "Error") return e.constructor.name;
+  if (known(e.name)) return e.name;
+  return known(e.constructor?.name) ? e.constructor.name : "other";
 }
 
 /** 経過 ms（performance.now の差）。 */

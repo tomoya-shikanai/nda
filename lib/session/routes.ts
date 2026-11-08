@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { type LedgerEntry, ledgerPath, loadLedger } from "../ledger/lookup";
-import { errorKind, logEvent, since } from "../log/events";
+import { type ErrorKind, errorKind, logEvent, since } from "../log/events";
 import { getLabel } from "../office/labels";
 import { officeFromEnv } from "../office/link";
 import { transcribeGemini } from "../stt/gemini";
@@ -66,7 +66,7 @@ const audioSec = (data: Uint8Array): number | null => {
 async function transcribe(form: AudioForm, recordingId: string, purpose: Purpose): Promise<Transcript | Response> {
   const apiKey = process.env[KEY_ENV[form.vendor]];
   const data = new Uint8Array(await form.file.arrayBuffer());
-  const log = (ms: number, error: string | null) =>
+  const log = (ms: number, error: ErrorKind | "noKey" | null) =>
     logEvent("stt", { vendor: form.vendor, purpose, audioSec: audioSec(data), ms, ok: error === null, error });
   if (!apiKey) {
     log(0, "noKey");
@@ -84,8 +84,9 @@ async function transcribe(form: AudioForm, recordingId: string, purpose: Purpose
   }
 }
 
+/** 入口が断った記録。作業が無い（notFound）なら id は記録しない（URL の id は誰でも書ける）。 */
 const reject = (route: Purpose, sessionId: string | null, reason: "notFound" | "notAsking" | "stale" | "unheard" | "extractFailed") =>
-  logEvent("route.reject", { route, sessionId: sessionId !== null && ID_RE.test(sessionId) ? sessionId : null, reason });
+  logEvent("route.reject", { route, sessionId: reason === "notFound" ? null : sessionId, reason });
 
 /** 音声から新しい作業を作る。201 と { id, view }。 */
 export async function startFromAudio(form: AudioForm): Promise<Response> {

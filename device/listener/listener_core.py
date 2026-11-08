@@ -197,7 +197,7 @@ def log_event(kind: str, fields: dict, log_dir: str | None = None, now: datetime
     if _valid(kind, fields):
         line = {"t": now.isoformat(), "kind": kind, **fields}
     else:
-        line = {"t": now.isoformat(), "kind": "log.invalid", "of": kind if kind in LISTENER_EVENTS else "?"}
+        line = {"t": now.isoformat(), "kind": "log.invalid", "of": kind if kind in LISTENER_EVENTS else "unknown"}
     try:
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, f"listener-{now.strftime('%Y-%m-%d')}.jsonl")

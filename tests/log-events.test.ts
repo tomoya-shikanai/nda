@@ -4,6 +4,7 @@
  * 素材は架空の発話・架空の料金表・架空の客の一覧。抽出は偽物（API を呼ばない）。.env は読まない。見るのは自分で作った一時フォルダだけ。
  */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,14 +13,14 @@ import { after, before, test } from "node:test";
 import { CustomerList } from "../lib/customer/match";
 import { enumerateCandidates } from "../lib/invoice/candidates";
 import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
-import { errorKind, eventsFile, localDate, logEvent } from "../lib/log/events";
+import { EVENT_KINDS, errorKind, eventsFile, localDate, logEvent, schemaKinds } from "../lib/log/events";
 import { sessionEvents, unreadCode } from "../lib/log/session";
 import { concerns, formatSummary, stat, summarize, summarizeDay } from "../lib/log/summary";
 import { processBox } from "../lib/office/fake";
-import { BOX_MARKER, folderBox, type OfficeLink } from "../lib/office/link";
+import { BOX_MARKER, BoxMissingError, folderBox, type OfficeLink } from "../lib/office/link";
 import { handleOfficeReply } from "../lib/office/reply";
 import type { ToFactory } from "../lib/office/schema";
-import { answerWith, startFromAudio } from "../lib/session/routes";
+import { answerFromAudio, answerWith, startFromAudio } from "../lib/session/routes";
 import { type Extractor, replySession, startSession } from "../lib/session/run";
 import { readSession } from "../lib/session/store";
 import type { Segment, Transcript } from "../lib/stt/types";
@@ -133,9 +134,9 @@ test("形の合わない出来事は捨てて log.invalid（種類だけ）: 余
   const bad: [string, unknown][] = [
     ["tts", { ms: 1, ok: true, error: null, said: ["仮田さんの1111"] }],
     ["route.reject", { route: "answer", sessionId: "仮田さんの1111", reason: "stale" }],
-    ["session.answer", { sessionId: "s1", questionReason: "qty", action: "unread", unreadReason: "仮田さんの1111が読めない" }],
+    ["session.answer", { sessionId: randomUUID(), questionReason: "qty", action: "unread", unreadReason: "仮田さんの1111が読めない" }],
     ["stt", { vendor: "scribe", purpose: "start", audioSec: 1, ms: 1, ok: false, error: "fetch failed: 仮田 1111" }],
-    ["office.put", { sessionId: "s1", message: "customer.query", messageId: "m1", attempt: null, ms: -1, ok: true, error: null }],
+    ["office.put", { sessionId: randomUUID(), message: "customer.query", messageId: randomUUID(), attempt: null, ms: -1, ok: true, error: null }],
   ];
   for (const [k, f] of bad) logEvent(k as "tts", f as never, now);
   const { raw, rows } = await readLog(logs);
@@ -145,7 +146,7 @@ test("形の合わない出来事は捨てて log.invalid（種類だけ）: 余
   );
   assert.ok(!raw.includes("仮田") && !raw.includes("1111"));
   assert.equal(errorKind(new TypeError("x 仮田")), "TypeError");
-  assert.equal(errorKind("仮田"), "string");
+  assert.equal(errorKind("仮田"), "other");
   assert.equal(unreadCode("抽出に失敗しました（APIError）"), "抽出に失敗");
   assert.equal(unreadCode("数が無い"), "数が無い");
   assert.equal(unreadCode("仮田さん"), "other");
@@ -159,7 +160,7 @@ test("偽の事務所で一周: 作業・抽出・照合・答え・承認・依
     ledger,
     extract: extractor,
     office,
-    id: "log-s1",
+    id: randomUUID(),
   });
   await processBox({ box, customers, post });
   const s1 = await readSession(dir, s0.id);
@@ -345,3 +346,58 @@ test("集計: 中央値・最大、unread の率と理由、起動語の conf �
   assert.match(text, /^# 2026-11-08/);
   assert.match(text, /## 気になる点/);
 });
+
+test("Codex 1: 自由な文字列は id・例外名・of に入らない。無い作業の id は記録しない", async () => {
+  const { logs } = await env();
+  const wav = new Blob([new Uint8Array(8)], { type: "audio/wav" });
+  // 存在しない作業への声の返事・答え（URL の id は誰でも書ける）
+  assert.equal((await answerFromAudio("Yamada_1111", { vendor: "scribe", file: wav })).status, 404);
+  assert.equal((await answerWith("Yamada_1111", say("仮田"))).status, 404);
+  // 存在しない作業への事務所の返し
+  await handleOfficeReply(
+    new Request("http://localhost/api/office/reply", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        v: 1,
+        id: randomUUID(),
+        sessionId: "Yamada_1111",
+        sentAt: new Date().toISOString(),
+        kind: "customer.answer",
+        queryId: randomUUID(),
+        result: { status: "retry", reason: "none" },
+      }),
+    }),
+  );
+  // UUID でない id・名前を書いた例外・知らない種類
+  logEvent("session.created", { sessionId: "Yamada_1111", customerRequired: false });
+  const named = new Error("x");
+  named.name = "Yamada_1111";
+  class Yamada1111 extends Error {}
+  assert.equal(errorKind(named), "Error", "name に書いた名前は残さず、型の Error だけ");
+  assert.equal(errorKind(new Yamada1111("x")), "Error", "知らない型の名前は残さず、name の Error だけ");
+  assert.equal(errorKind(new BoxMissingError("x")), "BoxMissingError");
+  const abort = new Error("x");
+  abort.name = "AbortError";
+  assert.equal(errorKind(abort), "AbortError");
+  logEvent("tts", { ms: 1, ok: false, error: "Yamada_1111" as never });
+  logEvent("Yamada_1111" as never, {} as never);
+  logEvent("toString" as never, {} as never);
+
+  const { raw, rows } = await readLog(logs);
+  assert.ok(!raw.includes("Yamada") && !raw.includes("1111") && !raw.includes("仮田"), raw);
+  assert.deepEqual(
+    rows.map((r) => [r.kind, "sessionId" in r ? r.sessionId : r.of]),
+    [
+      ["route.reject", null],
+      ["route.reject", null],
+      ["office.reply", null],
+      ["log.invalid", "session.created"],
+      ["log.invalid", "tts"],
+      ["log.invalid", "unknown"],
+      ["log.invalid", "unknown"],
+    ],
+  );
+  assert.deepEqual([...EVENT_KINDS].sort(), schemaKinds(), "of の enum は出来事の種類と同じ");
+});
+
