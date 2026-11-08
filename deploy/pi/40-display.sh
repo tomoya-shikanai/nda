@@ -79,7 +79,7 @@ prefs="\$HOME/.config/chromium/Default/Preferences"
 [ -f "\$prefs" ] && sed -i 's/"exited_cleanly":false/"exited_cleanly":true/; s/"exit_type":"Crashed"/"exit_type":"Normal"/' "\$prefs"
 exec ${browser} --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble \\
   --no-first-run --disable-translate --overscroll-history-navigation=0 \\
-  --autoplay-policy=no-user-gesture-required \\
+  --autoplay-policy=no-user-gesture-required --password-store=basic \\
   --ozone-platform=wayland "\$URL"
 KIOSK
 )
