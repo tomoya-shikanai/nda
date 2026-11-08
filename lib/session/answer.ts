@@ -21,7 +21,7 @@ import { CORRECTION_CUES, COUNT_UNITS, NEGATION_CUES, resolveInvoice } from "../
 import type { InvoiceLine, InvoiceRefs } from "../invoice/schema";
 import { choicesOf, findEntry, itemKey, type LedgerEntry } from "../ledger/lookup";
 import type { Segment, Transcript } from "../stt/types";
-import { bareAnswer, isApproval, isNo, isUnrelated, isYes, onlyValue } from "./approval";
+import { bareAnswer, isAffirm, isApproval, isNo, isUnrelated, isYes, onlyValue } from "./approval";
 import { pendingCount, withCustomerQuestion } from "./customer";
 import { keptLines } from "./kept";
 import { type Answer, type Session, transition } from "./store";
@@ -194,6 +194,18 @@ export function readAnswer(
         .filter((x): x is Candidate & { value: number } => (x.kind === "qty" || x.kind === "bareNumber") && x.value !== null)
         .map((x) => ({ value: x.value, unit: x.unit }));
       if (choices.length === 0 && line.qty !== null) choices.push({ value: line.qty, unit: line.unit });
+      // 「◯◯は N で合っていますか」（確かめる数が 1 つ）: 肯定だけなら N、「N本で合ってます」はその数（N と違えば数量の答えと同じ扱い）
+      if (q.text.endsWith("で合っていますか") && new Set(choices.map((x) => x.value)).size === 1) {
+        if (nums.length === 0 && isAffirm(utterance.text)) {
+          const c = choices[0];
+          const u = c.unit === null || c.unit === "つ" ? unit : c.unit;
+          return u === null ? unread("質問の単位が分からない") : { kind: "setQty", value: c.value, unit: u };
+        }
+        if (nums.length === 1 && onlyValue(utterance.text, nums[0], itemWords(line, ledger), true)) {
+          const hit = readChoice(nums[0], choices, unit);
+          return hit.kind === "setQty" ? hit : readQty(nums[0], unit);
+        }
+      }
       return single((c) => readChoice(c, choices, unit));
     }
     case "unitPrice":

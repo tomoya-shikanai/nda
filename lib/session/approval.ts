@@ -67,6 +67,34 @@ export function isUnrelated(text: string): boolean {
   return UNRELATED_ANSWERS.includes(bareAnswer(text));
 }
 
+/** 「N で合っていますか」（数を確かめる質問）への肯定の語。normalizeText 後・句読点を除いた形。文末の「よ」「ね」は各 1 回まで。 */
+export const AFFIRM_ANSWERS = [
+  "合ってる",
+  "合ってます",
+  "合っています",
+  "あってる",
+  "あってます",
+  "あっています",
+  "はい",
+  "んだ",
+  "そう",
+  "そうです",
+  "ok",
+  "それで",
+];
+const AFFIRM_SUFFIXES = ["よ", "ね"];
+
+/** b が「肯定の語＋（よ・ね）」だけか。 */
+function affirmOnly(b: string): boolean {
+  return AFFIRM_ANSWERS.some((w) => b.startsWith(w) && suffixesOnly(b.slice(w.length), AFFIRM_SUFFIXES));
+}
+
+/** 前置き（はい・んだ・うん）0 個以上＋肯定の語＋（よ・ね）だけの返事か（「合ってます。」「はい、合ってるよ」）。 */
+export function isAffirm(text: string): boolean {
+  const b = bareAnswer(text).toLowerCase();
+  return affirmOnly(b) || affirmOnly(stripPrefixes(b, ANSWER_PREFIXES));
+}
+
 /** b の頭から、前置きを各 1 回までの任意の並びで取り除けるだけ取り除いた残り。 */
 function stripPrefixes(b: string, left: string[]): string {
   for (const p of left) {
@@ -78,9 +106,10 @@ function stripPrefixes(b: string, left: string[]): string {
 /**
  * 答えの文字列が「前置き＋（品目の語＋助詞）＋値＋付け足し」だけでできているか。
  * value は正規化後の文字列（normalizeText(text)）での値の候補の範囲。words は質問が名指しした品目の語（正規化後）。
+ * affirm なら、値の後の「で合ってます」の類（「で」＋肯定の語＋よ・ね）も許す（数を確かめる質問への答え）。
  * 句読点と空白は無視する。ほかの語（別の品目・知らない単位・2 つ目の数）が残れば false。
  */
-export function onlyValue(text: string, value: { start: number; end: number }, words: string[]): boolean {
+export function onlyValue(text: string, value: { start: number; end: number }, words: string[], affirm = false): boolean {
   const MARK = "\u0000";
   const n = normalizeText(text);
   let b = (n.slice(0, value.start) + MARK + n.slice(value.end)).replace(PUNCT, "");
@@ -92,5 +121,8 @@ export function onlyValue(text: string, value: { start: number; end: number }, w
     if (particle !== undefined) b = b.slice(particle.length);
   }
   if (!b.startsWith(MARK)) return false;
-  return suffixesOnly(b.slice(MARK.length), ANSWER_SUFFIXES);
+  const tail = b.slice(MARK.length);
+  if (suffixesOnly(tail, ANSWER_SUFFIXES)) return true;
+  // 数を確かめる質問への「4本で合ってます」: 値の後に「で」＋肯定の語（＋よ・ね）
+  return affirm && tail.startsWith("で") && affirmOnly(tail.slice(1).toLowerCase());
 }
