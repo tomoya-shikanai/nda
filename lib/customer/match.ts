@@ -310,27 +310,38 @@ export function plateSentences(texts: string[]): { said: string[]; plate4: strin
   return { said, plate4 };
 }
 
+/** 文が料金表の品目の語（品目名・別名・言い換え）を含むか。比べ方は名前と同じ（fold）。2 字未満の語は見ない。 */
+export function hasLedgerWord(sentence: string, words: string[]): boolean {
+  const s = fold(sentence).s;
+  return words.map(foldWord).some((w) => w.length >= 2 && s.includes(w));
+}
+
 /**
- * ナンバーかもしれない数（円が続かない 4 桁以上）を含む文と、その直前・直後の文を丸ごと伏せる範囲（発話ごと）。
- * 品目の語があっても例外にしない（抜けた作業は聞き返しで補う）。敬称の無い姓（「田中、ナンバーは、1234。」「1234、田中。」）を一覧なしで伏せるため。
- * 前後の文は発話をまたぐ。ナンバーから 2 文以上離れた敬称の無い姓は伏せられない（docs/anonymization.md の既知の限界）。
+ * ナンバーかもしれない数（円が続かない 4 桁以上）を含む文を丸ごと伏せ、その直前・直後の文も、料金表の品目の語を含まなければ丸ごと伏せる範囲（発話ごと）。
+ * 品目の語を含む隣の文は残す（「仮田さん、1111。脱着4本。」の作業を抽出に渡す）。敬称の無い姓（「田中、ナンバーは、1234。」「1234、田中。」）を一覧なしで伏せるため。
+ * 前後の文は発話をまたぐ。ナンバーから 2 文以上離れた敬称の無い姓と、品目の語を含む隣の文の敬称の無い姓は伏せられない（docs/anonymization.md の既知の限界）。
  */
-function plateSentenceSpans(texts: string[]): (Span & { mask: string })[][] {
+function plateSentenceSpans(texts: string[], ledgerWords: string[]): (Span & { mask: string })[][] {
   const ss = sentencesOf(texts);
+  const words = [...new Set(ledgerWords)];
   const hit = new Set<number>();
   ss.forEach((x, k) => {
     if (!hasPlateLike(x.text)) return;
-    for (const j of [k - 1, k, k + 1]) if (j >= 0 && j < ss.length) hit.add(j);
+    hit.add(k);
+    for (const j of [k - 1, k + 1]) if (j >= 0 && j < ss.length && !hasPlateLike(ss[j].text) && !hasLedgerWord(ss[j].text, words)) hit.add(j);
   });
   const out: (Span & { mask: string })[][] = texts.map(() => []);
   for (const k of hit) out[ss[k].ti].push({ start: ss[k].start, end: ss[k].end, mask: MASK_PLATE });
   return out;
 }
 
+/** 料金表の品目の語（品目名・別名。言い換えは ledgerEntries が別名に足している）。 */
+export const ledgerWords = (ledger: { item: string; aliases: string[] }[]): string[] => ledger.flatMap((e) => [e.item, ...e.aliases]);
+
 /**
  * 一覧なしの伏せ字。工場はこれだけを使う（一覧は事務所にある）。敬称の前の名前らしい部分と 4 桁に加え、
- * ナンバーかもしれない数を含む文とその前後の文を丸ごと伏せる。
+ * ナンバーかもしれない数を含む文と、その前後の文のうち料金表の品目の語を含まないものを丸ごと伏せる。
  */
-export function maskCustomerInfo(texts: string[]): string[] {
-  return identifyCustomer(texts, [], plateSentenceSpans(texts)).texts;
+export function maskCustomerInfo(texts: string[], words: string[] = []): string[] {
+  return identifyCustomer(texts, [], plateSentenceSpans(texts, words)).texts;
 }

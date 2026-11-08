@@ -292,3 +292,17 @@ test("Codex 3 回目: 姓と名の間の空白が 2 個以上（半角・全角�
   }
   assert.equal(maskCustomerInfo(["山田  太郎さんのオイル交換です。"])[0], `${MASK_NAME}さんのオイル交換です。`);
 });
+
+test("一覧なしの伏せ字（料金表の語つき）: ナンバーの文は常に伏せ、隣の文は品目の語を含むときだけ残す", () => {
+  const words = ["タイヤ脱着", "脱着", "エアバルブ交換", "バルブ交換", "タイヤ交換"];
+  const m = (texts: string[]) => maskCustomerInfo(texts, words);
+  assert.deepEqual(m(["仮田さん、1111。脱着4本、バルブ交換も4本。"]), [`${MASK_PLATE}。脱着4本、バルブ交換も4本。`]);
+  // 品目の無い隣の文は今どおり伏せる
+  assert.deepEqual(m(["田中です。1111。"]), [`${MASK_PLATE}。${MASK_PLATE}。`]);
+  assert.deepEqual(m(["田中です。1234です。脱着4本。"]), [`${MASK_PLATE}。${MASK_PLATE}。脱着4本。`]);
+  // 既知の限界: 品目の語を含む文の敬称の無い姓は残る（docs/anonymization.md）
+  assert.deepEqual(m(["田中、脱着4本。1111。"]), [`田中、脱着4本。${MASK_PLATE}。`]);
+  // 料金表に無い読みは品目の語とみなさず伏せる側。カタカナ・ひらがなの違いはそろえて比べる
+  assert.deepEqual(m(["1111。だっちゃく4本。"]), [`${MASK_PLATE}。${MASK_PLATE}。`]);
+  assert.deepEqual(maskCustomerInfo(["1111。ばるぶ交換4本。"], ["バルブ交換"]), [`${MASK_PLATE}。ばるぶ交換4本。`]);
+});

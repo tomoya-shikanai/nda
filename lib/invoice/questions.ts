@@ -4,6 +4,7 @@
  * 行（lineIndex 0 以上）は 1 行につき 1 問、行に付かない事項（lineIndex -1）は理由ごとに 1 問。
  * 同じ質問の確認事項は理由の種類にまとめ、優先度の最上位の理由で 1 文の質問を作る。数は候補の文字列だけを使う。
  */
+import { NO_WORK_QUESTION } from "../session/customer";
 import { choicesOf, type LedgerEntry, findEntry, itemKey, shortName } from "../ledger/lookup";
 import type { Transcript } from "../stt/types";
 import type { Candidate } from "./candidates";
@@ -198,8 +199,8 @@ export function toQuestions(result: Result, candidates: Candidate[], t: Transcri
       case "total": {
         if (cs.some((c) => c.message.includes("作業が 1 つもない"))) {
           const said = distinctTexts(rel.filter((c) => c.kind === "total"));
-          if (said.length === 0) return "請求する作業はありませんか";
-          return listed(said, (x) => `請求する作業はありませんか。${x}は何の合計ですか`);
+          if (said.length === 0) return NO_WORK_QUESTION;
+          return listed(said, (x) => `${NO_WORK_QUESTION}。${x}は何の合計ですか`);
         }
         const said = rel.find((c) => c.kind === "total" && c.taxIncluded !== true);
         if (said && said.value !== null) {
