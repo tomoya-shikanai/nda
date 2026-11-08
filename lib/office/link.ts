@@ -86,7 +86,7 @@ export function folderBox(dir: string, opts: FolderBoxOptions = {}): BoxWriter {
       const tmp = join(dir, `.${name}.${randomBytes(6).toString("hex")}.tmp`);
       const final = join(dir, name);
       try {
-        await writeFile(tmp, body, { encoding: "utf8", mode: 0o600 });
+        await writeFile(tmp, body, { encoding: "utf8", mode: 0o640 });
         await opts.beforeCommit?.();
         await rename(tmp, final);
       } catch {
