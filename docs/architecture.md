@@ -1,7 +1,7 @@
 # 構成（アーキテクチャ）
 
-2026-11-05 時点。工場は Pi 5 だけ（nDa の本体も Pi で動かす。`docs/decisions.md` 2026-11-04）。事務所は今ある Windows の PC。
-考え方は「**判断はモデル、作業はプログラム**」。Claude（モデル）を使うのは、明細の下書きと聞き返しだけ。データを運ぶ・照らす・業務ソフトに打ち込む・保存の後に照らすのは、決まった手順のプログラムで行う。
+2026-11-08 時点。工場は Pi 5 だけ（nDa の本体も Pi で動かす。`docs/decisions.md` 2026-11-04。移設中はこの役を Mac が務める）。事務所は今ある Windows の PC。
+考え方は「**判断はモデル、作業はプログラム**」。Claude（モデル）を使うのは、明細の対応づけ（どの数がどの作業か、行の status と否定の文）だけ。数を拾う・聞き返しの文を作る・答えを読む・データを運ぶ・照らす・業務ソフトに打ち込む・保存の後に照らすのは、決まった手順のプログラムで行う。
 
 ## 全体の図
 
@@ -23,7 +23,7 @@ flowchart LR
 
   subgraph cloud["外部の API"]
     stt["文字起こし<br/>（ベンダーは #31 で決める）"]
-    claude["Claude API<br/>Opus 5.5（分離・一問）<br/>Haiku 5.5（補助）"]
+    claude["Claude API<br/>Opus 5.5（明細の対応づけ、structured outputs）"]
   end
 
   subgraph office["事務所"]
@@ -40,10 +40,10 @@ flowchart LR
     end
   end
 
-  father -- "「んだ、Claude」" --> wake --> rec
+  father -- "「んだ クロード」" --> wake --> rec
   rec -- "音声" --> stt -- "文字" --> app
-  app -- "発話" --> claude
-  claude -- "明細の候補・聞き返し" --> app
+  app -- "発話（ナンバーの文は伏せ字）＋数の候補 ID" --> claude
+  claude -- "行ごとの候補 ID・status・否定の文" --> app
   app --- ledger
   app --- state
   app --> monitor
