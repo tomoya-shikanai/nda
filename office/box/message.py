@@ -257,6 +257,48 @@ def check_request(msg: object, cfg: dict, resolve_vehicle=None) -> dict:
     }
 
 
+INSTRUCTION_KEYS = ENVELOPE_KEYS | {"attempt", "approvedAt", "approval", "vehicle", "slipKind", "work"}
+SLIP_KINDS = ("estimate", "invoice")
+MAX_WORK_CHARS = 2000
+
+
+def check_instruction(msg: object, cfg: dict, resolve_vehicle=None) -> dict:
+    """estimate.instruction（声の指示: ナンバーの手がかり・伝票の種類・作業の文）を確かめ、job を返す。外れたら Reject。
+    明細は、この後 estimator が作業の文から決める。客と車は resolve_vehicle（#55）でちょうど 1 つに決まるときだけ。
+    決まった客も allowed_customers（練習用の客）でなければ止める。"""
+    kind, mid, sid = envelope(msg)
+    if kind != "estimate.instruction":
+        raise _bad("kind が estimate.instruction でない")
+    if set(msg) != INSTRUCTION_KEYS:
+        raise _bad("項目が多いか足りない")
+    if not _int(msg["attempt"]) or msg["attempt"] < 1:
+        raise _bad("attempt が 1 以上の整数でない")
+    if not _datetime(msg["approvedAt"]) or not _quoted(msg["approval"]):
+        raise _bad("承認の日時か出所が無い")
+    if msg["slipKind"] not in SLIP_KINDS:
+        raise _bad("slipKind が estimate・invoice のどちらでもない")
+    work = msg["work"]
+    if not isinstance(work, str) or not work.strip() or len(work) > MAX_WORK_CHARS or not work.isprintable():
+        raise _bad(f"work が、空でない {MAX_WORK_CHARS} 文字までの印字できる文字でない")
+    hints = check_vehicle(msg["vehicle"])
+    if resolve_vehicle is None:
+        raise Reject("customerNotFound", "vehicle を解決する道が無い（番号を推測しない）")
+    from .resolve import ResolveError
+
+    try:
+        got = resolve_vehicle(hints)
+    except ResolveError as ex:
+        raise Reject("other", f"客と車を引けない（{ex}）") from None
+    if got is None:
+        raise Reject("customerNotFound", "手がかりに合う客と車が、ちょうど 1 つに決まらない")
+    if not (isinstance(got, tuple) and len(got) == 2 and all(_int(x) and x > 0 for x in got)):
+        raise _bad("解決の答えが (顧客コード, 車両コード) でない")
+    if str(got[0]) not in cfg["allowed_customers"]:
+        raise Reject("customerNotAllowed", "練習用の客の番号（allowed_customers）に無い")
+    return {"job_id": sid, "customer_code": got[0], "car_code": got[1], "slip_kind": msg["slipKind"], "work": work,
+            "instruction": True}
+
+
 def load_config(data: object) -> dict:
     """box\\config.json。pi_url と secret は無くてよい（無ければ工場に返さず、done に残すだけ）。"""
     if not isinstance(data, dict):

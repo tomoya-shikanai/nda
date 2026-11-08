@@ -463,7 +463,7 @@ class CodexFixTest(unittest.TestCase):
         from box import lookup
         one = '[{"rikuji":"架空","bango":"500","kana":"さ","no":7319,"name":"架空 太郎 様方","title_name":"架空 太郎","same_no":1}]'
         self.assertEqual(lookup.parse(one), lookup.CarInfo(plate="架空 500 さ 7319", no=7319, name="架空 太郎 様方",
-                                                            title_name="架空 太郎"))
+                                                            title_name="架空 太郎", bango="500", kana="さ", list_rows=0))
         no_title = '[{"rikuji":"架空","bango":"500","kana":"さ","no":7319,"name":"架空","title_name":" ","same_no":1}]'
         two_cars = one.replace('"same_no":1', '"same_no":2')
         nbsp = one.replace('"title_name":"架空 太郎"', '"title_name":"\u00a0架空 太郎"')

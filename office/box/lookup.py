@@ -30,6 +30,9 @@ class CarInfo:
     no: int  # ナンバーの番号（4 桁まで）
     name: str  # 客の名前
     title_name: str = ""  # 伝票の窓の題名に出る客の名前（KOK_NAMEJ1）。送る間、題名と照らす
+    bango: str = ""  # ナンバーの分類（例 500）
+    kana: str = ""  # ナンバーのかな
+    list_rows: int = 0  # ナンバーの番号で探したときに一覧に出るはずの台数
 
 
 def parse(out: str) -> CarInfo:
@@ -55,7 +58,9 @@ def parse(out: str) -> CarInfo:
     title_name = raw.rstrip(" ") if isinstance(raw, str) else ""
     if not name_usable(title_name):
         raise LookupError_("客の名前（窓の題名と照らす分）が無いか短いか、前後に空白・見えない文字がある")
-    return CarInfo(plate=plate, no=no, name=str(r.get("name") or "").strip(), title_name=title_name)
+    rows = r.get("list_rows", 0)
+    return CarInfo(plate=plate, no=no, name=str(r.get("name") or "").strip(), title_name=title_name,
+                   bango=parts[1], kana=parts[2], list_rows=rows if isinstance(rows, int) and not isinstance(rows, bool) else 0)
 
 
 def lookup(reader_file: str, customer_code: int, car_code: int) -> CarInfo:

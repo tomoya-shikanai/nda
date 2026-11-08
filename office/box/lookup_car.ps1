@@ -3,6 +3,7 @@ param([Parameter(Mandatory = $true)][string]$ReaderFile, [Parameter(Mandatory = 
 # 削除した客は KOK_DEL=0 のまま KOK_KDEL=9 になることがある（#55 のセッションが確かめた）ので、引く客は KOK_KDEL=0 だけにする。
 # SAME_NO は（削除した客の車も含めて、広く）、題名に出る客の名前（KOK_NAMEJ1）とナンバーの番号の両方が同じ車の数（どの客の分も合わせて）。1 でなければ、番号と題名では見分けられない。
 # 名前は、空白（半角・全角）・タブ・改行をすべて除いて比べる。送る側の照合（前後の空白を除いて完全一致）より広く数え、見分けにくい客を必ず数に入れる（Codex の指摘）。
+# LIST_ROWS は、ナンバーの番号が同じ削除されていない車の数（顧客車両検索の一覧に出るはずの台数。opener が OCR の行の数と照らす）。
 # SELECT だけを、値をパラメータで渡して実行し、読み取り専用の接続（ApplicationIntent=ReadOnly）とロールバックする取引の中で読む。
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -17,7 +18,8 @@ try {
 SELECT c.CAR_RIKUJI, c.CAR_BANGO, c.CAR_KANA, c.CAR_NO, k.KOK_NAMEJ1, k.KOK_NAMEJ2,
   (SELECT COUNT(*) FROM RS3_DATA.dbo.CAR_DAT s JOIN RS3_DATA.dbo.KOK_DAT k2 ON k2.KOK_CODE = s.CAR_KOKCD
    WHERE s.CAR_NO = c.CAR_NO AND s.CAR_DEL = 0 AND k2.KOK_DEL = 0
-     AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(k2.KOK_NAMEJ1, N' ', N''), NCHAR(12288), N''), NCHAR(9), N''), NCHAR(10), N''), NCHAR(13), N'') = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(k.KOK_NAMEJ1, N' ', N''), NCHAR(12288), N''), NCHAR(9), N''), NCHAR(10), N''), NCHAR(13), N'')) AS SAME_NO
+     AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(k2.KOK_NAMEJ1, N' ', N''), NCHAR(12288), N''), NCHAR(9), N''), NCHAR(10), N''), NCHAR(13), N'') = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(k.KOK_NAMEJ1, N' ', N''), NCHAR(12288), N''), NCHAR(9), N''), NCHAR(10), N''), NCHAR(13), N'')) AS SAME_NO,
+  (SELECT COUNT(*) FROM RS3_DATA.dbo.CAR_DAT s WHERE s.CAR_NO = c.CAR_NO AND s.CAR_DEL = 0) AS LIST_ROWS
 FROM RS3_DATA.dbo.CAR_DAT c JOIN RS3_DATA.dbo.KOK_DAT k ON k.KOK_CODE = c.CAR_KOKCD
 WHERE c.CAR_CODE = @car AND c.CAR_KOKCD = @kok AND c.CAR_DEL = 0 AND k.KOK_DEL = 0 AND k.KOK_KDEL = 0
 '@
@@ -28,7 +30,7 @@ WHERE c.CAR_CODE = @car AND c.CAR_KOKCD = @kok AND c.CAR_DEL = 0 AND k.KOK_DEL =
   while ($r.Read()) {
     $rows += [pscustomobject]@{
       rikuji = [string]$r[0]; bango = [string]$r[1]; kana = [string]$r[2]; no = [int]$r[3]
-      name = (([string]$r[4]) + ' ' + ([string]$r[5])).Trim(); title_name = [string]$r[4]; same_no = [int]$r[6]
+      name = (([string]$r[4]) + ' ' + ([string]$r[5])).Trim(); title_name = [string]$r[4]; same_no = [int]$r[6]; list_rows = [int]$r[7]
     }
   }
   $r.Close()

@@ -195,11 +195,44 @@ def cmd_run(args) -> int:
             print("keypath.json と columns.json の confirmed が両方 true でないので、送らない。店で画面を確かめてから人が true にする。", file=sys.stderr)
             return 2
         ctx: dict = {}  # 人の確かめで引いた客の名前を、送る所へ渡す
-        hooks = Hooks(prepare=lambda job: _plan(job, cfg, need_confirmed=True),
-                      confirm=lambda job: confirm_then_check(job, cfg, ctx),
-                      enter=lambda prepared: real_enter(prepared, ctx.pop("customer_name", None)),
-                      post=make_post(cfg), log=log, closed=wait_closed)
-        box = Inbox(root, cfg, hooks)
+        resolve_vehicle = None
+        if args.auto:
+            from . import auto, resolve
+
+            if not auto.opener_confirmed():
+                print("opener/openpath.json の confirmed が true でないので、--auto は動かさない。", file=sys.stderr)
+                return 2
+            if not cfg.get("db_reader_file"):
+                print("config.json に db_reader_file が無いので、--auto は動かさない。", file=sys.stderr)
+                return 2
+            resolve_vehicle = resolve.decider(cfg["db_reader_file"])
+
+        def prepare(job):
+            if args.until_list and not job.get("instruction"):
+                # 初回の確かめ（一覧で止める）の見回りでは、ほかの請求を入れない（Codex の指摘）
+                raise RuntimeError("--until-list の見回りでは、声の指示のほかは入れない")
+            if job.get("instruction"):
+                if not auto.opener_confirmed():
+                    # 起動の後に openpath.json の確認が取り消されても、指示ごとに読み直した方で判定する（Codex の指摘）
+                    raise RuntimeError("opener/openpath.json が確認済みでない")
+                return auto.prepare(job, cfg)  # 読み込んだ keypath・columns そのものの確認済みを prepare の中で見る
+            return _plan(job, cfg, need_confirmed=True)
+
+        def confirm(job):
+            if job.get("instruction"):
+                return True  # 声の指示は人の確かめを置かない（鹿内さんの決定）。人が触れば送る途中で止まる
+            return confirm_then_check(job, cfg, ctx)
+
+        def enter(prepared):
+            if args.auto and isinstance(prepared, auto.Prepared):
+                log("明細を決めた（工場の指示から）:")
+                for line in prepared.summary:
+                    log("  " + line)
+                return auto.enter(prepared, log, stop_at_list=args.until_list)
+            return real_enter(prepared, ctx.pop("customer_name", None))
+
+        hooks = Hooks(prepare=prepare, confirm=confirm, enter=enter, post=make_post(cfg), log=log, closed=wait_closed)
+        box = Inbox(root, cfg, hooks, resolve_vehicle=resolve_vehicle)
         try:
             box.lock()
         except RuntimeError as ex:
@@ -254,8 +287,48 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run", allow_abbrev=False)
     r.add_argument("--root", default=str(DEFAULT_ROOT))
     r.add_argument("--send", action="store_true")
+    r.add_argument("--auto", action="store_true", help="声の指示（estimate.instruction）も、窓を開くところから全部自動で入れる（--send と一緒に）")
+    r.add_argument("--until-list", action="store_true", help="初回の確かめ: 窓を開いて一覧を読むところで止める")
+    sy = sub.add_parser("say", allow_abbrev=False)
+    sy.add_argument("work")
+    sy.add_argument("--plate", required=True)
+    sy.add_argument("--car", action="append", default=[])
+    sy.add_argument("--customer", action="append", default=[])
+    sy.add_argument("--kind", choices=("estimate", "invoice"), default="invoice")
+    sy.add_argument("--root", default=str(DEFAULT_ROOT))
     args = p.parse_args(argv)
+    if args.cmd == "say":
+        return cmd_say(args)
+    if args.cmd == "run" and (args.auto or args.until_list) and not args.send:
+        print("--auto と --until-list は --send と一緒にだけ使える。", file=sys.stderr)
+        return 2
+    if args.cmd == "run" and args.until_list and not args.auto:
+        print("--until-list は --auto と一緒にだけ使える。", file=sys.stderr)
+        return 2
     return cmd_check(args) if args.cmd == "check" else cmd_run(args)
+
+
+def cmd_say(args) -> int:
+    """試すための声の指示（estimate.instruction）を受け箱に置く。工場の Pi から送る部分の代わり。"""
+    import uuid
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    where = {"recordingId": "say-cli", "startSec": 0.0, "endSec": 0.0, "quote": "事務所の PC で打った指示"}
+    vehicle = {"plateNo": args.plate}
+    if args.car:
+        vehicle["carWords"] = args.car
+    if args.customer:
+        vehicle["customerWords"] = args.customer
+    msg = {"v": 1, "id": str(uuid.uuid4()), "sessionId": f"say-{uuid.uuid4().hex[:12]}", "sentAt": now,
+           "kind": "estimate.instruction", "attempt": 1, "approvedAt": now, "approval": where,
+           "vehicle": vehicle, "slipKind": args.kind, "work": args.work}
+    inbox = Path(args.root) / "in"
+    tmp = inbox / f".{msg['id']}.json.tmp"
+    tmp.write_text(json.dumps(msg, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(inbox / f"{msg['id']}.json")
+    print(f"受け箱に指示を置いた（{msg['id'][:8]}）。")
+    return 0
 
 
 if __name__ == "__main__":

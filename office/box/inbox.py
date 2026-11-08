@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from .message import Reject, check_request, envelope, read_message
+from .message import Reject, check_instruction, check_request, envelope, read_message
 
 MAX_FILE_BYTES = 256 * 1024
 RESEND_EVERY_S = 30  # 工場に返せていない答えを送り直す間隔（24 時間まで）
@@ -78,8 +78,9 @@ class Hooks:
 
 
 class Inbox:
-    def __init__(self, root: Path, cfg: dict, hooks: Hooks) -> None:
+    def __init__(self, root: Path, cfg: dict, hooks: Hooks, resolve_vehicle=None) -> None:
         self.root = Path(root)
+        self.resolve_vehicle = resolve_vehicle  # 声の指示（estimate.instruction）の客と車を決める（--auto のときだけ）
         self.cfg = cfg
         self.h = hooks
         self.inbox = self.root / "in"
@@ -202,8 +203,10 @@ class Inbox:
         except Reject as ex:
             self._set_aside(p, str(ex))
             return None
-        if kind != "invoice.request":
+        if kind not in ("invoice.request", "estimate.instruction"):
             return None  # 照合などは別の部品が拾う
+        if kind == "estimate.instruction" and self.resolve_vehicle is None:
+            return None  # 声の指示は --auto の見回りだけが拾う（残しておく）
 
         prev = self.record(rid)
         if prev is not None:
@@ -234,7 +237,10 @@ class Inbox:
             return self._finish(w, sid, rid, "stopped", 0, "duplicate", "この作業はすでに受けている")
 
         try:
-            job = check_request(msg, self.cfg)
+            if kind == "estimate.instruction":
+                job = check_instruction(msg, self.cfg, self.resolve_vehicle)
+            else:
+                job = check_request(msg, self.cfg)
         except Reject as ex:
             self._set_state(sid, status="stopped", attempt=attempt if isinstance(attempt, int) else 0, requestId=rid)
             return self._finish(w, sid, rid, "stopped", 0, ex.reason, str(ex))
