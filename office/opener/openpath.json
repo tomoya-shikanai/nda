@@ -1,0 +1,34 @@
+{
+  "_status": "2026-11-08 の記録（見積の窓を開く道）と、読むだけの調べ（ツールバー・窓の題名・部品の位置）から作った。まだ実機で送っていない（confirmed: false）。位置は各窓の左上からの画素",
+  "confirmed": false,
+  "exe": "M_NOU.exe",
+  "exe_path": "C:\\RACROS3\\EXE\\M_NOU.EXE",
+  "cwd": "C:\\RACROS3\\EXE",
+  "title_tail": "RacroSⅢ",
+  "kinds": {
+    "estimate": {"args": ["010300", "/MS"], "screen": "整備見積･指示書発行", "densyu": 4,
+                 "confidence": "確（11/8 に人がメニューから開いた窓の起動の引数）"},
+    "invoice": {"args": ["010100", "1"], "screen": "整備伝票発行", "densyu": 1,
+                "confidence": "推（今開いている整備伝票発行の窓の引数。ここから直に起動して新規で客を選べるかは未）"}
+  },
+  "toolbar": {
+    "class": "msvb_lib_toolbar", "count": 23, "new_index": 3, "new_id": 103, "button_width": 55,
+    "confidence": "確（見積の窓と整備伝票発行の窓の両方で、ボタン 23 個・4 番目が id 103・幅 55 を読むだけで確かめた。4 番目は人が「新規」と確かめた）"
+  },
+  "search": {
+    "title": "[ 顧客車両検索 ] - RacroSⅢ",
+    "number": {"class": "NumEdit", "x": 946, "y": 149, "width": 63},
+    "list": {"class": "VSFlexGridL", "x": 4, "y": 435, "width": 1471},
+    "confidence": "確（窓は (220,0)。開いた直後のフォーカスは番号の欄。番号を打って Enter で一覧にフォーカスが移り、一覧で Enter で客と車が伝票に入る）",
+    "unknown": "番号だけでは候補が複数になる。一覧の行は UI Automation で読めないので、画面の文字を PC の中の OCR で読んで行を選ぶ（未確認）"
+  },
+  "slip": {
+    "densyu": {"class": "NumEdit", "x": 874, "y": 321, "width": 33},
+    "first_row": {"class": "NumEdit", "x": 53, "y": 566, "width": 72},
+    "max_enters": 15,
+    "confidence": "確（伝票種別に 4 を打って Enter で入庫日へ。その後 Enter で明細 1 行目の項目CD へ。回数は伝票でばらつくので、フォーカスの位置で止める）"
+  },
+  "position_tolerance_px": 3,
+  "stop_titles": ["保有車検索", "部品の選択", "追加点数の選択", "コード表", "保存確認", "削除確認", "印刷確認"],
+  "_stop_note": "「伝票発行」の確かめの小窓は #32770（ダイアログ）なので、クラスで止める。題名の「伝票発行」は整備伝票発行の窓にも含まれるので、ここには書かない"
+}
