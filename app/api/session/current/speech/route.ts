@@ -5,12 +5,13 @@
  */
 import { errorKind, logEvent, since } from "../../../../../lib/log/events";
 import { latestSession, sessionDir } from "../../../../../lib/session/store";
-import { toMonitorView } from "../../../../../lib/session/view";
+import { viewOf } from "../../../../../lib/session/routes";
 import { synthesize } from "../../../../../lib/voice/tts";
 
 export async function GET(request: Request) {
   request.headers.has("accept"); // 毎回動かすための印（../route.ts の注）
-  const view = toMonitorView(await latestSession(sessionDir()));
+  // 客の label・会話の受け皿の声の文はメモリにある（画面の JSON と同じ文を声にする）
+  const view = viewOf(await latestSession(sessionDir()));
   let wav: Uint8Array;
   const t0 = performance.now();
   try {

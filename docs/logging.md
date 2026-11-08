@@ -28,6 +28,7 @@
 | `session.office` | 承認の後の入力の結果 | `outcome`・`reason`・`enteredLines`・`attempt`・`msFromApproved` |
 | `stt` | 文字起こし | `vendor`・`purpose`（start・answer）・`audioSec`・`ms`・`ok`・`error`（noKey か例外の種類名） |
 | `extract` | 抽出 | `phase`（start・continue）・`model`・トークン数・`ms`・`ok`・`error`・`lines`・`confirmations`・`questions`・`questionReasons`（質問の主な理由ごとの数） |
+| `talk` | 会話の受け皿（読めなかった返事を Claude で意図だけ読む） | `intent`（ask_customer・ask_lines・ask_total・ask_next・cancel・other。失敗なら null）・`ms`・`ok`・`error`。文は入れない |
 | `office.put` | 受け箱に置いた | `message`（customer.query・invoice.request）・`messageId`・`attempt`・`ms`・`ok`・`error`（boxMissing・writeFailed・timeout） |
 | `office.reply` | 事務所の返しを受けた | `message`・`messageId`・`result`（accepted・duplicate・stale・unsupported・noSession）・`answer`（found・retry）・`retryReason`・`outcome`・`msSinceSent` |
 | `route.reject` | 声・答えの入口が断った | `route`・`reason`（notFound・notAsking・stale・unheard・extractFailed） |

@@ -58,6 +58,8 @@ export const SAY = {
   thinking: "明細に分けています",
   drafting: "請求書を作っています",
   askApprove: "合っていれば「請求書頼む」と言ってください",
+  /** 会話の受け皿で「やめる」と言われて作業を閉じた。 */
+  cancelled: "この作業をやめました",
   /** 答えが読めなかった（unread）ときの前置き。続けて今の質問を言い直す。 */
   retry: (q: string) => `もう一度お願いします。${q}`,
   /** 確認事項が残っているのに承認の言葉を言ったとき。 */
@@ -145,12 +147,14 @@ function officeBadge(s: Session | null): string | null {
   }
 }
 
-function sayOf(s: Session | null): string {
+/** talk は会話の受け皿の声の文（メモリにだけある。lib/session/talk.ts）。 */
+function sayOf(s: Session | null, talk: string | null): string {
   if (s === null) return SAY.idle;
   if (s.error !== null) return SAY.error;
+  const last = s.answers.at(-1);
   switch (s.status) {
     case "idle":
-      return SAY.idle;
+      return last?.action.kind === "talk" && last.action.intent === "cancel" ? SAY.cancelled : SAY.idle;
     case "listening":
       return SAY.listening;
     case "thinking":
@@ -161,8 +165,9 @@ function sayOf(s: Session | null): string {
       const office = customerSay(s);
       if (office !== null) return office;
       const ask = s.questions[0]?.text ?? SAY.askApprove;
+      // 会話の受け皿で受けた返事は、その声の文（メモリから消えていれば聞き直し）
+      if (last?.action.kind === "talk") return talk ?? SAY.retry(ask);
       // 最後の答えが読めなかった・承認の言葉が効かなかったなら、そう言ってから聞き直す
-      const last = s.answers.at(-1);
       if (last?.action.kind !== "unread") return ask;
       return last.action.reason === "確認事項が残っている" ? SAY.notYet(ask) : SAY.retry(ask);
     }
@@ -184,10 +189,13 @@ export function yenText(n: number | null): string | null {
   return n === null ? null : `¥${n.toLocaleString("ja-JP")}`;
 }
 
-const NOT_ANSWERS = new Set(["unread", "approve", "continue", "askOffice", "customerClue"]);
+const NOT_ANSWERS = new Set(["unread", "approve", "continue", "askOffice", "customerClue", "talk"]);
 
-/** label は事務所が返した客の姓と車種（メモリにだけある。lib/office/labels.ts）。無ければ「決まりました」。 */
-export function toMonitorView(s: Session | null, label: string | null = null): MonitorView {
+/**
+ * label は事務所が返した客の姓と車種（メモリにだけある。lib/office/labels.ts）。無ければ「決まりました」。
+ * talk は会話の受け皿の声の文（メモリにだけある。lib/session/talk.ts の getTalkSay）。
+ */
+export function toMonitorView(s: Session | null, label: string | null = null, talk: string | null = null): MonitorView {
   const segs = s?.transcript?.segments ?? [];
   const confirmations = s?.invoice?.confirmations ?? [];
   const answers = s?.answers ?? [];
@@ -208,7 +216,7 @@ export function toMonitorView(s: Session | null, label: string | null = null): M
     id: s?.id ?? null,
     state: s?.status ?? "idle",
     heard: segs.length ? segs.map((x) => x.text).join("") : null,
-    say: sayOf(s),
+    say: sayOf(s, talk),
     // 照合の札・依頼の失敗が変わったときも声を出し直す（状態の遷移が無くても）
     sayId:
       s === null

@@ -20,6 +20,7 @@ import { EstimateInstruction, ToOffice } from "../lib/office/schema";
 import { CUSTOMER_QUESTION } from "../lib/session/customer";
 import { type Extractor, replySession, startSession } from "../lib/session/run";
 import { readSession } from "../lib/session/store";
+import { viewOf } from "../lib/session/routes";
 import { SAY, toMonitorView } from "../lib/session/view";
 import type { Segment, Transcript } from "../lib/stt/types";
 
@@ -374,8 +375,10 @@ test("客だけ → 0 行で「作業を教えてください」。抽出し直�
   assert.equal(s.invoice?.lines.length, 0);
   assert.equal(s.questions[0].text, "作業を教えてください");
   assert.equal(toMonitorView(s).say, "作業を教えてください");
-  const s0 = await replySession({ dir, session: s, utterance: say("えーと"), ledger, extract: extractor, office });
-  assert.equal(toMonitorView(s0).say, "作業を教えてください");
+  // 0 行のまま何も増えない返事は会話の受け皿へ（偽の Claude は「今の質問を聞いている」と読む）
+  const talk = async () => ({ intent: "ask_next" as const, reply: "" });
+  const s0 = await replySession({ dir, session: s, utterance: say("えーと"), ledger, extract: extractor, office, talk });
+  assert.equal(viewOf(s0).say, "作業を教えてください");
   const failing: Extractor = async () => {
     throw new TypeError("偽の失敗");
   };

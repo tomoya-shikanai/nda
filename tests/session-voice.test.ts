@@ -319,8 +319,11 @@ test("voice: 作業が無ければ新しい作業（201）、最新が asking �
     const r4 = await route.POST(post("/api/session/voice", { file: file(), vendor: "gemini" }));
     assert.equal(r4.status, 200);
     const t4 = await readSession(dir, third.id);
-    assert.equal(t4?.answers.length, 1);
-    assert.equal(t4?.answers[0].action.kind, "continue");
+    // 抽出し直しても 0 行なので会話の受け皿へ。偽の Claude は会話の形を返さないので、聞き直しに落ちる
+    assert.deepEqual(
+      t4?.answers.map((a) => a.action.kind),
+      ["continue", "unread"],
+    );
     assert.deepEqual(
       t4?.transcript?.segments.map((x) => x.text),
       ["次の作業", "4本"],
