@@ -126,19 +126,52 @@ export function customerText(s: Session, clue: CustomerClue | null, label: strin
 
 /** やめる・やり直しの語。Claude が cancel と読んでも、この語が無ければ作業を閉じない。 */
 const CANCEL_CUES = ["やめ", "止め", "やり直", "キャンセル", "中止", "取りやめ"];
-export const hasCancelCue = (text: string) => CANCEL_CUES.some((w) => text.includes(w));
+/** 打ち消し（「やめないで続けて」「まだやめない」）。あれば閉じない。 */
+const CANCEL_NEGATIONS = ["ないで", "ずに", "続け", "まだ", "待って", "やめない", "止めない"];
+
+/**
+ * Claude が cancel と読んだ返事をどうするか。取り消しの合図があり打ち消しが無ければ close、それ以外は ask（閉じずに聞き返す）。
+ */
+export function cancelDecision(text: string): "close" | "ask" {
+  const cue = CANCEL_CUES.some((w) => text.includes(w));
+  const neg = CANCEL_NEGATIONS.some((w) => text.includes(w));
+  return cue && !neg ? "close" : "ask";
+}
+
+/** 聞き返しへの返事として閉じてよい言葉（「やめる」「はい、やめる」の類）だけ。 */
+export const isCancelConfirm = (text: string) =>
+  /^(はい|うん|ええ)?[、,\s]*(やめる|やめます|やめて|やめ|中止|キャンセル)[。！!]?$/.test(text.trim());
 
 export const TALK_SAY = {
   cancelled: SAY.cancelled,
   sorry: "すみません、もう一度お願いします",
+  askCancel: "やめますか？「やめる」と言ってください",
 } as const;
 
-/** Claude の文を使ってよいか（4 桁以上の数・長すぎる文は捨てる）。 */
+/** 数字（算用・全角・漢数字）。 */
+const DIGIT = /[0-9０-９〇零一二三四五六七八九十百千万億]/;
+
+/** Claude の文を使ってよいか。数字が 1 字でもある文・長すぎる文は捨てる（数を言うのは ask_lines・ask_total のコードの文だけ）。 */
 export function safeReply(reply: string): string | null {
   const t = reply.trim();
   if (t === "" || t.length > TALK_REPLY_MAX) return null;
-  if (/[0-9０-９]{4,}/.test(t.replace(/[,，、.．\s]/g, ""))) return null;
+  if (DIGIT.test(t)) return null;
   return t;
+}
+
+/** 客を指す語（この後ろの語は名前・ナンバーとして伏せる）。 */
+const CUSTOMER_CUES = "顧客は|お客さんは|お客様は|お客は|客は|ナンバーは|ナンバー";
+
+/**
+ * 会話の受け皿（Claude）に渡す文。工場の伏せ字の後、さらに数字（算用・全角・漢数字）をすべて ＊ にし、
+ * 「顧客は／お客さんは／客は／ナンバーは」の後ろの語を読点・句点・「だっけ」・「？」まで伏せる。
+ * 敬称の無い姓（客を指す語の無い文）は残る（docs/anonymization.md の既知の限界）。
+ */
+export function talkText(text: string): string {
+  const digits = text.replace(new RegExp(DIGIT.source, "g"), "＊");
+  return digits.replace(new RegExp(`(${CUSTOMER_CUES})(.*?)(?=だっけ|[、。,.？?！!]|$)`, "g"), (_, cue: string, rest: string) =>
+    rest === "" ? cue : `${cue}＊`,
+  );
 }
 
 /** 文の終わりに「。」を付けてから次の文をつなぐ。 */
@@ -157,7 +190,8 @@ export function talkSay(intent: TalkIntent, reply: string, s: Session, clue: Cus
     case "ask_next":
       return q;
     case "cancel":
-      return TALK_SAY.cancelled;
+      // 閉じた作業の声は view.ts（SAY.cancelled）。ここに来るのは閉じずに聞き返すとき
+      return TALK_SAY.askCancel;
     case "other":
       return join2(safeReply(reply) ?? TALK_SAY.sorry, q);
   }

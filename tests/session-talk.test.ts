@@ -17,7 +17,7 @@ import { ASK_WORK, CUSTOMER_QUESTION } from "../lib/session/customer";
 import { viewOf } from "../lib/session/routes";
 import { type Extractor, replySession, startSession } from "../lib/session/run";
 import { readSession } from "../lib/session/store";
-import { safeReply, type Talker, type TalkInput, type TalkOutput, talkWithTimeout } from "../lib/session/talk";
+import { safeReply, type Talker, talkText, type TalkInput, type TalkOutput, talkWithTimeout } from "../lib/session/talk";
 import { SAY } from "../lib/session/view";
 import { routeVoice } from "../lib/session/voice";
 import type { Segment, Transcript } from "../lib/stt/types";
@@ -163,8 +163,8 @@ test("「やめる」→ 作業を閉じる（idle）。確定・送信はしな
 
   const notCue = fakeTalk({ intent: "cancel", reply: "わかりました" });
   const k = await replySession({ dir, session: s, utterance: say("うーん"), ledger, extract: extractor, office, talk: notCue.talk });
-  assert.equal(k.status, "asking", "やめる語が無ければ閉じない");
-  assert.deepEqual(k.answers.at(-1)?.action, { kind: "talk", intent: "other" });
+  assert.equal(k.status, "asking", "やめる語が無ければ閉じずに聞き返す");
+  assert.equal(viewOf(k).say, "やめますか？「やめる」と言ってください");
 
   const { talk } = fakeTalk({ intent: "cancel", reply: "" });
   const c = await replySession({ dir, session: k, utterance: say("やっぱりやめる"), ledger, extract: extractor, office, talk });
@@ -175,6 +175,37 @@ test("「やめる」→ 作業を閉じる（idle）。確定・送信はしな
   assert.equal(viewOf(c).say, SAY.cancelled);
   assert.equal((await readSession(dir, s.id))?.status, "idle");
   assert.deepEqual(routeVoice(c), { kind: "new" });
+});
+
+test("Codex: 「やめないで続けて」では閉じずに聞き返し、次の「はい、やめる」で閉じる（Claude を呼ばない）", async () => {
+  const dir = await tmp();
+  const s = await startSession({ dir, transcript: fict(["脱着4本。"]), ledger, extract: extractor });
+  const { talk } = fakeTalk({ intent: "cancel", reply: "" });
+  for (const text of ["やめないで続けて", "まだやめない", "やめずに待って"]) {
+    const k = await replySession({ dir, session: s, utterance: say(text), ledger, extract: extractor, talk });
+    assert.equal(k.status, "asking", text);
+    assert.equal(viewOf(k).say, "やめますか？「やめる」と言ってください");
+  }
+  const latest = await readSession(dir, s.id);
+  assert.ok(latest !== null);
+  const c = await replySession({ dir, session: latest, utterance: say("はい、やめる"), ledger, extract: extractor, talk: never });
+  assert.equal(c.status, "idle");
+  assert.equal(viewOf(c).say, SAY.cancelled);
+});
+
+test("Codex: 会話の受け皿に渡す文は数字をすべて伏せ、「顧客は／ナンバーは」の後ろの語も伏せる", async () => {
+  assert.equal(talkText("顧客は仮田だっけ？"), "顧客は＊だっけ？");
+  assert.equal(talkText("ナンバーは123だっけ？"), "ナンバーは＊だっけ？");
+  assert.equal(talkText("お客さんは仮田、脱着は？"), "お客さんは＊、脱着は？");
+  assert.equal(talkText("１２と三百と45"), "＊＊と＊＊と＊＊");
+  const dir = await tmp();
+  const s = await startSession({ dir, transcript: fict(["脱着4本。"]), ledger, extract: extractor });
+  const { talk, seen } = fakeTalk({ intent: "other", reply: "はい" });
+  for (const text of ["顧客は仮田だっけ？", "ナンバーは123だっけ？", "客は二三四五？"]) {
+    await replySession({ dir, session: (await readSession(dir, s.id)) ?? s, utterance: say(text), ledger, extract: extractor, talk });
+  }
+  const passed = seen.map((x) => x.utterance).join("|");
+  assert.ok(!passed.includes("仮田") && !/[0-9一二三四五]/.test(passed), passed);
 });
 
 test("other: Claude の文を使う。4 桁以上の数・長すぎる文は捨てて「すみません、もう一度お願いします」", async () => {
@@ -188,7 +219,8 @@ test("other: Claude の文を使う。4 桁以上の数・長すぎる文は捨�
   assert.equal(viewOf(s2).say, `すみません、もう一度お願いします。${SAY.askApprove}`);
   assert.equal(safeReply("１２３４なのです"), null);
   assert.equal(safeReply("あ".repeat(61)), null);
-  assert.equal(safeReply("4本なのです"), "4本なのです");
+  for (const r of ["合計は500円です", "12-34なのです", "二千円です", "4本なのです"]) assert.equal(safeReply(r), null, r);
+  assert.equal(safeReply("お疲れさまです"), "お疲れさまです");
 });
 
 test("Claude が落ちる・期限切れ → 今の「もう一度お願いします。…」（読めない理由は残る）", async () => {

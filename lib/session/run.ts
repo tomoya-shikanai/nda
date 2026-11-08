@@ -32,12 +32,14 @@ import { withSessionLock } from "./lock";
 import {
   claudeTalker,
   currentQuestion,
-  hasCancelCue,
+  cancelDecision,
+  isCancelConfirm,
   setTalkSay,
   type Talker,
   type TalkOutput,
   type TalkState,
   talkSay,
+  talkText,
   talkWithTimeout,
 } from "./talk";
 import { type Answer, type ExtractionCost, newSession, readSession, type Session, transition, writeSession } from "./store";
@@ -390,7 +392,8 @@ function talkState(s: Session): TalkState {
 
 /**
  * 読めなかった返事を Claude で意図だけ読み、コードが声の文を作る（talk.ts）。答えは talk（意図だけ）。状態は asking のまま。
- * cancel（やめる語があるときだけ）は作業を idle に閉じる（確定・送信はしない）。
+ * cancel は取り消しの合図があり打ち消しが無いときだけ作業を idle に閉じる（確定・送信はしない）。迷ったら asking のまま聞き返し、
+ * 次の返事が「やめる」なら閉じる。
  * Claude の失敗・期限切れは、今の「もう一度お願いします。…」（unread）に落とす。unread は answerSession が作った読めない答えの作業
  * （あればそれを保存して読めない理由を残す。無ければ TALK_FAILED を足す）。utterance は伏せ字の後の文。
  */
@@ -404,24 +407,33 @@ async function talkSession(x: ReplyInput, s: Session, utterance: Segment, now: (
     lineIndex: -1,
     action,
   });
+  const close = async (answers: Answer[]) => {
+    dropClue(s.id);
+    const closed = transition({ ...s, answers }, "idle", now());
+    await writeSession(x.dir, closed);
+    return closed;
+  };
+  // 確かめの 1 往復: 直前が「やめますか？」の聞き返しで、返事が「やめる」「はい、やめる」なら Claude を呼ばずに閉じる
+  const prior = s.answers.at(-1)?.action.kind === "continue" ? s.answers.at(-2) : s.answers.at(-1);
+  if (prior?.action.kind === "talk" && prior.action.intent === "cancel" && isCancelConfirm(utterance.text)) {
+    logEvent("talk", { sessionId: s.id, intent: "cancel", ms: since(t0), ok: true, error: null });
+    return close([...s.answers, record({ kind: "talk", intent: "cancel" })]);
+  }
   let out: TalkOutput;
   try {
-    out = await talkWithTimeout(x.talk ?? claudeTalker, { utterance: utterance.text, state: talkState(s) });
+    // 伏せ字の後さらに数字と客を指す語の後ろを伏せてから渡す
+    out = await talkWithTimeout(x.talk ?? claudeTalker, { utterance: talkText(utterance.text), state: talkState(s) });
   } catch (e) {
     logEvent("talk", { sessionId: s.id, intent: null, ms: since(t0), ok: false, error: errorKind(e) });
     const next: Session = unread ?? { ...s, answers: [...s.answers, record({ kind: "unread", reason: TALK_FAILED })], updatedAt: base.at };
     await writeSession(x.dir, next);
     return next;
   }
-  const intent = out.intent === "cancel" && !hasCancelCue(utterance.text) ? "other" : out.intent;
+  const intent = out.intent;
   logEvent("talk", { sessionId: s.id, intent, ms: since(t0), ok: true, error: null });
   const answers = [...s.answers, record({ kind: "talk", intent })];
-  if (intent === "cancel") {
-    dropClue(s.id);
-    const closed = transition({ ...s, answers }, "idle", now());
-    await writeSession(x.dir, closed);
-    return closed;
-  }
+  // 取り消しの合図があり打ち消しが無いときだけ閉じる。迷ったら閉じずに聞き返す（talkSay の cancel）
+  if (intent === "cancel" && cancelDecision(utterance.text) === "close") return close(answers);
   setTalkSay(s.id, answers.length, talkSay(intent, out.reply, s, getClue(s.id), getLabel(s.id)));
   const next: Session = { ...s, answers, updatedAt: base.at };
   await writeSession(x.dir, next);
