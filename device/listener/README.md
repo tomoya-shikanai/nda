@@ -4,7 +4,10 @@
 サーバーは、最新の作業が質問中か承認待ちならその返事として、それ以外なら新しい作業として受ける（`lib/session/voice.ts` の `routeVoice`）。
 
 - 起動語の検出はこの機械の中だけ（Vosk の日本語小型モデル、オフライン）。grammar `["んだ クロード","[unk]"]`、両語の conf ≥ 0.9。
-- 録音は合図音の後から。声の後に無音が 1.5 秒続くか、最大 30 秒で止める。合図の後 5 秒たっても声が無ければ送らない。
+- 録音は合図音（上がりの 2 音）の後から。声の後に無音が 1.5 秒続くか、最大 15 秒で止める（終わりは下がりの 1 音）。合図の後 8 秒たっても声が無ければ送らない。
+- 合図音はまず `paplay`（PipeWire の既定のシンク。Pi では Jabra）で鳴らし、無い・失敗なら sounddevice で `--output-device` に鳴らす。
+- 無音の閾値は、起動語を聞くまでの 3 秒（`--ambient-sec`）の周りの音に合わせる: max(`--silence-rms`, 周りの RMS の中央値 × `--ambient-factor`（2.5）)。ラジオが鳴っていても声の終わりで止まるように。
+- 起動語の後に `listening`、録音の終わりに `sending`、送った後に `idle` を本体（`POST /api/listener/state`、127.0.0.1 からだけ）に知らせ、画面に「話してください」と残り秒を出す。届かなくても 0.5 秒で諦めて続ける。
 - 録音はメモリの中で 16kHz モノラルの WAV にして送るだけで、ファイルに残さない。文字起こしはサーバーが STT（Scribe か Gemini）に渡す。
 - 起動語の後は、合図音を待ってから話す（起動語と続けて話すと、Vosk が区切りを待つ間の声が録音に入らない）。
 - 返事も承認（「請求書頼む」）も、毎回起動語から始める。
@@ -40,8 +43,9 @@ pnpm dev
 | `--output-device`（合図音を鳴らすデバイス名の部分一致） | `NDA_OUTPUT_DEVICE` | システムの既定 |
 | `--vendor` | `NDA_STT_VENDOR` | `scribe` |
 | `--wake-conf` | `NDA_WAKE_CONF` | `0.9` |
-| `--silence-rms` | `NDA_SILENCE_RMS` | `500` |
-| `--silence-sec` / `--max-sec` | — | `1.5` / `30` |
+| `--silence-rms`（閾値の下限） | `NDA_SILENCE_RMS` | `500` |
+| `--ambient-factor` / `--ambient-sec` | `NDA_AMBIENT_FACTOR` / `NDA_AMBIENT_SEC` | `2.5` / `3` |
+| `--silence-sec` / `--max-sec` / `--first-voice-sec` | `NDA_SILENCE_SEC` / `NDA_MAX_SEC` / `NDA_FIRST_VOICE_SEC` | `1.5` / `15` / `8` |
 | `--model` | `NDA_VOSK_MODEL` | `/Users/dev/tools/nda/vosk-model-dl/vosk-model-small-ja-0.22` |
 | `--log-dir`（出来事の記録の置き場。無ければ記録しない） | `NDA_LOG_DIR` | なし（Pi は `/var/lib/nda/logs`） |
 

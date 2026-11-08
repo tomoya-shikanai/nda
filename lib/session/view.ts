@@ -2,6 +2,7 @@
  * モニター用の 1 つの JSON（W2）。純粋な関数。入力を書き換えない。
  * 金額を推測で出さない。null は null のまま返し、「値段？」の表示は画面がする。
  */
+import type { ListenerView } from "../listener/state";
 import { customerPending, pendingCount } from "./customer";
 import { keptLines } from "./kept";
 import type { Session, SessionStatus } from "./store";
@@ -46,6 +47,8 @@ export type MonitorView = {
   /** 依頼を受け箱に置けていない（送り直し中）。画面は状態の札を失敗の色と言葉にする（成功と同じ緑にしない）。 */
   officeTrouble: boolean;
   credit: typeof VOICE_CREDIT;
+  /** 聞き役の状態（起動語の後に聞いている・送っている）。メモリにだけある（lib/listener/state.ts）。工場の本体だけが入れる。 */
+  listener?: ListenerView;
 };
 
 export const SAY = {

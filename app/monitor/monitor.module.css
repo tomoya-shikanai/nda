@@ -510,3 +510,34 @@
   text-overflow: ellipsis;
 }
 .customer b { color: #1f1d29; font-weight: 900; }
+
+/* 聞き役の合図（起動語の後に聞いている・送っている）。画面いっぱいに出して、父がいつ話してよいか遠くからでも分かるようにする */
+.cue {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(24 * var(--u));
+  background: rgba(31, 111, 209, 0.93);
+  color: #fff;
+  text-align: center;
+  pointer-events: none;
+}
+.cueSending {
+  background: rgba(51, 65, 92, 0.88);
+}
+.cueMain {
+  margin: 0;
+  font-size: calc(120 * var(--u));
+  font-weight: 800;
+  line-height: 1.2;
+}
+.cueSec {
+  margin: 0;
+  font-size: calc(96 * var(--u));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}

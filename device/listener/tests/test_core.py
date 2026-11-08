@@ -15,11 +15,15 @@ from listener_core import (  # noqa: E402
     GRAMMAR,
     RATE,
     Endpointer,
+    ambient_threshold,
     beep_pcm,
+    cue_pcm,
     is_wake,
     multipart,
     pick_device,
+    paplay_cmd,
     rms,
+    state_body,
     wav_bytes,
 )
 
@@ -179,3 +183,49 @@ class PickDeviceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CueTest(unittest.TestCase):
+    def test_起動語の合図は上がりの2音で録音の終わりは下がりの1音(self):
+        wake, end = cue_pcm("wake"), cue_pcm("end")
+        self.assertNotEqual(wake, end)
+        a = array("h")
+        a.frombytes(wake)
+        # 2 音の間に無音の隙間がある
+        gap = int(RATE * 0.12)
+        self.assertTrue(all(x == 0 for x in a[gap + 10 : gap + int(RATE * 0.04)]))
+        self.assertLess(len(end) / 2 / RATE, 0.5)
+        with self.assertRaises(ValueError):
+            cue_pcm("other")
+
+    def test_paplayはstdinのrawを読む形(self):
+        self.assertEqual(paplay_cmd(16000), ["paplay", "--raw", "--rate=16000", "--format=s16le", "--channels=1"])
+
+
+class AmbientTest(unittest.TestCase):
+    def test_閾値は下限と周りの中央値の2_5倍の大きい方(self):
+        self.assertEqual(ambient_threshold([], 500, 2.5), 500)
+        self.assertEqual(ambient_threshold([100, 120, 90], 500, 2.5), 500)
+        self.assertEqual(ambient_threshold([400, 420, 5000, 410], 500, 2.5), 2.5 * 415)
+        self.assertEqual(ambient_threshold([float("nan"), 800], 500, 2.5), 2000)
+
+    def test_既定は上限15秒で声を8秒待つ(self):
+        ep = Endpointer()
+        self.assertEqual((ep.max_sec, ep.first_voice_sec), (15.0, 8.0))
+        stops = [ep.feed(0, 0.1) for _ in range(80)]
+        self.assertFalse(any(stops[:79]))
+        self.assertTrue(stops[79])
+
+
+class StateBodyTest(unittest.TestCase):
+    def test_状態は3種で自由な文字列を入れない(self):
+        import json
+
+        self.assertEqual(json.loads(state_body("listening", 8)), {"state": "listening", "until": 8.0})
+        self.assertEqual(json.loads(state_body("idle")), {"state": "idle"})
+        for bad in ("speaking", ""):
+            with self.assertRaises(ValueError):
+                state_body(bad)
+        for bad in (0, -1, 121, float("inf")):
+            with self.assertRaises(ValueError):
+                state_body("listening", bad)
