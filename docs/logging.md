@@ -7,11 +7,11 @@
 - `NDA_LOG_DIR` に置く。無ければ記録しない（Mac の開発の既定）。
 - 工場の Pi では `/var/lib/nda/logs`。本体（`nda-app`）と聞き役の両方が書けること（配置は `deploy/pi/` の担当が決める）。
 - 本体: `events-YYYY-MM-DD.jsonl`。聞き役（`device/listener/listen.py`）: `listener-YYYY-MM-DD.jsonl`。日付は機械の時刻。1 行が 1 つの出来事で、`t`（ISO の時刻）と `kind` と欄。
-- 書き込みに失敗しても本体・聞き役は止まらない（記録が欠けるだけ）。ファイルは 600 で作る。
+- 書き込みに失敗しても本体・聞き役は止まらない（記録が欠けるだけ）。ファイルは 600 で作る。シンボリックリンクはたどらず、通常のファイルでなければ（FIFO など）書かない。
 
 ## 守り
 
-- 記録するのは、数・時間・種類名（閉じた enum）・id（作業 id・メッセージ id）だけ。
+- 記録するのは、数・時間・種類名（閉じた enum）・id（作業 id・メッセージ id。UUID の形だけ。存在しない作業の id は null）だけ。例外の種類は既知の名前（`ERROR_KINDS`）に当て、それ以外は other。
 - 記録しない: 文字起こしの文、聞き取った言葉（答えの `quote`）、客の名前、ナンバー、事務所が返す `label`・客の番号、照合の `said`、品目名、例外の文（種類名だけ）、録音。
 - 出来事ごとに形を zod（`lib/log/events.ts`）と Python の表（`listener_core.py` の `LISTENER_EVENTS`）で決め、余計な欄・形の違う値（自由な文字列・形の違う id）があれば、その行を捨てて `log.invalid`（種類だけ）を残す。
 - 試験（`tests/log-events.test.ts`、`device/listener/tests/test_log.py`）で、架空の客の名前・4 桁・label・said・答えの言葉が記録に入らないことを確かめる。
