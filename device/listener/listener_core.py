@@ -185,35 +185,41 @@ def _ok(v: object, want: object) -> bool:
 
 
 def _valid(kind: str, fields: dict) -> bool:
-    spec = LISTENER_EVENTS.get(kind)
-    return spec is not None and set(fields) == set(spec) and all(_ok(fields[k], w) for k, w in spec.items())
+    """形が合うか。確かめの途中の例外（10**400 の OverflowError、dict でない fields など）は合わないとする。"""
+    try:
+        spec = LISTENER_EVENTS.get(kind)
+        return spec is not None and set(fields) == set(spec) and all(_ok(fields[k], w) for k, w in spec.items())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def log_event(kind: str, fields: dict, log_dir: str | None = None, now: datetime | None = None) -> None:
-    """1 行足す。log_dir（無ければ NDA_LOG_DIR）が無ければ何もしない。形が合わなければ捨てて log.invalid。投げない。
+    """1 行足す。log_dir（無ければ NDA_LOG_DIR）が無ければ何もしない。形が合わなければ捨てて log.invalid。
 
+    検証も書き込みも含めて、どんな例外でも投げない（記録の失敗で聞き役を止めない）。
     シンボリックリンクはたどらず（O_NOFOLLOW）、FIFO で止まらず（O_NONBLOCK）、開いた後に通常のファイルでなければ書かない。新規は 0600。
     """
-    d = log_dir if log_dir is not None else os.environ.get("NDA_LOG_DIR")
-    if not d:
-        return
-    now = now or datetime.now().astimezone()
-    if _valid(kind, fields):
-        line = {"t": now.isoformat(), "kind": kind, **fields}
-    else:
-        line = {"t": now.isoformat(), "kind": "log.invalid", "of": kind if kind in LISTENER_EVENTS else "unknown"}
     try:
+        d = log_dir if log_dir is not None else os.environ.get("NDA_LOG_DIR")
+        if not d:
+            return
+        now = now or datetime.now().astimezone()
+        if _valid(kind, fields):
+            line = {"t": now.isoformat(), "kind": kind, **fields}
+        else:
+            line = {"t": now.isoformat(), "kind": "log.invalid", "of": kind if isinstance(kind, str) and kind in LISTENER_EVENTS else "unknown"}
+        data = (json.dumps(line, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, f"listener-{now.strftime('%Y-%m-%d')}.jsonl")
         flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         fd = os.open(path, flags, 0o600)
         try:
             if stat.S_ISREG(os.fstat(fd).st_mode):
-                os.write(fd, (json.dumps(line, ensure_ascii=False) + "\n").encode("utf-8"))
+                os.write(fd, data)
         finally:
             os.close(fd)
-    except OSError:
-        pass  # 記録の失敗で聞き役を止めない
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def send_result(status: int | None) -> str:

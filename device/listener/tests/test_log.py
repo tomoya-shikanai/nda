@@ -87,6 +87,13 @@ class LogTest(unittest.TestCase):
             if old is not None:
                 os.environ["NDA_LOG_DIR"] = old
 
+    def test_検証の例外も外へ出さない_巨大な数_形の違うfields_種類名でないkind(self):
+        log_event("record", {"sec": 10**400, "spoke": True}, self.dir, NOW)
+        log_event("record", ["sec"], self.dir, NOW)  # type: ignore[arg-type]
+        log_event({"x": 1}, {}, self.dir, NOW)  # type: ignore[arg-type]
+        self.assertEqual([x["kind"] for x in self.lines()], ["log.invalid"] * 3)
+        self.assertEqual([x["of"] for x in self.lines()], ["record", "record", "unknown"])
+
     def test_シンボリックリンクをたどらない_FIFOで止まらない(self):
         outside = os.path.join(self.dir, "outside.txt")
         Path(outside).write_text("")
