@@ -36,7 +36,7 @@
 
   <!-- office -->
   <rect class="box code" x="920" y="100" width="300" height="110"/>
-  <text class="t" x="1070" y="140">受け箱（共有フォルダ）</text><text class="s" x="1070" y="168">1 件 1 ファイル</text><text class="s" x="1070" y="192">.tmp に書いてから rename</text>
+  <text class="t" x="1070" y="140">Pi の送り箱から SSH で取る</text><text class="s" x="1070" y="168">1 件 1 ファイル。門番は list・get・ack だけ</text><text class="s" x="1070" y="192">鍵に command= で縛る</text>
 
   <path class="arrow" d="M1220 155 H1260"/>
   <rect class="box code" x="1260" y="100" width="300" height="110"/>
@@ -56,9 +56,9 @@
   <path class="arrow" d="M380 125 H920"/>
   <text class="m" x="650" y="116" text-anchor="middle">① 照合の問い合わせ（4 桁を含む文だけ）</text>
   <path class="arrow" d="M380 185 H920"/>
-  <text class="m" x="650" y="176" text-anchor="middle">③ 承認済みの請求（決まった形の JSON。Claude を通らない）</text>
+  <text class="m" x="650" y="176" text-anchor="middle">③ 声の指示（決まった形の JSON。Claude を通らない）</text>
   <path class="arrow" d="M1410 380 V495 H680"/>
   <text class="m" x="1045" y="486" text-anchor="middle">②④ 照合の答え（番号と「姓・車種」）／入力の結果。合言葉つき</text>
 
-  <text class="m" x="40" y="628" font-size="19">工場 → 事務所は同じ LAN の共有フォルダに置くだけ。事務所 → 工場は合言葉つきの 1 本道。客の照合と業務ソフトの操作は事務所の中で閉じる。</text>
+  <text class="m" x="40" y="628" font-size="19">工場 → 事務所は Pi の送り箱に置くだけで、事務所が門番つきの SSH で取りに来る。事務所 → 工場は合言葉つきの 1 本道。客の照合と業務ソフトの操作は事務所の中で閉じる。</text>
 </svg>
