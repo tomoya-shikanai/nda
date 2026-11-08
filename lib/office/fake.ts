@@ -1,7 +1,7 @@
 /**
  * Mac の中だけで一周させる偽の事務所（docs/design/pi-office.md §6）。本物の事務所のプログラム（office/box、Python）は事務所の PC の担当。
  * ローカルのフォルダを受け箱にして見張り、customer.query には架空の一覧（tests/fixtures/customers.json）で照合して答え、
- * invoice.request には entered を返す（POST /api/office/reply）。estimate.instruction（#56）は done/ に移すだけで返さない。業務ソフトには触らない。
+ * invoice.request には entered を返す（POST /api/office/reply）。estimate.instruction（#56）は消すだけで返さない（手がかりを残さない）。業務ソフトには触らない。
  * 答えた問い合わせのファイルは消す（said を残さない）。依頼は done/ に移す。
  */
 import { mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
@@ -74,10 +74,8 @@ export async function processBox(o: FakeOffice): Promise<number> {
       await rm(file, { force: true }); // said を残さない
       await o.post(a);
     } else if (m.data.kind === "estimate.instruction") {
-      // 声の指示（#56）: 本物の事務所は返しを送らない。偽物も done/ に移すだけ
-      const done = join(o.box, "..", "done");
-      await mkdir(done, { recursive: true });
-      await rename(file, join(done, name));
+      // 声の指示（#56）: 本物の事務所は返しを送らない。偽物は消すだけ（plateNo・customerWords を残さない。customer.query と同じ）
+      await rm(file, { force: true });
     } else {
       const done = join(o.box, "..", "done");
       await mkdir(done, { recursive: true });

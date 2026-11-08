@@ -15,7 +15,7 @@ import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { clearClues, getClue } from "../lib/office/clues";
 import { processBox } from "../lib/office/fake";
 import { customerClue, RESEND_EVERY_SEC, workText } from "../lib/office/flow";
-import { BOX_MARKER, type BoxWriter, folderBox, type OfficeLink, officeFromEnv, tickOffice } from "../lib/office/link";
+import { BOX_MARKER, type BoxWriter, folderBox, isWriting, type OfficeLink, officeFromEnv, tickOffice, writingDone } from "../lib/office/link";
 import { EstimateInstruction, ToOffice } from "../lib/office/schema";
 import { CUSTOMER_QUESTION } from "../lib/session/customer";
 import { type Extractor, replySession, startSession } from "../lib/session/run";
@@ -172,12 +172,12 @@ test("返事の 4 桁で客を受け、承認したら受け箱に声の指示�
     assert.ok(!logText.includes("log.invalid"));
     assert.ok(!leaks(logText), "出来事の記録に手がかりが無い");
 
-    // 偽の事務所は done/ に移すだけで返さない（状態は sent のまま）
+    // 偽の事務所は消すだけで返さない（手がかりを done/ にも残さない。状態は sent のまま）
     const posted: unknown[] = [];
     assert.equal(await processBox({ box: e.box, customers: [], post: async (x) => void posted.push(x) }), 1);
     assert.deepEqual(posted, []);
     assert.deepEqual(await boxFiles(e.box), []);
-    assert.equal((await boxFiles(join(e.box, "..", "done"))).length, 1);
+    assert.deepEqual(await boxFiles(join(e.box, "..", "done")), [], "done/ に指示を残さない");
     assert.equal((await readSession(e.dir, s.id))?.status, "sent");
   } finally {
     delete process.env.NDA_LOG_DIR;
@@ -260,4 +260,84 @@ test("同時 2 本の承認でも声の指示は 1 件だけ", async () => {
   const end = await readSession(e.dir, s.id);
   assert.equal(end?.status, "sent");
   assert.equal(end?.answers.filter((x) => x.action.kind === "approve").length, 1);
+});
+
+test("Codex P1: 書き込みが期限を過ぎて後から成功したら sent にして手がかりを消す。書き込み中と、その後の見回りで 2 回目を置かない", async () => {
+  // 本番の 5 秒の期限と 6 秒の遅れを、50ms と 150ms に縮めて同じ順にする
+  const puts: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const e0 = await env();
+  const real = folderBox(e0.box, NOMOUNT);
+  const slow: BoxWriter = {
+    kind: "slow",
+    put: async (n, b) => {
+      puts.push(n);
+      await gate;
+      await real.put(n, b);
+    },
+  };
+  const e = { ...e0, office: { ...e0.office, box: slow, timeoutMs: 50 } };
+  const s = await asking(e);
+  const s1 = await replySession({ dir: e.dir, session: s, utterance: say("仮田さんの1111。"), ledger, office: e.office });
+  const s2 = await replySession({ dir: e.dir, session: s1, utterance: say("請求書頼む"), ledger, office: e.office });
+  assert.equal(s2.status, "sending", "期限を過ぎたので、まだ置けていない扱い");
+  assert.ok(s2.office?.lastError);
+  assert.equal(isWriting(s.id), true);
+
+  // 書き込み中の見回り（30 秒後）は送り直さない
+  const later = new Date(Date.now() + (RESEND_EVERY_SEC + 1) * 1000);
+  const t1 = await tickOffice(e.dir, e.office, s2, later);
+  assert.equal(t1.status, "sending");
+  assert.equal(puts.length, 1, "書き込み中は 2 回目を始めない");
+
+  // 元の書き込みが遅れて成功 → sent、手がかりを消す
+  await new Promise((r) => setTimeout(r, 100));
+  release();
+  await writingDone(s.id);
+  assert.equal(isWriting(s.id), false);
+  const after1 = await readSession(e.dir, s.id);
+  assert.equal(after1?.status, "sent");
+  assert.equal(getClue(s.id), null);
+  assert.equal((await boxFiles(e.box)).length, 1);
+
+  // その後の見回りでも 2 回目を置かない
+  assert.ok(after1);
+  const t2 = await tickOffice(e.dir, e.office, after1, new Date(later.getTime() + (RESEND_EVERY_SEC + 1) * 1000));
+  assert.equal(t2.status, "sent");
+  assert.equal(puts.length, 1);
+  assert.equal((await boxFiles(e.box)).length, 1);
+});
+
+test("Codex P1: 期限を過ぎた書き込みが後から失敗したら、書き込み中を外し、次の見回りで同じ id を送り直す", async () => {
+  let fail = true;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const e0 = await env();
+  const real = folderBox(e0.box, NOMOUNT);
+  const ids: string[] = [];
+  const box: BoxWriter = {
+    kind: "slow-fail",
+    put: async (n, b) => {
+      ids.push(n);
+      if (fail) {
+        await gate;
+        throw new Error("x");
+      }
+      await real.put(n, b);
+    },
+  };
+  const e = { ...e0, office: { ...e0.office, box, timeoutMs: 50 } };
+  const s = await asking(e);
+  const s1 = await replySession({ dir: e.dir, session: s, utterance: say("仮田さんの1111。"), ledger, office: e.office });
+  const s2 = await replySession({ dir: e.dir, session: s1, utterance: say("請求書頼む"), ledger, office: e.office });
+  assert.equal(s2.status, "sending");
+  release();
+  await writingDone(s.id);
+  assert.equal((await readSession(e.dir, s.id))?.status, "sending", "失敗なら sending のまま");
+  fail = false;
+  const t = await tickOffice(e.dir, e.office, s2, new Date(Date.now() + (RESEND_EVERY_SEC + 1) * 1000));
+  assert.equal(t.status, "sent");
+  assert.equal(ids.length, 2);
+  assert.equal(ids[0], ids[1], "送り直しは同じ id");
 });
