@@ -43,8 +43,11 @@ pnpm dev
 | `--silence-rms` | `NDA_SILENCE_RMS` | `500` |
 | `--silence-sec` / `--max-sec` | — | `1.5` / `30` |
 | `--model` | `NDA_VOSK_MODEL` | `/Users/dev/tools/nda/vosk-model-dl/vosk-model-small-ja-0.22` |
+| `--log-dir`（出来事の記録の置き場。無ければ記録しない） | `NDA_LOG_DIR` | なし（Pi は `/var/lib/nda/logs`） |
 
 名前に当たるデバイスが無ければ、既定に戻さず止まる。
+
+記録（`docs/logging.md`）: 置き場があれば `listener-YYYY-MM-DD.jsonl` に、起動語の conf（通らなかったものも）・録音の秒数・送信の ms と HTTP の結果を 1 行ずつ足す。聞き取った言葉と録音は記録しない。集計は `pnpm log:summary`。
 
 ## Pi と Jabra に移すとき変える所
 
@@ -56,7 +59,7 @@ pnpm dev
 
 ## 試験
 
-音声を使わない部分（起動語の判定・録音の止め時・WAV と multipart・デバイスの選び方）は `listener_core.py` にあり、標準ライブラリだけで試せる。`pnpm check` でも流れる。
+音声を使わない部分（起動語の判定・録音の止め時・WAV と multipart・デバイスの選び方・出来事の記録）は `listener_core.py` にあり、標準ライブラリだけで試せる。`pnpm check` でも流れる。
 
 ```sh
 cd device/listener && python3 -m unittest discover -s tests
