@@ -32,7 +32,38 @@ const NUMBER_KINDS = new Set<CandidateKind>(["qty", "bareNumber", "unitPrice", "
 const QTY_REASONS = new Set<QuestionReason>(["qty", "unit", "correction", "unparsed"]);
 const SPEAKERS = new Set(["father", "customer", "son"]);
 
-const unread = (reason: string): Action => ({ kind: "unread", reason });
+/** 答えを読めなかった理由（固定の文）。記録（lib/log/events.ts）はこの中の文だけを残す。 */
+export const UNREAD_REASONS = [
+  "客の声",
+  "確認事項が残っている",
+  "聞いている質問が無い",
+  "お客様が分からない",
+  "数が読めない",
+  "数が無い",
+  "数が 2 つ以上ある",
+  "数量が整数でない",
+  "質問の単位が分からない",
+  "答えの単位が質問の単位と違う",
+  "単価の単位が質問の単位と違う",
+  "「数＋円」の答えでない",
+  "言い直しの質問に数量で答えていない",
+  "質問に出た値でない",
+  "どの単位の数か分からない",
+  "選択肢が分からない",
+  "選択肢の品目の語が無い",
+  "選択肢の品目の語が 2 つ以上ある",
+  "答えに余計な語がある",
+  "否定か言い直しの合図がある",
+  "行に付かない質問は画面で直す",
+  "質問の行が無い",
+  "「関係ない」で読めない",
+  "はい・いいえで読めない",
+  "はいで読めない",
+  "人が画面で直す",
+] as const;
+export type UnreadReason = (typeof UNREAD_REASONS)[number];
+
+const unread = (reason: UnreadReason): Action => ({ kind: "unread", reason });
 
 /** 「数＋円」の候補（単価か、数量の付かない金額）。 */
 const isYen = (c: Candidate) => c.kind === "unitPrice" || (c.kind === "amount" && c.impliedQty === undefined);

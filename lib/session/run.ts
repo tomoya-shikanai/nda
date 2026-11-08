@@ -19,6 +19,8 @@ import type { InvoiceRefs } from "../invoice/schema";
 import type { LedgerEntry } from "../ledger/lookup";
 import { type Segment, type Transcript, TranscriptSchema } from "../stt/types";
 import { maskCustomerInfo } from "../customer/match";
+import { MODEL_MAIN } from "../claude";
+import { errorKind, logEvent } from "../log/events";
 import { buildCustomerQuery, pendingQuery } from "../office/flow";
 import { type OfficeLink, sendQuery, submitInvoice } from "../office/link";
 import { answerBase, answerSession } from "./answer";
@@ -68,6 +70,34 @@ function draft(out: Extracted, t: Transcript, ledger: LedgerEntry[], c: Pick<Ses
   const invoice = assembleInvoice({ candidates, ...refs }, t, ledger);
   const questions = withCustomerQuestion(toQuestions(invoice, candidates, t, ledger), c);
   return { candidates, refs, invoice, questions };
+}
+
+type Drafted = ReturnType<typeof draft>;
+
+/** 抽出の出来事を記録する（数・時間・種類名だけ。文の中身は入れない）。 */
+function logExtract(
+  sessionId: string,
+  phase: "start" | "continue",
+  extract: Extractor | undefined,
+  r: Awaited<ReturnType<typeof extractWithCost>>,
+  d: Drafted | null,
+): void {
+  const reasons: Partial<Record<string, number>> = {};
+  for (const q of d?.questions ?? []) reasons[q.reason] = (reasons[q.reason] ?? 0) + 1;
+  logEvent("extract", {
+    sessionId,
+    phase,
+    model: extract === undefined || extract === extractInvoice ? MODEL_MAIN : null,
+    inputTokens: r.cost.inputTokens,
+    outputTokens: r.cost.outputTokens,
+    ms: Math.round(r.cost.seconds * 1000),
+    ok: r.ok,
+    error: r.ok ? null : errorKind(r.error),
+    lines: d?.invoice.lines.length ?? 0,
+    confirmations: d?.invoice.confirmations.length ?? 0,
+    questions: d?.questions.length ?? 0,
+    questionReasons: reasons,
+  });
 }
 
 /** 事務所の返しで変わる欄。抽出の後に書くとき、作業ファイルの今の値を使う（返しが先に当たっていても消さない）。 */
@@ -129,11 +159,14 @@ export async function startSession(x: {
   return withSessionLock(id, async () => {
     s = await withLatestOffice(x.dir, s);
     if (!r.ok) {
+      logExtract(id, "start", x.extract, r, null);
       const failed = { ...transition(s, "idle", now()), error: extractionError(r.error), extraction: r.cost };
       await writeSession(x.dir, failed);
       throw r.error;
     }
-    s = { ...transition(s, "drafting", now()), ...draft(r.out, transcript, x.ledger, s), extraction: r.cost };
+    const d = draft(r.out, transcript, x.ledger, s);
+    logExtract(id, "start", x.extract, r, d);
+    s = { ...transition(s, "drafting", now()), ...d, extraction: r.cost };
     await writeSession(x.dir, s);
     s = transition({ ...s, questions: withCustomerQuestion(s.questions, s) }, "asking", now());
     await writeSession(x.dir, s);
@@ -182,6 +215,7 @@ export async function continueSession(x: {
   const r = await extractWithCost(x.extract ?? extractInvoice, transcript, x.ledger);
   const latest = await withLatestOffice(x.dir, drafting);
   if (!r.ok) {
+    logExtract(s.id, "continue", x.extract, r, null);
     const back = {
       ...transition(latest, "asking", now()),
       transcript: s.transcript,
@@ -191,7 +225,9 @@ export async function continueSession(x: {
     await writeSession(x.dir, back);
     return back;
   }
-  const next = transition({ ...latest, ...draft(r.out, transcript, x.ledger, latest), extraction: r.cost }, "asking", now());
+  const d = draft(r.out, transcript, x.ledger, latest);
+  logExtract(s.id, "continue", x.extract, r, d);
+  const next = transition({ ...latest, ...d, extraction: r.cost }, "asking", now());
   await writeSession(x.dir, next);
   return next;
 }

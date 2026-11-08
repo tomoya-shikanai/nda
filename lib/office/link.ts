@@ -12,6 +12,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { access, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { logEvent, since } from "../log/events";
 import { withSessionLock } from "../session/lock";
 import { readSession, type Session, writeSession } from "../session/store";
 import {
@@ -137,15 +138,34 @@ export function officeFromEnv(env: NodeJS.ProcessEnv = process.env): OfficeLink 
   return null;
 }
 
-/** 形を確かめてから、期限つきで受け箱に置く。 */
+/** 形を確かめてから、期限つきで受け箱に置く。かかった ms と、置けなかった種類を記録する（中身は記録しない）。 */
 export async function putMessage(link: OfficeLink, m: ToOffice): Promise<void> {
   const msg = ToOfficeSchema.parse(m);
   let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("受け箱に置くのが期限を過ぎた")), link.timeoutMs);
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new Error("受け箱に置くのが期限を過ぎた"));
+    }, link.timeoutMs);
   });
+  const t0 = performance.now();
+  const log = (error: "boxMissing" | "writeFailed" | "timeout" | null) =>
+    logEvent("office.put", {
+      sessionId: msg.sessionId,
+      message: msg.kind,
+      messageId: msg.id,
+      attempt: msg.kind === "invoice.request" ? msg.attempt : null,
+      ms: since(t0),
+      ok: error === null,
+      error,
+    });
   try {
     await Promise.race([link.box.put(boxFileName(msg), JSON.stringify(msg)), timeout]);
+    log(null);
+  } catch (e) {
+    log(timedOut ? "timeout" : unreachableReason(e));
+    throw e;
   } finally {
     clearTimeout(timer);
   }

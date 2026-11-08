@@ -12,6 +12,8 @@ import type { Candidate } from "../invoice/candidates";
 import type { Question } from "../invoice/questions";
 import type { InvoiceRefs } from "../invoice/schema";
 import { Provenance } from "../karte/schema";
+import { logDir } from "../log/events";
+import { logSessionChange } from "../log/session";
 import type { Transcript } from "../stt/types";
 import { customerPending } from "./customer";
 
@@ -262,9 +264,20 @@ function assertDone(s: Session): void {
   }
 }
 
+/** 記録が有効なときだけ、書く前の作業を読む（差を出来事にする）。読めなければ undefined（差を記録しない）。 */
+async function previousForLog(file: string): Promise<Session | null | undefined> {
+  if (logDir() === null) return undefined;
+  try {
+    return parseSession(JSON.parse(await readFile(file, "utf8")));
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined;
+  }
+}
+
 export async function writeSession(dir: string, s: Session): Promise<void> {
   const target = fileOf(dir, s.id);
   assertDone(s);
+  const prev = await previousForLog(target);
   await mkdir(dir, { recursive: true });
   const tmp = join(dir, `${s.id}.json.${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
   try {
@@ -274,6 +287,7 @@ export async function writeSession(dir: string, s: Session): Promise<void> {
     await rm(tmp, { force: true });
     throw e;
   }
+  if (prev !== undefined) logSessionChange(prev, s);
 }
 
 export async function readSession(dir: string, id: string): Promise<Session | null> {

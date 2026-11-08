@@ -11,6 +11,7 @@ import json
 import os
 import queue
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -23,10 +24,12 @@ from listener_core import (  # noqa: E402
     RATE,
     Endpointer,
     beep_pcm,
-    is_wake,
+    log_event,
     multipart,
     pick_device,
     rms,
+    send_result,
+    wake_conf,
     wav_bytes,
 )
 
@@ -47,6 +50,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--silence-sec", type=float, default=1.5, help="声の後この秒数の無音で録音を止める")
     p.add_argument("--max-sec", type=float, default=30.0, help="録音の最大秒数")
     p.add_argument("--model", default=env("NDA_VOSK_MODEL", DEFAULT_MODEL), help="Vosk のモデルのフォルダ（NDA_VOSK_MODEL）")
+    p.add_argument("--log-dir", default=env("NDA_LOG_DIR"), help="出来事の記録の置き場。無ければ記録しない（NDA_LOG_DIR。Pi は /var/lib/nda/logs）")
     p.add_argument("--show-level", action="store_true", help="録音中の音量（RMS）を出す（無音の閾値を決めるとき）")
     return p.parse_args(argv)
 
@@ -91,7 +95,8 @@ def record(q: queue.Queue, ep: Endpointer, show_level: bool) -> bytes:
             return b"".join(chunks)
 
 
-def send(server: str, vendor: str, wav: bytes) -> None:
+def send(server: str, vendor: str, wav: bytes) -> int | None:
+    """送って HTTP の状態コードを返す。届かなければ None。"""
     body, ctype = multipart({"vendor": vendor}, "file", "voice.wav", "audio/wav", wav)
     req = urllib.request.Request(f"{server.rstrip('/')}/api/session/voice", data=body, method="POST", headers={"Content-Type": ctype})
     try:
@@ -99,6 +104,7 @@ def send(server: str, vendor: str, wav: bytes) -> None:
             j = json.loads(r.read())
             view = j.get("view", {})
             print(f"送った（{r.status}）: {view.get('state')} 「{view.get('say')}」")
+            return r.status
     except urllib.error.HTTPError as e:
         try:
             err = json.loads(e.read()).get("error")
@@ -109,8 +115,10 @@ def send(server: str, vendor: str, wav: bytes) -> None:
             print("作業が変わったので当てなかった。もう一度（起動語から）お願いします", flush=True)
         else:
             print(f"サーバーが断った（{e.code}）: {err}", file=sys.stderr)
+        return e.code
     except (urllib.error.URLError, TimeoutError) as e:
         print(f"サーバーに届かない: {getattr(e, 'reason', e)}", file=sys.stderr)
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -151,16 +159,24 @@ def main(argv: list[str] | None = None) -> int:
             data = q.get()
             if not rec.AcceptWaveform(data):
                 continue
-            if not is_wake(json.loads(rec.Result()), min_conf=args.wake_conf):
+            conf = wake_conf(json.loads(rec.Result()))
+            if conf is None:
+                continue
+            log_event("wake", {"conf": conf, "accepted": conf >= args.wake_conf, "minConf": args.wake_conf}, args.log_dir)
+            if conf < args.wake_conf:  # is_wake と同じ判定
                 continue
             print("起動語を聞いた。話してください", flush=True)
             beep(sd, dev_out)
             drain(q)  # 合図音と、それまでの音を録音に入れない
             ep = Endpointer(silence_rms=args.silence_rms, silence_sec=args.silence_sec, max_sec=args.max_sec)
             pcm = record(q, ep, args.show_level)
+            log_event("record", {"sec": round(ep.elapsed, 2), "spoke": ep.spoke}, args.log_dir)
             if ep.spoke:
                 print(f"録音 {ep.elapsed:.1f} 秒。送ります", flush=True)
-                send(args.server, args.vendor, wav_bytes(pcm))
+                t0 = time.monotonic()
+                status = send(args.server, args.vendor, wav_bytes(pcm))
+                ms = round((time.monotonic() - t0) * 1000)
+                log_event("send", {"ms": ms, "status": status, "result": send_result(status)}, args.log_dir)
             else:
                 print("声が無かったので送らない", flush=True)
             pcm = b""
