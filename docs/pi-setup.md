@@ -25,7 +25,7 @@ Pi 5 が届いたら、鹿内さんは「SD に OS を書く・電源を入れ�
 | P1 書き込み（約 15 分） | Imager で SD に OS を書く（§4）。Pi に挿し、Jabra とモニターをつないで電源を入れる | 設定値を渡す |
 | P2 初回接続（約 5 分） | 同じ LAN の Mac から Claude が入れない場合だけ、モニターに出た Tailscale の認証 URL を開く | `ssh` で入り、Tailscale を入れる（§5） |
 | P3 設定（約 1 時間） | なし（終わったらモニターの表示を目で確認） | 更新、電源・音声・画面の確認、自動起動（§6） |
-| P4 秘密の値 | API キーを Pi の `/etc/nda/nda.env` にパスワード付きの sudo で書き、`nda-app:nda-app` の 600 にする（Claude は値を見ない。手順は `deploy/pi/README.md`） | ファイルの権限と所有者を確かめる（中身は読まない） |
+| P4 秘密の値 | API キーと合言葉を Pi の `/etc/nda/nda.env`（`nda-app:nda-app` 600）に、事務所の共有の資格情報を `/etc/nda/office-share.cred`（`root:root` 600）に、パスワード付きの sudo で書く（Claude は値を見ない。項目と手順は `deploy/pi/README.md` の「鹿内さんが書く値」）。事務所の PC 名と共有名を Claude に伝える | ファイルの権限と所有者を確かめる（中身は読まない） |
 
 ## 3. 決めたこと
 
@@ -113,21 +113,29 @@ sudo tailscale up --ssh   # 表示された URL を鹿内さんが Mac のブラ
 1. **更新と基本**（`10-base.sh`）: `apt full-upgrade`、`unattended-upgrades` の有効化（60 で apt の sudo を外すため）、`ja_JP.UTF-8` と `en_US.UTF-8` の `locale-gen`（Mac が SSH で `en_US` を送るため）、`timedatectl` で時刻を確かめる。
 2. **電源**（`20-power-check.sh`）: 5V 5A で認識されたかを確かめる（§7-1）。駄目なら、電源を Traskit の単品（5.1V/5A、PSE 認証）に替える。
 3. **音声**（`30-audio.sh`）: Jabra を既定の録音・再生の機器にする。Pi 本体の音声出力と順番が入れ替わらないよう、ALSA の設定でカードを固定する。16kHz の音で音程がおかしくなる報告があるので、Jabra の対応する形式に変換して流す。
-4. **画面**（`40-display.sh`）: Chromium のキオスク表示で、仮のページ（「んだ、Claude」待機中）を全画面に出す。画面が消えないよう、省電力の画面オフを止める。
-5. **自動起動**（`50-service.sh`）: 本体専用の `nda-app` を作り、nDa の本体を `nda-app` で動く systemd のサービスにし、停電から戻ったら自動で上がるようにする（`Restart=always`）。音声機器を使うサービスは後で別に作る。
-6. **sudo を絞る**（`60-sudo-tighten.sh`）: §3-5 のとおり、パスワードなしは固定の 4 命令だけにする。
-7. **保守の skill**: `.claude/skills/pi/` に、状態・ログ・反映・再起動の命令を書く（AwesomeSea の `sensor` skill と同じ形）。
+4. **画面**（`40-display.sh`）: Chromium のキオスク表示で、nDa のモニター（`/monitor`）を全画面に出す。画面が消えないよう、省電力の画面オフを止める。
+   触らなくても声が鳴るよう自動再生を許す（`--autoplay-policy=no-user-gesture-required`）。起動のたびに PipeWire の既定のシンク・ソースを Jabra にする。
+5. **自動起動**（`50-service.sh`）: Node（公式の tar、版と SHA-256 を固定）を入れ、本体専用の `nda-app` を作り、公開リポジトリを `/opt/nda` に clone し、nDa の本体を `nda-app` で動く systemd のサービスにし、停電から戻ったら自動で上がるようにする（`Restart=always`）。作業の状態と料金表は `/var/lib/nda`（`NDA_SESSION_DIR`・`NDA_LEDGER_PATH`）。
+6. **本体の配置**（`52-deploy.sh`）: `origin/main` に合わせて build し、`nda.service` を入れ直す。本体を更新するたびに流す。
+7. **ずんだもんの声**（`57-voicevox.sh`）: VOICEVOX ENGINE の Linux arm64 の CPU 版（公式 Releases）を `127.0.0.1:50021` のサービスにする。遅いときの代わりは `deploy/pi/README.md` の「声の代わり」。
+8. **聞き役**（`55-listener.sh`）: §6-1。
+9. **事務所の受け箱**（`58-office-share.sh`）: 事務所の PC の共有（SMB）を `/mnt/nda-office` に automount し、本体は `NDA_OFFICE_BOX` でそこに書く（`docs/decisions.md` 2026-11-05）。
+10. **sudo を絞る**（`60-sudo-tighten.sh`）: §3-5 のとおり、パスワードなしは固定の 4 命令だけにする。最後に流す。
+11. **保守の skill**: `.claude/skills/pi/` に、状態・ログ・反映・再起動の命令を書く（AwesomeSea の `sensor` skill と同じ形）。
 
-起動語の検出、文字起こし、Claude の呼び出しは、この土台ができてから入れる。起動語は Picovoice Porcupine をやめて Vosk にした（`docs/decisions.md` 2026-11-04。§6-1）。
+起動語は Picovoice Porcupine をやめて Vosk にした（`docs/decisions.md` 2026-11-04。§6-1）。
+
+本体は事務所の返し（`POST /api/office/reply`）を LAN で受けるため `0.0.0.0:3000` で待つ。合言葉で守るのは `/api/office/*` だけで、他の画面と API は同じ LAN から開ける（危険と次の一手は `deploy/pi/README.md` の「本体を LAN に出す危険」）。
 
 ### 6-1. 現場の聞き役（起動語と録音）
 
 起動語の検出と録音は `device/listener/listen.py`（Vosk、オフライン）が行い、`/api/session/voice` へ送る。Mac で先に一周させてある。
-Pi では `libportaudio2` を入れ、`--device Jabra --output-device Jabra` と Vosk のモデルの置き場を渡すだけで動く形にしてある。手順と変える所は `device/listener/README.md`。
+Pi では `55-listener.sh` が `libportaudio2` と venv を入れ、Vosk の `vosk-model-small-ja-0.22`（alphacephei.com、SHA-256 `efa092d280153a77615e9e0c7d7283e93e600de3d19d3bec686c57ef19d52eac`）を `/opt/nda-listener` に置き、`--device Jabra --output-device Jabra` 相当の環境変数で `nda` のユーザーのサービス（`nda-listener.service`）にする。
+ユーザーのサービスにするのは、画面の Chromium（ずんだもんの声）と同じ PipeWire のセッションで Jabra を使うためと、本体の更新の後に sudo なしで入れ直すため。本体の `/monitor` が応答するまで待ってから聞き始める。閾値と変える所は `device/listener/README.md`。
 
 ## 7. 確かめ方
 
-Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表にする（#4・#5・#6 と #7 の再起動後の確認は人が行う。#10 は本体が動いていれば自動）。
+Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表にする（#4・#5・#6、#7 の再起動後の確認、#13 の起動語は人が行う。#10 は本体が動いていれば自動）。
 
 | # | 確かめること | 命令 | 合格 |
 |---|---|---|---|
@@ -142,6 +150,10 @@ Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表
 | 9 | 本体のユーザーに sudo が無い | `id -nG nda-app`、`getent passwd nda-app` | `sudo` 等のグループに入っていない。シェルが `nologin` |
 | 10 | 本体が専用のユーザーで動く | `systemctl show -p User,MainPID nda.service`、`ps -o user= -p <PID>` | `nda-app` |
 | 11 | パスワードなしの sudo が固定の命令だけ | `sudo -n -l`、`sudo -n true` | `NOPASSWD:` は `systemctl start/stop/restart nda.service` と `reboot` だけ。`sudo -n true` は拒否 |
+| 12 | 本体が応答する | `curl 127.0.0.1:3000/monitor`、`ss -ltn`、合言葉なしの `POST /api/office/reply` | `/monitor` が 200、`0.0.0.0:3000` で待つ、返しは 200 以外（401 か 503） |
+| 13 | 聞き役が動く | `systemctl --user status nda-listener`、「んだ クロード」と言う | active。ログに「起動語待ち」。合図音が Jabra から鳴り、話した声がモニターに出る |
+| 14 | ずんだもんの声 | `curl 127.0.0.1:50021/version`、短い 1 文を合成 | 応答がある。1 文 3 秒以内。モニターの台詞が Jabra から鳴る（人） |
+| 15 | 受け箱の mount | `findmnt /mnt/nda-office`、`.nda-box` | cifs で mount され、目印がある |
 
 ## 8. つまずいたとき
 
@@ -155,3 +167,4 @@ Pi の上で自動で確かめられる項目は `deploy/pi/90-verify.sh` が表
 - 2026-11-04 初版。Pi 5（Traskit 4GB キット）、Jabra Speak 510、工場のモニター、Tailscale。11/5 着。
 - 2026-11-04 本体を sudo の無い `nda-app` で動かし（置き場 `/opt/nda`・`/var/lib/nda`・`/etc/nda/nda.env`）、パスワードなしの sudo を固定の 4 命令に絞った（自動セキュリティレビューの指摘）。§7 に #9〜#11 を足した。
 - 2026-11-05 §6-1 に現場の聞き役（`device/listener`）への参照を足した。起動語は Porcupine でなく Vosk。
+- 2026-11-08 今の本体に追いつかせた。Node の導入と clone（50）、配置と build（52）、聞き役（55）、VOICEVOX（57）、事務所の受け箱の mount（58）を足し、キオスクを自動再生ありに、本体を LAN に出した。§7 に #12〜#15 を足した。
