@@ -35,6 +35,7 @@ const SPEAKERS = new Set(["father", "customer", "son"]);
 /** 答えを読めなかった理由（固定の文）。記録（lib/log/events.ts）はこの中の文だけを残す。 */
 export const UNREAD_REASONS = [
   "客の声",
+  "答えとして読めない",
   "確認事項が残っている",
   "聞いている質問が無い",
   "お客様が分からない",
@@ -62,6 +63,8 @@ export const UNREAD_REASONS = [
   "人が画面で直す",
 ] as const;
 export type UnreadReason = (typeof UNREAD_REASONS)[number];
+/** 明細 0 行の続きでも何も増えず、会話の受け皿（talk.ts）も失敗したとき。 */
+export const TALK_FAILED: UnreadReason = "答えとして読めない";
 
 const unread = (reason: UnreadReason): Action => ({ kind: "unread", reason });
 

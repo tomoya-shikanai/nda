@@ -15,6 +15,7 @@ import { wavDurationSec } from "../stt/wav";
 import { withSessionLock } from "./lock";
 import { replySession, startSession } from "./run";
 import { latestSession, readSession, type Session, sessionDir } from "./store";
+import { getTalkSay } from "./talk";
 import { toMonitorView } from "./view";
 import { answerUtterance, routeVoice, sessionVersion } from "./voice";
 
@@ -27,7 +28,7 @@ export type AudioForm = { vendor: Vendor; file: Blob };
 const NO_STORE = { "cache-control": "no-store" };
 
 /** 画面の 1 つの JSON。事務所が返した客の label はメモリから引く（作業ファイルに無い）。 */
-export const viewOf = (s: Session | null) => toMonitorView(s, getLabel(s?.id ?? null));
+export const viewOf = (s: Session | null) => toMonitorView(s, getLabel(s?.id ?? null), getTalkSay(s));
 
 export function ledger(): Promise<LedgerEntry[]> {
   return loadLedger(ledgerPath());

@@ -16,6 +16,7 @@ import { logDir } from "../log/events";
 import { logSessionChange } from "../log/session";
 import type { Transcript } from "../stt/types";
 import { customerPending } from "./customer";
+import { TALK_INTENTS } from "./talk";
 
 /**
  * done（承認した瞬間）の後ろは事務所への入力（docs/design/pi-office.md §5）: sending（受け箱に置いている・送り直し中）→ sent（置けた。結果待ち）
@@ -59,6 +60,8 @@ export const AnswerAction = z.discriminatedUnion("kind", [
    */
   z.object({ kind: z.literal("continue"), offsetSec: z.number() }),
   z.object({ kind: z.literal("unread"), reason: z.string() }),
+  /** 読めなかった返事を会話の受け皿（talk.ts）で受けた。意図だけを残す（文は残さない。声の文はメモリにだけある）。 */
+  z.object({ kind: z.literal("talk"), intent: z.enum(TALK_INTENTS) }),
 ]);
 export type AnswerAction = z.infer<typeof AnswerAction>;
 
@@ -241,7 +244,8 @@ const ALLOWED: Record<SessionStatus, readonly SessionStatus[]> = {
   listening: ["thinking"],
   thinking: ["drafting", "idle"],
   drafting: ["asking"],
-  asking: ["drafting", "done"],
+  /** asking → idle は会話の受け皿の「やめる」（確定・送信はしない）。 */
+  asking: ["drafting", "done", "idle"],
   done: ["sending", "stopped"],
   sending: ["sent", "stopped"],
   sent: ["entered", "stopped"],

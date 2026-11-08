@@ -80,7 +80,7 @@ export function summarize(events: Row[], listener: Row[]): Summary {
     if (qr && typeof qr === "object") for (const [k, v] of Object.entries(qr)) if (num(v) !== null) bump(questionReasons, k, v as number);
   }
   // 答え: 承認・事務所への問い合わせ・話の続きは「質問への答え」に数えない
-  const answers = of(events, "session.answer").filter((r) => !["approve", "askOffice", "customerClue", "continue"].includes(String(r.action)));
+  const answers = of(events, "session.answer").filter((r) => !["approve", "askOffice", "customerClue", "continue", "talk"].includes(String(r.action)));
   const unreadRows = answers.filter((r) => r.action === "unread");
   const unreadReasons: Record<string, number> = {};
   for (const r of unreadRows) bump(unreadReasons, str(r.unreadReason) ?? "?");

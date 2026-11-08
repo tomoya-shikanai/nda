@@ -20,14 +20,26 @@ import type { LedgerEntry } from "../ledger/lookup";
 import { type Segment, type Transcript, TranscriptSchema } from "../stt/types";
 import { hasLedgerWord, ledgerWords, maskCustomerInfo } from "../customer/match";
 import { MODEL_MAIN } from "../claude";
-import { errorKind, logEvent } from "../log/events";
-import { getClue, setClue } from "../office/clues";
+import { errorKind, logEvent, since } from "../log/events";
+import { dropClue, getClue, setClue } from "../office/clues";
+import { getLabel } from "../office/labels";
 import { buildCustomerQuery, customerClue, pendingQuery } from "../office/flow";
 import { modeOf, type OfficeLink, sendQuery, submitInvoice } from "../office/link";
-import { answerBase, answerSession } from "./answer";
-import { customerPending, withCustomerQuestion } from "./customer";
+import { answerBase, answerSession, TALK_FAILED } from "./answer";
+import { customerPending, pendingCount, withCustomerQuestion } from "./customer";
 import { isApproval } from "./approval";
 import { withSessionLock } from "./lock";
+import {
+  claudeTalker,
+  currentQuestion,
+  hasCancelCue,
+  setTalkSay,
+  type Talker,
+  type TalkOutput,
+  type TalkState,
+  talkSay,
+  talkWithTimeout,
+} from "./talk";
 import { type Answer, type ExtractionCost, newSession, readSession, type Session, transition, writeSession } from "./store";
 
 /** POST の body の文字起こしの形。正は lib/stt/types.ts。 */
@@ -254,6 +266,8 @@ type ReplyInput = {
   extract?: Extractor;
   now?: () => Date;
   office?: OfficeLink | null;
+  /** 会話の受け皿の Claude。省略なら本物（talk.ts）。 */
+  talk?: Talker;
 };
 
 /** 作業の排他の中で作業ファイルを読み直してから当てる（同時の答え・承認で片方を消さない、依頼を 2 件出さない）。 */
@@ -296,8 +310,13 @@ async function replyLocked(x: ReplyInput): Promise<Session> {
       return (await readSession(x.dir, s.id)) ?? next;
     }
   }
-  if (isEmptyDraft(s) && !isApproval(utterance.text)) return continueSession({ ...x, utterance });
+  if (isEmptyDraft(s) && !isApproval(utterance.text)) {
+    const c = await continueSession({ ...x, utterance });
+    // 話の続きとして抽出し直しても明細が 0 行のまま（抽出の失敗は除く）なら、会話の受け皿で受ける
+    return isEmptyDraft(c) && c.answers.at(-1)?.action.kind === "continue" ? talkSession(x, c, utterance, now, null) : c;
+  }
   const next = answerSession(s, utterance, x.ledger, now());
+  if (talkable(s, next, utterance)) return talkSession(x, s, utterance, now, next);
   await writeSession(x.dir, next);
   if (office !== null && next.status === "done") return submitInvoice(x.dir, office, next, now());
   return next;
@@ -339,6 +358,74 @@ async function replyInstruction(x: ReplyInput, s: Session, utterance: Segment, n
     return next;
   }
   return null;
+}
+
+/** 会話の受け皿に回さない読めない理由（承認の言葉への返しと客の声は今のまま）。 */
+const NOT_TALK = new Set(["客の声", "確認事項が残っている"]);
+
+/** answerSession が返事を読めなかった（unread を 1 つ足しただけ）か。承認の言葉・客の声は回さない。 */
+function talkable(s: Session, next: Session, utterance: Segment): boolean {
+  const last = next.answers.at(-1)?.action;
+  return (
+    next.status === "asking" &&
+    next.answers.length === s.answers.length + 1 &&
+    last?.kind === "unread" &&
+    !NOT_TALK.has(last.reason) &&
+    !isApproval(utterance.text) &&
+    utterance.speaker !== "customer"
+  );
+}
+
+/** 会話の受け皿に渡す今の状態（客の中身・名前・ナンバーは入れない）。 */
+function talkState(s: Session): TalkState {
+  return {
+    lines: (s.invoice?.lines ?? []).map((l) => ({ item: l.item, qty: l.qty, unit: l.unit, unitPrice: l.unitPrice, amount: l.amount })),
+    total: s.invoice?.total ?? null,
+    confirmations: s.invoice?.confirmations.length ?? 0,
+    question: currentQuestion(s),
+    customerReceived: s.customer !== null || s.customerClueAt !== null,
+    awaitingApproval: s.invoice !== null && pendingCount(s) === 0,
+  };
+}
+
+/**
+ * 読めなかった返事を Claude で意図だけ読み、コードが声の文を作る（talk.ts）。答えは talk（意図だけ）。状態は asking のまま。
+ * cancel（やめる語があるときだけ）は作業を idle に閉じる（確定・送信はしない）。
+ * Claude の失敗・期限切れは、今の「もう一度お願いします。…」（unread）に落とす。unread は answerSession が作った読めない答えの作業
+ * （あればそれを保存して読めない理由を残す。無ければ TALK_FAILED を足す）。utterance は伏せ字の後の文。
+ */
+async function talkSession(x: ReplyInput, s: Session, utterance: Segment, now: () => Date, unread: Session | null): Promise<Session> {
+  const t0 = performance.now();
+  const base = answerBase(s, utterance, now());
+  const record = (action: Answer["action"]): Answer => ({
+    ...base,
+    provenance: { ...base.provenance, quote: action.kind === "talk" ? "" : base.provenance.quote },
+    questionIndex: s.questions.length ? 0 : -1,
+    lineIndex: -1,
+    action,
+  });
+  let out: TalkOutput;
+  try {
+    out = await talkWithTimeout(x.talk ?? claudeTalker, { utterance: utterance.text, state: talkState(s) });
+  } catch (e) {
+    logEvent("talk", { sessionId: s.id, intent: null, ms: since(t0), ok: false, error: errorKind(e) });
+    const next: Session = unread ?? { ...s, answers: [...s.answers, record({ kind: "unread", reason: TALK_FAILED })], updatedAt: base.at };
+    await writeSession(x.dir, next);
+    return next;
+  }
+  const intent = out.intent === "cancel" && !hasCancelCue(utterance.text) ? "other" : out.intent;
+  logEvent("talk", { sessionId: s.id, intent, ms: since(t0), ok: true, error: null });
+  const answers = [...s.answers, record({ kind: "talk", intent })];
+  if (intent === "cancel") {
+    dropClue(s.id);
+    const closed = transition({ ...s, answers }, "idle", now());
+    await writeSession(x.dir, closed);
+    return closed;
+  }
+  setTalkSay(s.id, answers.length, talkSay(intent, out.reply, s, getClue(s.id), getLabel(s.id)));
+  const next: Session = { ...s, answers, updatedAt: base.at };
+  await writeSession(x.dir, next);
+  return next;
 }
 
 /** 手がかりが消えていて承認しなかった答えの理由（画面の声が客の質問を言い直す）。 */

@@ -14,6 +14,7 @@ import { QUESTION_REASONS } from "../invoice/questions";
 import { INVOICE_OUTCOMES, INVOICE_REASONS } from "../office/schema";
 import { UNREAD_REASONS } from "../session/answer";
 import { SESSION_STATES } from "../session/store";
+import { TALK_INTENTS } from "../session/talk";
 
 /** 記録してよい例外の種類名（実際に出るもの）。ほかは other。 */
 export const ERROR_KINDS = [
@@ -55,6 +56,7 @@ export const EVENT_KINDS = [
   "session.office",
   "stt",
   "extract",
+  "talk",
   "office.put",
   "office.reply",
   "route.reject",
@@ -90,6 +92,7 @@ function buildSchemas() {
     "customerClue",
     "continue",
     "unread",
+    "talk",
   ] as const;
   const RETRY_REASONS = ["none", "many", "expired", "dbUnavailable", "boxMissing", "writeFailed"] as const;
 
@@ -147,6 +150,14 @@ function buildSchemas() {
       confirmations: Count,
       questions: Count,
       questionReasons: z.partialRecord(QuestionReason, Count),
+    }),
+    /** 会話の受け皿（lib/session/talk.ts）。意図・ms・成否だけ（文は入れない）。失敗なら intent は null。 */
+    talk: z.object({
+      sessionId: Id,
+      intent: z.enum(TALK_INTENTS).nullable(),
+      ms: Ms,
+      ok: z.boolean(),
+      error: ErrorKind.nullable(),
     }),
     /** 受け箱に置いた（照合の問い合わせ・入力の依頼）。 */
     "office.put": z.object({

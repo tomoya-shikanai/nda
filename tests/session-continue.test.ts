@@ -12,6 +12,7 @@ import { enumerateCandidates } from "../lib/invoice/candidates";
 import { ledgerEntries, parseLedgerBook } from "../lib/ledger/lookup";
 import { appendUtterance, type Extractor, isEmptyDraft, replySession, startSession } from "../lib/session/run";
 import { readSession, type Session } from "../lib/session/store";
+import { viewOf } from "../lib/session/routes";
 import { toMonitorView } from "../lib/session/view";
 import type { Segment, Transcript } from "../lib/stt/types";
 
@@ -129,7 +130,9 @@ test("返事でも 0 行なら、同じ質問のまま。返事は文字起こ�
   const dir = await tmp();
   const { extract, seen } = fakeExtract();
   const s0 = await startEmpty(dir, extract);
-  const s1 = await replySession({ dir, session: s0, utterance: say("ちょっと待って"), ledger, extract, now });
+  // 0 行のまま何も増えない返事は会話の受け皿へ（偽の Claude は「今の質問を聞いている」と読む）
+  const talk = async () => ({ intent: "ask_next" as const, reply: "" });
+  const s1 = await replySession({ dir, session: s0, utterance: say("ちょっと待って"), ledger, extract, now, talk });
   assert.equal(s1.status, "asking");
   assert.deepEqual(
     s1.questions.map((q) => q.text),
@@ -137,8 +140,12 @@ test("返事でも 0 行なら、同じ質問のまま。返事は文字起こ�
   );
   assert.equal(s1.transcript?.segments.length, 2);
   assert.ok(isEmptyDraft(s1));
-  // 画面は聞き直しの前置きを付けずに同じ質問を言う（continue は unread でない）
-  assert.equal(toMonitorView(s1).say, "請求する作業はありませんか");
+  assert.deepEqual(
+    s1.answers.map((a) => a.action.kind),
+    ["continue", "talk"],
+  );
+  // 画面は聞き直しの前置きを付けずに同じ質問を言う（ask_next）
+  assert.equal(viewOf(s1).say, "請求する作業はありませんか");
 
   const s2 = await replySession({ dir, session: s1, utterance: say("脱着4本。"), ledger, extract, now });
   assert.equal(s2.invoice?.lines.length, 1);
@@ -151,7 +158,8 @@ test("返事でも 0 行なら、同じ質問のまま。返事は文字起こ�
     ],
   );
   assert.deepEqual(s2.answers.at(-1)?.action, { kind: "continue", offsetSec: 4.8 });
-  assert.equal(s2.answers.at(-1)?.provenance.recordingId, `${s0.id}#answer-2`);
+  // 答えの通し番号は答えの記録ごと（continue・talk・continue）
+  assert.equal(s2.answers.at(-1)?.provenance.recordingId, `${s0.id}#answer-3`);
   assert.equal(seen.length, 3);
 });
 
