@@ -1,6 +1,6 @@
 # んだ (nDa) — 手は整備に、事務は相棒に。
 
-青森の **鹿内自動車**。65 歳の父が一人で回す整備工場で、11 月はタイヤ交換の繁忙期。油まみれの手が空くまで、請求書も、客も待っている。
+青森の **鹿内自動車**。65 歳の父が従業員 1 人と車を直し、母が事務を支える家族の整備工場。11 月はタイヤ交換の繁忙期。何をやったかは父の頭の中にあるので、油まみれの手が空くまで、請求書も、客も待っている。
 **んだ (nDa)** は、父が作業の手を止めずに「んだ クロード」と声をかけるだけで、請求書を業務ソフトに確定の手前まで作る相棒。分からない値は推測で埋めずに聞き返し、父が承認した明細だけを事務所へ運ぶ。最後の一押し（保存・確定・発行）は人が押す。
 Made in Aomori, in the family garage.
 
@@ -9,7 +9,7 @@ Made in Aomori, in the family garage.
 Built with Claude: Japan 2026（テーマ 1「あなたにしかない深さを」）の提出作品。開発期間は 2026-11-02 12:30 JST 〜 2026-11-08。
 デモ動画: （提出時にリンクを入れる）
 
-![工場のモニター。相棒が確認事項を聞いている](docs/design/screens/monitor-asking.png)
+![工場のモニター。聞いている → 考え中 → 請求書を作っている → 確かめたいことがある → 終わった（架空のデータ）](docs/img/monitor.gif)
 
 ## 何をするもの
 
@@ -57,6 +57,8 @@ python device/listener/listen.py --model <vosk-model-small-ja-0.22 の置き場>
 
 **数はコード、意味はモデル、最後は父の承認。** 詳しくは [`docs/design/invoice-verify.md`](docs/design/invoice-verify.md)。
 
+![声から請求書まで。数はコードが列挙し、Claude は ID を指すだけ。最後は父の承認と人の保存](docs/img/pipeline.svg)
+
 - **数はコードが拾う。** 文字起こしから「言われた数」を全部 ID 付きで列挙し（`lib/invoice/candidates.ts`）、Claude（`claude-opus-5-5`、structured outputs）は行ごとに候補の ID を指すだけ。数字は書かせない（`extract.ts`。ID の enum はリクエストごとに作る）。
 - **コードが参照を値に戻して確かめる**（`resolve.ts`）。使われない数・二重に使われた数・言い直し・否定の合図・根拠の時間の幅を見る。食い違えば確認事項。
 - **料金表に無い値は埋めない**（`price.ts`）。料金表に無い・別名があいまい・単価や単位が違う・数量 × 単価や言った合計が合わない、はすべて確認事項。
@@ -78,6 +80,7 @@ python device/listener/listen.py --model <vosk-model-small-ja-0.22 の置き場>
 | 開発 | モデルの使い分け | 普段は Opus 5.5。取り消しにくい設計判断 2 件（明細の検証の作り直し、工場と事務所の約束事）だけ Fable 5.1。夜間の点検の疎通は Haiku 5.5 | `CLAUDE.md`・`docs/design/invoice-verify.md`・`docs/design/pi-office.md`・`scripts/night-probe.sh` |
 | 開発 | 敵対レビュー | 捏造を止める仕組みと客の情報を扱うコードを変えるたびに、別の会社のモデル（Codex）に `.env` と `data/` の無い worktree で穴を探させ、確定した欠陥だけ Claude Code が確かめて直した。9 回、修正 17 コミット | `git log --grep Codex`・`progress.md` |
 | 開発 | 事務所の PC でも Claude Code | 業務ソフトの DB を読むだけのログイン（SELECT だけ）で構造を調べ、記録と集計のプログラムを作った。客の情報は PC の外に出さない | `office/`・`docs/racros-schema.md` |
+| 開発 | 直すための材料を残す | 工場で動いたときの出来事を JSONL で記録し、日ごとに集計して「気になる点」を出す。自動で直す仕組みは作らず、人と Claude Code が読んで直す。記録に言葉・客の情報が入らないことは試験で確かめる | `lib/log/`・`docs/logging.md`・`tests/log-events.test.ts` |
 | 不採用 | — | computer use、Managed Agents、ストリーミングの STT、異音の分類、話者分離の自作。MCP は使う場面が無かった | `docs/decisions.md` |
 
 ## 今どこまで動くか（2026-11-08）
@@ -93,7 +96,9 @@ python device/listener/listen.py --model <vosk-model-small-ja-0.22 の置き場>
 | 事務所の客の照合（業務ソフトの DB を読むだけ） | 作った。事務所の PC のブランチにあり、main に無い（#45） | 事務所の PC |
 | 業務ソフトへの入力（キーを送る。確定・発行は押さない） | 事務所の PC で仕上げ中。main に無い（#26） | 事務所の PC |
 | 業務ソフトの操作の記録・DB の読み取り（読むだけ） | 動く | `office/recorder/`、`office/racros/` |
-| Pi への移設 | 移設中。それまで工場役は Mac | `docs/pi-setup.md` |
+| 出来事の記録と日ごとの集計（自己改善の材料。数・時間・種類名・id だけで、言葉と客の情報は書かない） | 動く | `lib/log/`、`scripts/log-summary.ts`、`docs/logging.md` |
+| LAN から本体への入口を事務所の返しの 1 本道だけにする関所（:3001 → 127.0.0.1:3000） | 動く（試験で） | `scripts/office-gate.ts` |
+| Pi への移設 | 配置スクリプトはある。11/8 時点で実機では未。それまで工場役は Mac | `deploy/pi/`、`docs/pi-setup.md` |
 
 ## 数字
 
@@ -101,14 +106,14 @@ python device/listener/listen.py --model <vosk-model-small-ja-0.22 の置き場>
 |---|---|---|
 | 推測で埋めた件数 | 誤った金額が確認事項なしで合計に入った件数。0 が合格 | **0 / 10**（架空のタイヤ交換の文字起こし 10 件。言い直し・否定・断り・合計の食い違いを含む。`docs/experiments.md` 11/4） |
 | 時間・費用 | 1 件の処理の秒数と Claude の費用 | 1 件 2.3〜5.1 秒、10 件で約 $0.17（1 件約 $0.017） |
-| 試験 | 自動試験の件数 | TypeScript 263 件（`pnpm test`）、Python 70 件、PowerShell 73 件（事務所の PC） |
+| 試験 | 自動試験の件数（`pnpm check` が流すもの） | TypeScript 276 件、Python 81 件（事務所 52・聞き役 29）、PowerShell 73 件（事務所の PC で実行） |
 | 敵対レビュー | Codex に穴を探させた回数と、直したコミット | 9 回、17 コミット |
-| 開発の量 | 期間中のコミット | 177 件（11/2〜11/8） |
+| 開発の量 | 期間中のコミット | 191 件（11/2〜11/8 昼） |
 | 父の実録音での評価 | 明細の正しさ（父の判定）・質問の数と不要だった数 | **未**。期待を先に固定してから測る決まり（`docs/preregistration.md`、`lib/eval/prereg.ts`）で、提出時点では測っていない。11/9 以降に測って追記する |
 
 ## 11/9 以降の使い方
 
-- 誰が: 父（整備）と作者（事務所の PC の面倒）。鹿内自動車の 1 店。明日からこの店で使う。
+- 誰が: 父（整備。声をかけて承認する）、母（事務。業務ソフトで確かめて保存・発行を押す）、作者（事務所の PC の面倒）。鹿内自動車の 1 店。明日からこの店で使う。
 - いつ: 11 月中のタイヤ交換から。他の作業は、料金表に品目を足してから。
 - 何で: 工場の機械（Pi に移設中。それまで Mac）＋事務所の今ある Windows の PC。業務ソフトはそのまま。
 - 費用: 架空 10 件の実測で Claude は 1 件約 $0.017。文字起こしは 1 件 30 秒前後で数円。月の実測は 12 月に追記する。
@@ -133,7 +138,9 @@ python device/listener/listen.py --model <vosk-model-small-ja-0.22 の置き場>
 
 - **工場**（Pi 5 ＋ Jabra Speak 510 ＋ モニター。移設中はこの役を Mac が務める）: 起動語の検出（Vosk、オフライン）→ 録音 → 文字起こし（外部の API）→ nDa の本体（Next.js）で明細・確認事項・承認 → 相棒の画面と声。
 - **事務所**（今ある Windows の PC）: 受け箱のフォルダで工場からの依頼を受け、業務ソフトの DB を読むだけのログインで客を照らし、業務ソフトに保存の手前まで入れる。
-- **往復**: 工場 → 事務所は同じ LAN の共有フォルダに 1 件 1 ファイルで置く（一時の名前で書いてから名前を変える）。事務所 → 工場は工場の API へ合言葉つきで返す。メッセージは 4 種（照合の問い合わせ・照合の答え・承認済みの請求・入力の結果）。詳しくは [`docs/design/pi-office.md`](docs/design/pi-office.md)（§9 が正）。
+- **往復**: 工場 → 事務所は同じ LAN の共有フォルダに 1 件 1 ファイルで置く（一時の名前で書いてから名前を変える）。事務所 → 工場は工場の API へ合言葉つきで返す（LAN に開けるのは関所 `scripts/office-gate.ts` のこの 1 本道だけ）。メッセージは 4 種（照合の問い合わせ・照合の答え・承認済みの請求・入力の結果）。詳しくは [`docs/design/pi-office.md`](docs/design/pi-office.md)（§9 が正）。
+
+![工場と事務所の往復。Claude を通さず、客の一覧は事務所から出さない](docs/img/office-link.svg)
 
 ## 主な設計判断
 

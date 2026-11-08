@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 640" width="1600" height="640" font-family="-apple-system, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', sans-serif">
+  <title>工場と事務所の往復: Claude を通さず、客の情報は事務所から出さない</title>
+  <style>
+    .zone{fill:none;stroke:#8c959f;stroke-width:2;stroke-dasharray:8 6;rx:16}
+    .zl{font-size:24px;fill:#57606a;font-weight:600}
+    .box{fill:#f6f8fa;stroke:#57606a;stroke-width:2;rx:12}
+    .code{fill:#e7f0fb;stroke:#2f6fb3}
+    .model{fill:#fdf3e1;stroke:#c47a12}
+    .db{fill:#f3e8f8;stroke:#7b3fa0}
+    .t{font-size:22px;fill:#1f2328;text-anchor:middle}
+    .s{font-size:17px;fill:#57606a;text-anchor:middle}
+    .m{font-size:17px;fill:#1f2328}
+    .no{font-size:17px;fill:#c2410c}
+    .arrow{stroke:#57606a;stroke-width:2.5;fill:none;marker-end:url(#a)}
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#57606a"/></marker></defs>
+
+  <rect class="zone" x="20" y="20" width="700" height="580"/><text class="zl" x="40" y="56">工場（Pi 5 ＋ モニター）</text>
+  <rect class="zone" x="880" y="20" width="700" height="580"/><text class="zl" x="900" y="56">事務所（今ある Windows の PC）</text>
+
+  <!-- factory -->
+  <rect class="box code" x="60" y="100" width="320" height="110"/>
+  <text class="t" x="220" y="140">nDa の本体（Next.js）</text><text class="s" x="220" y="168">明細・確認事項・承認・相棒の画面</text>
+  <text class="s" x="220" y="192">数はコード、意味は Claude</text>
+
+  <path class="arrow" d="M220 210 V270"/>
+  <text class="m" x="236" y="248">伏せ字の後の発話と、数の候補 ID だけ</text>
+  <rect class="box model" x="60" y="270" width="320" height="90"/>
+  <text class="t" x="220" y="306">Claude API（Opus 5.5）</text><text class="s" x="220" y="334">どの数がどの作業かを ID で指す</text>
+  <text class="no" x="60" y="395">✕ 客の名前・ナンバー・一覧は Claude に渡さない</text>
+
+  <rect class="box code" x="60" y="440" width="620" height="110"/>
+  <text class="t" x="370" y="480">返しの受け口（LAN には関所 :3001 の 1 本道だけ）</text>
+  <text class="s" x="370" y="508">scripts/office-gate.ts → POST /api/office/reply。合言葉が違えば 401</text>
+  <text class="s" x="370" y="532">返ってきた姓と車種は画面に出すだけで保存しない</text>
+
+  <!-- office -->
+  <rect class="box code" x="920" y="100" width="300" height="110"/>
+  <text class="t" x="1070" y="140">受け箱（共有フォルダ）</text><text class="s" x="1070" y="168">1 件 1 ファイル</text><text class="s" x="1070" y="192">.tmp に書いてから rename</text>
+
+  <path class="arrow" d="M1220 155 H1260"/>
+  <rect class="box code" x="1260" y="100" width="300" height="110"/>
+  <text class="t" x="1410" y="140">事務所のプログラム</text><text class="s" x="1410" y="168">中身を信じず検算してから使う</text><text class="s" x="1410" y="192">同じ作業は 2 回入れない</text>
+
+  <path class="arrow" d="M1300 210 V240 H1070 V270"/>
+  <rect class="box db" x="920" y="270" width="300" height="110"/>
+  <text class="t" x="1070" y="310">業務ソフトの DB</text><text class="s" x="1070" y="338">読むだけのログイン（SELECT だけ）</text><text class="s" x="1070" y="362">名前＋下 4 桁が 1 組のときだけ番号</text>
+
+  <path class="arrow" d="M1480 210 V270"/>
+  <rect class="box" x="1260" y="270" width="300" height="110"/>
+  <text class="t" x="1410" y="310">業務ソフトの画面</text><text class="s" x="1410" y="338">確定の手前まで入れる</text><text class="s" x="1410" y="362">保存・確定・発行は人が押す</text>
+
+  <text class="no" x="920" y="420">✕ 客の一覧は事務所から出さない。問い合わせの原文は答えた直後に消す</text>
+
+  <!-- cross -->
+  <path class="arrow" d="M380 125 H920"/>
+  <text class="m" x="650" y="116" text-anchor="middle">① 照合の問い合わせ（4 桁を含む文だけ）</text>
+  <path class="arrow" d="M380 185 H920"/>
+  <text class="m" x="650" y="176" text-anchor="middle">③ 承認済みの請求（決まった形の JSON。Claude を通らない）</text>
+  <path class="arrow" d="M1410 380 V495 H680"/>
+  <text class="m" x="1045" y="486" text-anchor="middle">②④ 照合の答え（番号と「姓・車種」）／入力の結果。合言葉つき</text>
+
+  <text class="m" x="40" y="628" font-size="19">工場 → 事務所は同じ LAN の共有フォルダに置くだけ。事務所 → 工場は合言葉つきの 1 本道。客の照合と業務ソフトの操作は事務所の中で閉じる。</text>
+</svg>

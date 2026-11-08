@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 560" width="1600" height="560" font-family="-apple-system, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', sans-serif">
+  <title>声から請求書まで: 数はコード、意味はモデル、最後は父の承認</title>
+  <style>
+    .box{fill:#f6f8fa;stroke:#57606a;stroke-width:2;rx:12}
+    .code{fill:#e7f0fb;stroke:#2f6fb3}
+    .model{fill:#fdf3e1;stroke:#c47a12}
+    .human{fill:#e9f6ea;stroke:#2e8b57}
+    .t{font-size:22px;fill:#1f2328;text-anchor:middle}
+    .s{font-size:17px;fill:#57606a;text-anchor:middle}
+    .f{font-size:13px;fill:#2f6fb3;text-anchor:middle;font-family:ui-monospace,Menlo,monospace}
+    .lab{font-size:18px;fill:#1f2328}
+    .arrow{stroke:#57606a;stroke-width:2.5;fill:none;marker-end:url(#a)}
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#57606a"/></marker></defs>
+
+  <!-- row 1 -->
+  <rect class="box human" x="20" y="60" width="180" height="110"/>
+  <text class="t" x="110" y="105">父の声</text><text class="s" x="110" y="135">「タイヤ交換、4 本」</text>
+
+  <path class="arrow" d="M200 115 H240"/>
+  <rect class="box code" x="240" y="60" width="200" height="110"/>
+  <text class="t" x="340" y="98">文字起こし</text><text class="s" x="340" y="126">外部の STT</text><text class="s" x="340" y="150">ナンバーの文は伏せ字</text>
+
+  <path class="arrow" d="M440 115 H480"/>
+  <rect class="box code" x="480" y="60" width="230" height="110"/>
+  <text class="t" x="595" y="98">コードが数を列挙</text><text class="s" x="595" y="126">q1=4本 p1=330円 …</text><text class="f" x="595" y="152">candidates.ts</text>
+
+  <path class="arrow" d="M710 115 H750"/>
+  <rect class="box model" x="740" y="60" width="280" height="110"/>
+  <text class="t" x="880" y="98">Claude が ID を指す</text><text class="s" x="880" y="126">行ごとに候補 ID と status</text><text class="f" x="880" y="152">extract.ts（structured outputs）</text>
+
+  <path class="arrow" d="M1010 115 H1050"/>
+  <rect class="box code" x="1050" y="60" width="250" height="110"/>
+  <text class="t" x="1175" y="98">コードが値に戻し検算</text><text class="s" x="1175" y="126">料金表・言い直し・否定・合計</text><text class="f" x="1175" y="152">resolve · price · check.ts</text>
+
+  <path class="arrow" d="M1300 115 H1340"/>
+  <rect class="box" x="1340" y="60" width="240" height="110"/>
+  <text class="t" x="1460" y="98">確認事項</text><text class="s" x="1460" y="126">分からない所は聞き返す</text><text class="s" x="1460" y="150">「バルブは何個ですか」</text>
+
+  <!-- down and back -->
+  <path class="arrow" d="M1460 170 V230 H1460"/>
+  <!-- row 2 (right to left) -->
+  <rect class="box human" x="1340" y="230" width="240" height="110"/>
+  <text class="t" x="1460" y="270">父の承認</text><text class="s" x="1460" y="298">確認事項 0 件のときだけ</text><text class="s" x="1460" y="322">「請求書頼む」</text>
+
+  <path class="arrow" d="M1340 285 H1300"/>
+  <rect class="box code" x="1050" y="230" width="250" height="110"/>
+  <text class="t" x="1175" y="270">事務所へ運ぶ</text><text class="s" x="1175" y="298">Claude を通らないファイル</text><text class="f" x="1175" y="322">lib/office/</text>
+
+  <path class="arrow" d="M1050 285 H1010"/>
+  <rect class="box code" x="750" y="230" width="260" height="110"/>
+  <text class="t" x="880" y="270">業務ソフトに入れる</text><text class="s" x="880" y="298">確定の手前まで</text><text class="s" x="880" y="322">事務所の PC のプログラム</text>
+
+  <path class="arrow" d="M750 285 H710"/>
+  <rect class="box human" x="480" y="230" width="230" height="110"/>
+  <text class="t" x="595" y="275">人が保存を押す</text><text class="s" x="595" y="305">最後の一押しは人間</text>
+
+  <!-- legend -->
+  <rect class="box code" x="40" y="420" width="34" height="26"/><text class="lab" x="86" y="440">コード（決まった手順。数・照合・運び）</text>
+  <rect class="box model" x="520" y="420" width="34" height="26"/><text class="lab" x="566" y="440">Claude（意味の判定だけ。数字は書かない）</text>
+  <rect class="box human" x="1040" y="420" width="34" height="26"/><text class="lab" x="1086" y="440">人（声・承認・保存）</text>
+  <text class="lab" x="40" y="505" font-size="20">数はコード、意味はモデル、最後は父の承認。料金表に無い値・言い直し・否定は必ず確認事項になり、残っている間は承認できない。</text>
+</svg>
