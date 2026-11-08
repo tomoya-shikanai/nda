@@ -122,7 +122,7 @@ main() {
   fi
 
   # --- 6. 門番を確かめる ---
-  rc=0; out=$(sudo -u "$PULL_USER" env SSH_ORIGINAL_COMMAND=list "$GATE" "$OUTBOX" 2>&1) || rc=$?
+  rc=0; out=$(cd / && sudo -u "$PULL_USER" env SSH_ORIGINAL_COMMAND=list "$GATE" "$OUTBOX" 2>&1) || rc=$?
   if [ "$rc" -eq 0 ]; then say "[合格] list は exit 0（$(printf '%s' "$out" | grep -c . || true) 件）"
   else say "[不合格] list が exit ${rc}"; exit 1; fi
   rc=0; sudo -u "$PULL_USER" env SSH_ORIGINAL_COMMAND=ls "$GATE" "$OUTBOX" >/dev/null 2>&1 || rc=$?
