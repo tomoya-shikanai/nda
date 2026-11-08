@@ -12,7 +12,8 @@ from inputter.send import FocusInfo, Stop, TopWindow, WindowInfo
 
 KEYPATH = load_json(send.KEYPATH_PATH)
 COLUMNS = load_json(COLUMNS_PATH)
-ITEMS = {"items": {"架空の部品A": 101, "架空の部品B": 2345, "架空の自由入力": 0, "架空の作業L": 277}}
+ITEMS = {"items": {"架空の部品A": 101, "架空の部品B": 2345, "架空の自由入力": 0, "架空の作業L": 277},
+         "free_work_kind": {"架空の自由入力": 31}}
 WIN_LEFT, WIN_TOP = 192, 0
 
 
@@ -23,6 +24,8 @@ def job(*lines):
 LINE_A = {"item": "架空の部品A", "qty": 4, "unit": "本", "unitPrice": 7777}
 LINE_B = {"item": "架空の部品B", "qty": Decimal("1.5"), "unit": "L", "unitPrice": 1234}
 LINE_L = {"item": "架空の作業L", "qty": 4, "unit": "本", "unitPrice": 555}  # 277 は columns.json の labor_codes
+LINE_F = {"item": "架空の自由入力", "qty": 4, "unit": "本", "unitPrice": 300}  # 項目CD 0、作業区分 31
+LINE_APP = {**LINE_A, "name_append": "･架空 W1 145/80R12"}
 
 
 def kp(data=None):
@@ -60,6 +63,9 @@ class FakeDesktop:
         self.human_flag = False  # 低水準のフックで、injected でない入力を見た
         self.delayed = []  # (出る時刻, TopWindow)。遅れて出る小窓
         self.format = None  # Name の見え方を変える関数
+        self.char_mode = None  # None: 末尾に足す / "select_all": 最初の文字で全部を上書き / "caret_start": 先頭に入る
+        self.typed = {}  # 欄ごとに送った文字の数
+        self.prefill = {}  # 欄の名前 → 最初から入っている値（作業区分のマスタの値など）
 
     # -- Desktop --
     def foreground(self):
@@ -117,9 +123,12 @@ class FakeDesktop:
         self._input()
         if name == "Enter":
             row, f = self.fields[self.pos]
-            if f["field"] == "項目CD" and self.master and self.names.get(self.pos):
+            if f["field"] == "項目CD" and self.master and self.names.get(self.pos) not in (None, "", "0"):
                 self.names[self.pos + 1] = "架空の名前"
             self.pos += 1
+            nf = self.fields[self.pos][1]["field"] if self.pos < len(self.fields) else None
+            if nf in self.prefill and self.pos not in self.names:
+                self.names[self.pos] = self.prefill[nf]
         for h in list(self.hooks):
             h(self)
 
@@ -127,7 +136,16 @@ class FakeDesktop:
         self.sent.append(("char", ch))
         self._input()
         if not self.drop_chars:
-            self.names[self.pos] = self.names.get(self.pos, "") + ch
+            cur = self.names.get(self.pos, "")
+            k = self.typed.get(self.pos, 0)
+            if self.char_mode == "select_all" and k == 0:
+                cur = ch
+            elif self.char_mode == "caret_start":
+                cur = cur[:k] + ch + cur[k:]
+            else:
+                cur += ch
+            self.names[self.pos] = cur
+            self.typed[self.pos] = k + 1
         for h in list(self.hooks):
             h(self)
 
@@ -159,6 +177,10 @@ class KeypathTest(unittest.TestCase):
             lambda d: d["rows"]["fields"][0].__setitem__("class", "msvb_lib_toolbar"),
             lambda d: d["screen"].__setitem__("position_tolerance_px", 50),
             lambda d: d["rows"].__setitem__("visible_rows", True),
+            lambda d: d["screen"].pop("title_contains_any"),
+            lambda d: d["screen"].__setitem__("title_contains_any", []),
+            lambda d: d["screen"].__setitem__("title_contains_any", "整備伝票発行"),
+            lambda d: d["screen"].__setitem__("title_contains_any", ["整備伝票発行", ""]),
         ):
             d = copy.deepcopy(KEYPATH)
             mutate(d)
@@ -177,9 +199,43 @@ class PrepareTest(unittest.TestCase):
         self.assertIsNone(g[1].text)  # 作業内容は打たない（マスタの名前）
         self.assertTrue(g[1].target.require_nonempty)
 
-    def test_free_entry_row_refused(self):
-        with self.assertRaisesRegex(send.SendError, "打つ欄なのに|自由入力"):
-            groups_for({"item": "架空の自由入力", "qty": 1, "unit": "本", "unitPrice": 100})
+    def test_free_entry_row_groups(self):
+        g = groups_for(LINE_F)
+        self.assertEqual([(x.target.field, x.text) for x in g], [
+            ("明細1.項目CD", "0"), ("明細1.作業内容", "架空の自由入力"), ("明細1.作業区分", "31"),
+            ("明細1.担当", None), ("明細1.数量", "4"), ("明細1.単価", "300"),
+        ])
+
+    def test_name_append_groups(self):
+        g = groups_for(LINE_APP)
+        self.assertTrue(g[1].append)
+        self.assertEqual(g[1].text, "･架空 W1 145/80R12")
+        self.assertIsNone(g[2].text)  # マスタの行の作業区分は打たない
+
+    def test_free_and_append_rules_on_hand_made_steps(self):
+        master = build_plan(job(LINE_A), ITEMS, COLUMNS)
+        free = build_plan(job(LINE_F), ITEMS, COLUMNS)
+        appended = build_plan(job(LINE_APP), ITEMS, COLUMNS)
+        cases = {
+            "マスタの行で名前を打つ": (master, lambda s: s.insert(2, {"field": "明細1.作業内容", "action": "type", "value": "abc"})),
+            "マスタの行で作業区分を打つ": (master, lambda s: s.insert(3, {"field": "明細1.作業区分", "action": "type", "value": "31"})),
+            "自由入力の行で書き足す": (free, lambda s: s[2].__setitem__("action", "append")),
+            "自由入力の行で名前を飛ばす": (free, lambda s: s.pop(2)),
+            "自由入力の行で作業区分を飛ばす": (free, lambda s: s.pop(4)),
+            "数の欄に書き足す": (appended, lambda s: s.__setitem__(0, {**s[0], "action": "append"})),
+            "書き足しを項目CD 0 の行に": (appended, lambda s: s[0].__setitem__("value", "0")),
+            "マスタの行の項目CD を 00 に": (master, lambda s: s[0].__setitem__("value", "00")),
+            "書き足しの行の項目CD を 00 に": (appended, lambda s: s[0].__setitem__("value", "00")),
+            "項目CD を 0101 に": (master, lambda s: s[0].__setitem__("value", "0101")),
+            "作業区分を 0 に": (free, lambda s: s[4].__setitem__("value", "0")),
+            "作業区分を 1000 に": (free, lambda s: s[4].__setitem__("value", "1000")),
+            "作業区分を 031 に": (free, lambda s: s[4].__setitem__("value", "031")),
+        }
+        for name, (base, mutate) in cases.items():
+            st = copy.deepcopy(base)
+            mutate(st)
+            with self.subTest(name), self.assertRaises(send.SendError):
+                send.prepare(st, kp(), COLUMNS)
 
     def test_more_than_visible_rows_refused(self):
         with self.assertRaisesRegex(send.SendError, "15 行"):
@@ -269,6 +325,12 @@ class RunTest(unittest.TestCase):
         for v in ("7777", "2345", "1234", "1.5"):
             self.assertNotIn(v, joined)
 
+    def test_estimate_screen_title_is_accepted(self):
+        # メニューから開く「整備見積･指示書発行」の画面でも送る（2026-11-07 の記録）
+        self.desk.window = WindowInfo(**{**self.desk.window.__dict__, "title": "[ 架空 ] - [ 整備見積･指示書発行 ] - RacroSⅢ"})
+        run(self.desk, groups_for(LINE_A))
+        self.assertEqual(self.desk.sent[-1], ("key", "Enter"))
+
     def test_comma_in_readback_passes(self):
         self.desk.format = lambda f, name: f"{int(name):,}" if name.isdigit() and f["field"] == "単価" else name
         run(self.desk, groups_for(LINE_A))
@@ -288,6 +350,7 @@ class RunTest(unittest.TestCase):
             {"exe": "notepad.exe"},
             {"class_name": "#32770"},
             {"title": "[ 架空 ] - [ 顧客・車両 ] - RacroSⅢ"},
+            {"title": "[ 架空 ] - [ 整備見積発行 ] - RacroSⅢ"},  # 題名の一部しか合わない
             {"class_name": "Edit"},
         ):
             self.desk = FakeDesktop(self.k)
@@ -354,6 +417,92 @@ class RunTest(unittest.TestCase):
                 d.window = WindowInfo(**{**d.window.__dict__, "hwnd": 999})
         self.desk.hooks.append(switch)
         self.assertStops("始めたとき", sent_max=5)
+
+    def test_customer_name_must_be_in_title(self):
+        # 題名の客の部分（「 - [」の前）に請求の客の名前が無ければ、何も送らずに止める
+        g = groups_for(LINE_A)
+        self.desk.window = WindowInfo(**{**self.desk.window.__dict__, "title": "[ 架空の客 ] - [ 整備見積･指示書発行 ] - RacroSⅢ"})
+        log = []
+        send.run(self.desk, self.k, g, log.append, "架空の客")
+        self.assertNotIn("架空の客", "\n".join(log))
+        for name in ("別の客", "整備見積", "架空の"):  # 画面名の側の言葉・名前の一部では通さない（部分一致にしない）
+            with self.subTest(name=name):
+                d = FakeDesktop(self.k)
+                d.window = self.desk.window
+                with self.assertRaises(Stop) as cm:
+                    send.run(d, self.k, g, [].append, name)
+                self.assertEqual(d.sent, [])
+                self.assertNotIn(name, str(cm.exception))
+        for bad in (" x ", " 架空の客", "架空の客	"):
+            with self.subTest(bad=bad), self.assertRaises(Stop):
+                send.run(FakeDesktop(self.k), self.k, g, [].append, bad)
+        # 題名の客の部分に見えない文字が付いていたら、通さない（削らずに比べる）
+        d = FakeDesktop(self.k)
+        d.window = WindowInfo(**{**d.window.__dict__, "title": "[  架空の客 ] - [ 整備見積･指示書発行 ] - RacroSⅢ"})
+        with self.assertRaises(Stop):
+            send.run(d, self.k, g, [].append, "架空の客")
+        self.assertEqual(d.sent, [])
+
+    def test_customer_name_checked_every_step(self):
+        # 途中で題名の客が変わったら（同じ窓で別の客を選んだ）、そこで止める
+        g = groups_for(LINE_A, LINE_B)
+        self.desk.window = WindowInfo(**{**self.desk.window.__dict__, "title": "[ 架空の客 ] - [ 整備伝票発行 ] - RacroSⅢ"})
+
+        def swap(d):
+            if len(d.sent) == 4:
+                d.window = WindowInfo(**{**d.window.__dict__, "title": "[ 架空の客商店 ] - [ 整備伝票発行 ] - RacroSⅢ"})
+        self.desk.hooks.append(swap)
+        with self.assertRaisesRegex(Stop, "客の名前"):
+            send.run(self.desk, self.k, g, [].append, "架空の客")
+        self.assertLessEqual(len(self.desk.sent), 4)
+
+    def test_customer_name_with_title_separator_cannot_slip_through(self):
+        # 別の客の名前が「架空の客 ] - [別」でも、題名の全体で比べるので通さない（Codex の指摘）
+        g = groups_for(LINE_A)
+        for title in ("[ 架空の客 ] - [別 ] - [ 整備見積･指示書発行 ] - RacroSⅢ",
+                      "[ 架空の客 ] - [ 整備見積･指示書発行 ] - RacroSⅢ ",
+                      "[ 架空の客 ] - [ 整備見積･指示書発行 ] - RacroS"):
+            with self.subTest(title=title):
+                d = FakeDesktop(self.k)
+                d.window = WindowInfo(**{**d.window.__dict__, "title": title})
+                with self.assertRaises(Stop):
+                    send.run(d, self.k, g, [].append, "架空の客")
+                self.assertEqual(d.sent, [])
+
+    def test_free_entry_row_runs(self):
+        log = run(self.desk, groups_for(LINE_F))
+        expected = [("char", "0"), ("key", "Enter")] + [("char", c) for c in "架空の自由入力"] + [("key", "Enter")]
+        expected += [("char", "3"), ("char", "1"), ("key", "Enter"), ("key", "Enter")]
+        expected += [("char", "4"), ("key", "Enter")] + [("char", c) for c in "300"] + [("key", "Enter")]
+        self.assertEqual(self.desk.sent, expected)
+        self.assertEqual(self.desk.names[1], "架空の自由入力")
+        self.assertNotIn("架空の自由入力", "\n".join(log))
+
+    def test_free_entry_stops_if_name_already_there(self):
+        # 項目CD 0 なのに名前が入った（マスタの品目だった）ら、打たずに止める
+        self.desk.master = False
+        self.desk.prefill = {"作業内容": "何か"}
+        self.assertStops("空でない", groups=groups_for(LINE_F), sent_max=2)
+
+    def test_work_kind_stops_if_master_value_there(self):
+        self.desk.prefill = {"作業区分": "5"}
+        self.assertStops("明細1.作業区分: 打つ前の欄が空でない", groups=groups_for(LINE_F), sent_max=2 + 8)
+
+    def test_name_append_runs(self):
+        log = run(self.desk, groups_for(LINE_APP, LINE_B))
+        self.assertEqual(self.desk.names[1], "架空の名前･架空 W1 145/80R12")
+        self.assertNotIn("145/80R12", "\n".join(log))
+
+    def test_name_append_stops_when_overwritten_or_caret_at_start(self):
+        for mode in ("select_all", "caret_start"):
+            with self.subTest(mode=mode):
+                self.desk = FakeDesktop(self.k)
+                self.desk.char_mode = mode
+                self.assertStops("書き足している途中の読み返しが合わない", groups=groups_for(LINE_APP), sent_max=5)
+
+    def test_name_append_stops_without_master_name(self):
+        self.desk.master = False
+        self.assertStops("名前が入っていない", groups=groups_for(LINE_APP), sent_max=4)
 
     def test_labor_branch_stops(self):
         # 担当の Enter の後に、点数（x=1070）へ進んだら止める
@@ -666,9 +815,10 @@ class MainSendTest(unittest.TestCase):
         self.assertNotIn("1.25", err)
         self.assertNotIn("架空の部品A", err)
 
-    def test_free_entry_refused_before_anything(self):
+    def test_free_entry_without_work_kind_refused_before_anything(self):
         bad = self._write("bad.json", job({"item": "架空の自由入力", "qty": 1, "unit": "本", "unitPrice": 100}))
-        code, out, err = self._run(["send", bad, "--items", self.items, "--send"])
+        items = self._write("items-nokind.json", {"items": ITEMS["items"]})
+        code, out, err = self._run(["send", bad, "--items", items, "--send"])
         self.assertEqual(code, 1)
         self.assertIn("何も送っていない", err)
 

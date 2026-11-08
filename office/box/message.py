@@ -18,7 +18,15 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from inputter.plan import PlanError, _no_duplicate_keys, qty_tenths
+from inputter.plan import (
+    FREE_ENTRY_CODE,
+    MAX_NAME_APPEND,
+    MAX_WORK_KIND,
+    PlanError,
+    _check_name_text,
+    _no_duplicate_keys,
+    qty_tenths,
+)
 
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 NUM_RE = re.compile(r"^[0-9]{1,9}$")
@@ -114,6 +122,7 @@ REQUEST_KEYS_VEHICLE = REQUEST_KEYS - {"customer"} | {"vehicle"}
 VEHICLE_KEYS = {"plateNo"}
 VEHICLE_OPTIONAL_KEYS = {"rikuji", "bango", "kana", "customerWords", "carWords"}
 LINE_KEYS = {"item", "qty", "unit", "unitPrice", "amount", "unitPriceFrom", "provenance"}
+LINE_OPTIONAL_KEYS = {"nameAppend"}  # マスタの名前の後ろに書き足す文字（タイヤの銘柄・サイズなど）
 
 
 def envelope(msg: object) -> tuple[str, str, str]:
@@ -179,7 +188,7 @@ def check_request(msg: object, cfg: dict, resolve_vehicle=None) -> dict:
     out_lines = []
     for i, line in enumerate(lines, start=1):
         where = f"明細 {i}"
-        if not isinstance(line, dict) or set(line) != LINE_KEYS:
+        if not isinstance(line, dict) or not LINE_KEYS <= set(line) <= LINE_KEYS | LINE_OPTIONAL_KEYS:
             raise _bad(f"{where}: 項目が多いか足りない")
         if not _str(line["item"]) or not _str(line["unit"]):
             raise _bad(f"{where}: 品目か単位が空")
@@ -199,7 +208,13 @@ def check_request(msg: object, cfg: dict, resolve_vehicle=None) -> dict:
         if line["unitPriceFrom"] not in UNIT_PRICE_FROM or not _quoted(line["provenance"]):
             raise _bad(f"{where}: 単価の出所か発話の出所が無い")
         total += amount
-        out_lines.append({"item": line["item"], "qty": qty, "unit": line["unit"], "unitPrice": price})
+        out = {"item": line["item"], "qty": qty, "unit": line["unit"], "unitPrice": price}
+        if "nameAppend" in line:
+            try:
+                out["name_append"] = _check_name_text(line["nameAppend"], "名前の書き足し")
+            except PlanError:
+                raise _bad(f"{where}: nameAppend が、空でない {MAX_NAME_APPEND} 文字までの印字できる文字でない") from None
+        out_lines.append(out)
     if not _int(msg["total"]) or msg["total"] != total:
         raise _bad("total が金額の合計と合わない")
     if msg["totalSpoken"] is not None and not _int(msg["totalSpoken"]):
@@ -224,9 +239,16 @@ def check_request(msg: object, cfg: dict, resolve_vehicle=None) -> dict:
     if cust["customerNo"] not in allowed:
         raise Reject("customerNotAllowed", "練習用の客の番号（allowed_customers）に無い")
     codes = cfg["item_codes"]
+    kinds = cfg.get("free_work_kind", {})
     for i, line in enumerate(out_lines, start=1):
         if line["item"] not in codes:
             raise Reject("unknownItem", f"明細 {i}: 品目が item_codes に無い")
+        if codes[line["item"]] == FREE_ENTRY_CODE:
+            # 自由入力の行は、作業区分の決まった品目（free_work_kind）だけ。名前の書き足しは付けられない
+            if line["item"] not in kinds:
+                raise Reject("unknownItem", f"明細 {i}: 自由入力の品目の作業区分が free_work_kind に無い")
+            if "name_append" in line:
+                raise _bad(f"明細 {i}: 自由入力の行に nameAppend は付けられない")
     return {
         "job_id": sid,
         "customer_code": int(cust["customerNo"]),
@@ -245,6 +267,14 @@ def load_config(data: object) -> dict:
     codes = data.get("item_codes")
     if not isinstance(codes, dict) or not codes or not all(_str(k) and _int(v) and v >= 0 for k, v in codes.items()):
         raise ValueError("item_codes が「品目の正式名 → 0 以上の項目CD」でない")
+    kinds = data.get("free_work_kind", {})
+    if not isinstance(kinds, dict) or not all(
+        _str(k) and codes.get(k) == FREE_ENTRY_CODE and _int(v) and 0 < v <= MAX_WORK_KIND for k, v in kinds.items()
+    ):
+        raise ValueError(f"free_work_kind が「item_codes で 0 の品目 → 1〜{MAX_WORK_KIND} の作業区分」でない")
+    reader = data.get("db_reader_file")
+    if reader is not None and (not isinstance(reader, str) or not reader):
+        raise ValueError("db_reader_file は、DB を読むだけの接続の文字列を書いたファイルの場所")
     pi_url, secret = data.get("pi_url"), data.get("secret")
     if (pi_url is None) != (secret is None):
         raise ValueError("pi_url と secret は両方書くか、両方書かない")
@@ -252,4 +282,4 @@ def load_config(data: object) -> dict:
         raise ValueError("pi_url は http://<工場>/api/office/reply の形")
     if secret is not None and (not isinstance(secret, str) or len(secret) < 16):
         raise ValueError("secret は 16 文字以上")
-    return {"allowed_customers": allowed, "item_codes": codes, "pi_url": pi_url, "secret": secret}
+    return {"allowed_customers": allowed, "item_codes": codes, "free_work_kind": kinds, "db_reader_file": reader, "pi_url": pi_url, "secret": secret}

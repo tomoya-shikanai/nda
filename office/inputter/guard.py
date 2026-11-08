@@ -1,7 +1,8 @@
 """送る前の許可リスト。手順は 1 つでもここを通らなければ、何も送らない。
 
-許すのは次の 2 つだけ:
+許すのは次の 3 つだけ:
 - action "type": 印字できる文字だけの文字列（制御文字・改行・タブは不可）
+- action "append": type と同じ決まりの文字列。欄に入っている名前の後ろに書き足す
 - action "key": Enter・Tab・Down・Up・Left・Right のどれか
 
 それ以外（F1〜F12、Alt・Ctrl・Win との組み合わせ、Esc、Delete、クリック、ツールバーのボタン）は
@@ -12,7 +13,7 @@
 from __future__ import annotations
 
 ALLOWED_KEYS = frozenset({"Enter", "Tab", "Down", "Up", "Left", "Right"})
-ALLOWED_ACTIONS = frozenset({"type", "key"})
+ALLOWED_ACTIONS = frozenset({"type", "append", "key"})
 STEP_KEYS = frozenset({"field", "action", "value"})
 FORBIDDEN_WORDS = ("保存", "印保存", "確定", "発行", "印刷", "削除")
 # キーを送る道具（type_keys の類）が修飾キー・特別なキーとして読む文字。
@@ -46,7 +47,7 @@ def _step_problems(step: object) -> list[str]:
         for w in FORBIDDEN_WORDS:
             if w in text:
                 problems.append(f"「{w}」を含む")
-    if action == "type":
+    if action in ("type", "append"):
         if not value:
             problems.append("打つ文字が空")
         elif not value.isprintable():

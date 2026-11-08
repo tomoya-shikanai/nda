@@ -6,14 +6,14 @@ import unittest
 from inputter import guard
 from inputter.plan import COLUMNS_PATH, PlanError, build_plan, expected_lines, load_json
 
-ITEMS = {"items": {"架空の作業A": 101, "架空の作業B": 102, "架空の処分": 0}}
+ITEMS = {"items": {"架空の作業A": 101, "架空の作業B": 102, "架空の処分": 0}, "free_work_kind": {"架空の処分": 31}}
 COLUMNS = {
     "confirmed": False,
     "advance_key": "Enter",
     "columns": [
         {"field": "項目CD", "source": "code"},
         {"field": "作業内容", "source": "name"},
-        {"field": "作業区分", "source": "none"},
+        {"field": "作業区分", "source": "work_kind"},
         {"field": "数量", "source": "qty"},
         {"field": "単価", "source": "unit_price"},
     ],
@@ -50,9 +50,11 @@ class BuildPlanTest(unittest.TestCase):
                 {"field": "明細1.数量", **E},
                 {"field": "明細1.単価", "action": "type", "value": "1000"},
                 {"field": "明細1.単価", **E},
+                {"field": "明細2.項目CD", "action": "type", "value": "0"},  # 自由入力の行も 0 を打つ
                 {"field": "明細2.項目CD", **E},
                 {"field": "明細2.作業内容", "action": "type", "value": "架空の処分"},
                 {"field": "明細2.作業内容", **E},
+                {"field": "明細2.作業区分", "action": "type", "value": "31"},  # free_work_kind から
                 {"field": "明細2.作業区分", **E},
                 {"field": "明細2.数量", "action": "type", "value": "2"},
                 {"field": "明細2.数量", **E},
@@ -61,10 +63,33 @@ class BuildPlanTest(unittest.TestCase):
             ],
         )
 
-    def test_free_entry_line_types_name_not_code(self):
-        row2 = [s for s in build_plan(JOB, ITEMS, COLUMNS) if s["field"].startswith("明細2.")]
-        self.assertFalse([s for s in row2 if s["field"] == "明細2.項目CD" and s["action"] == "type"])
-        self.assertIn({"field": "明細2.作業内容", "action": "type", "value": "架空の処分"}, row2)
+    def test_free_entry_needs_work_kind(self):
+        with self.assertRaisesRegex(PlanError, "free_work_kind"):
+            build_plan(JOB, {"items": ITEMS["items"]}, COLUMNS)
+        for bad in (0, -1, 1000, True, "31"):
+            with self.subTest(bad=bad), self.assertRaises(PlanError):
+                build_plan(JOB, {"items": ITEMS["items"], "free_work_kind": {"架空の処分": bad}}, COLUMNS)
+        cols = copy.deepcopy(COLUMNS)
+        cols["columns"][2]["source"] = "none"
+        with self.assertRaisesRegex(PlanError, "work_kind"):
+            build_plan(JOB, ITEMS, cols)
+
+    def test_name_append_on_master_line(self):
+        steps = build_plan(_job(name_append="･架空 W1 145/80R12"), ITEMS, COLUMNS)
+        self.assertIn({"field": "明細1.作業内容", "action": "append", "value": "･架空 W1 145/80R12"}, steps)
+        self.assertNotIn({"field": "明細1.作業区分", "action": "type", "value": "31"}, steps)
+        guard.check_plan(steps)
+
+    def test_bad_name_append_refused(self):
+        for bad in ("", " 前に空白", "後ろに空白 ", "改\n行","x" * 41, 5):
+            with self.subTest(bad=bad), self.assertRaises(PlanError):
+                build_plan(_job(name_append=bad), ITEMS, COLUMNS)
+        j = copy.deepcopy(JOB)
+        j["lines"][1]["name_append"] = "･足す"
+        with self.assertRaisesRegex(PlanError, "自由入力"):
+            build_plan(j, ITEMS, COLUMNS)
+        with self.assertRaises(guard.GuardError):
+            build_plan(_job(name_append="･(括弧)"), ITEMS, COLUMNS)  # 特別なキーとして読まれる文字
 
     def test_row_end_keys(self):
         cols = copy.deepcopy(COLUMNS)
@@ -118,7 +143,7 @@ class BuildPlanTest(unittest.TestCase):
         j = _job(item="架空の印刷代")
         j["lines"] = j["lines"][:1]
         with self.assertRaises(guard.GuardError):
-            build_plan(j, {"items": {"架空の印刷代": 0}}, COLUMNS)
+            build_plan(j, {"items": {"架空の印刷代": 0}, "free_work_kind": {"架空の印刷代": 1}}, COLUMNS)
         for k, v in (("row_end_keys", ["F8"]), ("advance_key", "Escape")):
             cols = copy.deepcopy(COLUMNS)
             cols[k] = v
@@ -127,10 +152,12 @@ class BuildPlanTest(unittest.TestCase):
 
     def test_expected_lines(self):
         self.assertEqual(
-            expected_lines(JOB, ITEMS["items"]),
+            expected_lines(JOB, ITEMS["items"], ITEMS["free_work_kind"]),
             [
-                {"code": 101, "name": "架空の作業A", "qty": 4, "unit_price": 1000, "amount": 4000},
-                {"code": 0, "name": "架空の処分", "qty": 2, "unit_price": 300, "amount": 600},
+                {"code": 101, "name": "架空の作業A", "qty": 4, "unit_price": 1000, "amount": 4000,
+                 "name_append": None, "work_kind": None},
+                {"code": 0, "name": "架空の処分", "qty": 2, "unit_price": 300, "amount": 600,
+                 "name_append": None, "work_kind": 31},
             ],
         )
 
@@ -191,6 +218,7 @@ class BuildPlanTest(unittest.TestCase):
         steps = build_plan(j, items)
         self.assertIn({"field": "明細1.項目CD", "action": "type", "value": "296"}, steps)
         self.assertIn({"field": "明細2.作業内容", "action": "type", "value": "廃タイヤ"}, steps)
+        self.assertIn({"field": "明細2.作業区分", "action": "type", "value": "31"}, steps)
 
 
 if __name__ == "__main__":
@@ -219,7 +247,7 @@ class QtyPrecisionTest(unittest.TestCase):
 
     def test_expected_lines_rejects_quarter(self):
         with self.assertRaises(PlanError):
-            expected_lines(_job(qty=1.25), ITEMS["items"])
+            expected_lines(_job(qty=1.25), ITEMS["items"], ITEMS["free_work_kind"])
 
     def test_tenths_still_ok(self):
         self.assertIn({"field": "明細1.数量", "action": "type", "value": "0.1"}, build_plan(_job(qty=0.1), ITEMS, COLUMNS))

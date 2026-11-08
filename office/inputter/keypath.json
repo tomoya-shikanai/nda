@@ -4,8 +4,8 @@
   "screen": {
     "exe": "M_NOU.exe",
     "window_class": "ThunderRT6FormDC",
-    "title_contains": "整備伝票発行",
-    "opened_from": "M_CAR.exe の上の大きなタブ「03 整備伝票」（確）",
+    "title_contains_any": ["整備伝票発行", "整備見積･指示書発行"],
+    "opened_from": "M_CAR.exe の上の大きなタブ「03 整備伝票」（確）。見積は、メニューのボタンから「整備見積･指示書発行」の画面を開き、その中の顧客車両検索 → 保有車検索で客と車を選ぶ道もある（2026-11-07 の記録で確。明細の欄と伝票種別の欄の位置は伝票の画面と同じに見える）",
     "coordinates": "窓の左上からの画素。1920×1080・拡大 100%・窓の位置 (192, 0)・幅 1536 で測った",
     "position_tolerance_px": 3
   },
@@ -69,19 +69,21 @@
         "readback": {"by": "Name", "expect": "空でない（マスタの名前が入っている）"},
         "confidence": "確（マスタの品目は名前が入っている）／推（打たずに Enter で進める）",
         "free_entry": {
-          "unknown": true,
-          "unknown_reason": "項目CD 0 の自由入力の行の入れ方が記録に無い。人は名前を IME で打ち、F8（半角カナへの変換と見られる）を使っていた。F8 は許可リストで断るので、今は止める"
+          "allow_text": true,
+          "how": "自由入力の行（項目CD 0）は、空の作業内容に名前を 1 文字ずつ打つ。マスタの品目は、入っている名前の後ろに書き足す（append）。文字は Unicode（VK_PACKET）で送り、IME と F8 は使わない。1 文字ごとに Name を読み返す",
+          "evidence": "2026-11-08: DB の廃タイヤの行（約 80 件）はすべて 項目CD 0・半角カナの名前・作業区分 31・数量・単価（技術料に入る）。11/7 の記録で、人は 名前 → 作業区分に 2 文字 → 担当は空 → 数量 → 単価 の順で入れていた。マスタの名前に銘柄やサイズを書き足した行も多い",
+          "confidence": "確（欄の順と DB の形）／推（VK_PACKET の文字がこの欄に入るか。入らなければ読み返しで止まる）"
         }
       },
       {
         "field": "作業区分",
-        "source": "none",
+        "source": "work_kind",
         "class": "NumEdit",
         "x": 577,
         "width": 33,
         "steps": [{"action": "key", "value": "Enter"}],
         "readback": {"by": "Name"},
-        "confidence": "確（多くは何も打たずに Enter）"
+        "confidence": "確（多くは何も打たずに Enter。自由入力の行は作業区分の番号を打つ。廃タイヤは 31）"
       },
       {
         "field": "担当",

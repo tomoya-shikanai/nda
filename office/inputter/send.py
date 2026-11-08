@@ -7,7 +7,8 @@
 - 各歩の前に、前面の窓が M_NOU の同じ窓で、フォーカスのある部品のクラス・位置・幅が keypath と合うかを確かめる。
   Enter の回数で欄を数えない。合わなければ何も送らずに止める。
 - 打ったら、その欄の Name を読み返し、送った値と合うかを確かめる（数は plan.py と同じ決まりで比べる）。
-- 送るキーは 数字・小数点・Enter・Tab・BackSpace と、自由入力の欄の文字だけ（自由入力は今は未確認なので打たない）。
+- 送るキーは 数字・小数点・Enter・Tab・BackSpace と、作業内容の欄の文字だけ。作業内容は、自由入力の行（項目CD 0）で
+  空の欄に名前を打つか、マスタの名前の後ろに書き足す（append）。どちらも 1 文字ごとに Name を読み返す。
   F キー・Ctrl・Alt・Esc・Delete・クリックは送らない。ツールバー（保存・印保存・印刷・削除・修正）は押さない。
 - 人がキーボード・マウスを触った、修飾キーが押されている、ダイアログ（#32770）や止める小窓が出たら、何も押さずに止める。
 - 明細を入れ終えたら止まって知らせる。保存は人が押す。
@@ -22,13 +23,14 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable, Protocol
 
-from .plan import PlanError, qty_tenths
+from .plan import MAX_WORK_KIND, PlanError, qty_tenths
 
 KEYPATH_PATH = Path(__file__).with_name("keypath.json")
 
 # 送ってよいキー（文字のほか）。これ以外の名前は、Windows の部分でも送れない
 SEND_KEYS = frozenset({"Enter", "Tab", "BackSpace"})
 DIALOG_CLASS = "#32770"
+TITLE_TAIL = "RacroSⅢ"  # 業務ソフトの窓の題名の終わり（Ⅲ は U+2162）
 DIGITS = frozenset("0123456789")
 
 FOCUS_TIMEOUT_S = 3.0  # Enter の後、フォーカスが次の欄に来るまで待つ長さ
@@ -119,6 +121,7 @@ class Group:
     text: str | None
     key: str
     row: int = 1  # 明細の何行目か
+    append: bool = False  # text を、欄に入っている名前の後ろに書き足す
 
 
 def mask(text: str | None) -> str:
@@ -139,7 +142,7 @@ class Keypath:
     confirmed: bool
     exe: str
     window_class: str
-    title_contains: str
+    titles: tuple[str, ...]  # 前面の窓の題名に、このどれかが入っていること（伝票の画面・見積の画面）
     tolerance: int
     advance_key: str
     first_row_y: int
@@ -161,9 +164,12 @@ def load_keypath(data: object) -> Keypath:
         row_end = rows["row_end"]["steps"]
     except (KeyError, TypeError) as e:
         raise SendError(f"keypath に要る項目が無い: {e}") from None
-    for k in ("exe", "window_class", "title_contains"):
+    for k in ("exe", "window_class"):
         if not isinstance(screen.get(k), str) or not screen[k]:
             raise SendError(f"keypath の screen.{k} が無い")
+    titles = screen.get("title_contains_any")
+    if not isinstance(titles, list) or not titles or not all(isinstance(t, str) and t for t in titles):
+        raise SendError("keypath の screen.title_contains_any が、空でない文字の list でない")
     advance = data.get("advance_key")
     if advance not in SEND_KEYS:
         raise SendError(f"keypath の advance_key が送ってよいキーでない: {advance!r}")
@@ -192,7 +198,7 @@ def load_keypath(data: object) -> Keypath:
         confirmed=data.get("confirmed") is True,
         exe=screen["exe"],
         window_class=screen["window_class"],
-        title_contains=screen["title_contains"],
+        titles=tuple(titles),
         tolerance=_int(screen.get("position_tolerance_px"), "screen.position_tolerance_px", 0, 10),
         advance_key=advance,
         first_row_y=_int(rows.get("first_row_y"), "rows.first_row_y"),
@@ -235,7 +241,9 @@ def next_row_target(kp: Keypath, rows: int) -> Target | None:
 # ---- 手順の照らし合わせ（送る前に全体を） ----
 
 _INT_TEXT = re.compile(r"[0-9]+")
-TYPED_SOURCES = ("code", "qty", "unit_price", "amount")  # 数の欄で打つもの
+TYPED_SOURCES = ("code", "qty", "unit_price", "amount", "work_kind")  # 数の欄で打つもの
+# 打たずに進んでよい数の欄（作業区分は自由入力の行だけ打つ）
+OPTIONAL_SOURCES = ("work_kind",)
 _QTY_TEXT = re.compile(r"[0-9]+(\.[0-9])?")
 
 
@@ -246,6 +254,9 @@ def _check_text(t: Target, text: str) -> str | None:
             return "この欄には打たない（keypath で何も打たずに進む欄）"
         if not pattern.fullmatch(text):
             return "数の欄に、数字（数量は小数点 1 つまで）でない文字を打とうとしている"
+        if t.source == "work_kind" and (text != str(int(text)) or not 0 < int(text) <= MAX_WORK_KIND):
+            # 作業区分は plan.py の free_work_kind と同じ 1〜999 だけ（Codex の指摘）
+            return f"作業区分が 1〜{MAX_WORK_KIND} の整数の形でない"
         return None
     if not t.allow_text:
         return "自由入力の欄の入れ方が未確認（keypath の free_entry）なので、文字を打たない"
@@ -309,25 +320,43 @@ def prepare(steps: object, kp: Keypath, columns: object) -> list[Group]:
         else:
             raise SendError(f"明細{row} の欄の並びが、keypath の部品の行・作業の行のどちらとも合わない")
     out: list[Group] = []
+    free_rows: set[int] = set()  # 項目CD に 0 を打つ行（自由入力の行）
     for gi, (field, gsteps) in enumerate(groups):
         t = _target(kp, *placed[gi])
         if field != t.field:
             raise SendError(f"手順の欄 {field} が、keypath の順の {t.field} と合わない")
         acts = [s["action"] for s in gsteps]
-        if acts not in (["key"], ["type", "key"]):
-            raise SendError(f"{field}: 手順が「打つ → キー」か「キー」でない: {acts}")
+        if acts not in (["key"], ["type", "key"], ["append", "key"]):
+            raise SendError(f"{field}: 手順が「打つ → キー」「書き足す → キー」「キー」のどれでもない: {acts}")
+        append = acts[0] == "append"
+        if append and (t.numeric or t.source != "name"):
+            raise SendError(f"{field}: 書き足すのは作業内容（名前）の欄だけ")
         key = gsteps[-1]["value"]
         if key != kp.advance_key:
             raise SendError(f"{field}: 進むキーが keypath の {kp.advance_key} でない: {key!r}")
-        text = gsteps[0]["value"] if acts[0] == "type" else None
+        text = gsteps[0]["value"] if acts[0] in ("type", "append") else None
+        row = placed[gi][0]
+        if t.source == "code" and text is not None and (not _INT_TEXT.fullmatch(text) or text != str(int(text))):
+            # 00・007 のような前に 0 の付いた形は断る。「0 の行か」を文字で見分けるため（Codex の指摘）
+            raise SendError(f"{field}: 項目CD が、前に 0 の付かない整数の形でない")
+        if t.source == "code" and text == "0":
+            free_rows.add(row)
+        free = row in free_rows
+        # 名前を打つ・作業区分を打つのは自由入力の行だけ。書き足すのはマスタの行だけ
+        if t.source in ("name", "work_kind") and acts[0] == "type" and not free:
+            raise SendError(f"{field}: マスタの行（項目CD が 0 でない）で、この欄に打とうとしている")
+        if append and free:
+            raise SendError(f"{field}: 自由入力の行で、名前を書き足そうとしている")
+        if free and t.source in ("name", "work_kind") and text is None:
+            raise SendError(f"{field}: 自由入力の行で、この欄を打たずに進もうとしている")
         if text is not None:
             problem = _check_text(t, text)
             if problem:
                 raise SendError(f"{field}: {problem}")
-        elif t.numeric and t.source in TYPED_SOURCES:
-            # 項目CD が空のまま進む（自由入力の行）・数量や単価を打たずに進むのは、道筋が未確認なので送らない
+        elif t.numeric and t.source in TYPED_SOURCES and t.source not in OPTIONAL_SOURCES:
+            # 項目CD が空のまま進む・数量や単価を打たずに進むのは、道筋が未確認なので送らない
             raise SendError(f"{field}: keypath では打つ欄なのに、何も打たずに進もうとしている")
-        out.append(Group(target=t, text=text, key=key, row=placed[gi][0]))
+        out.append(Group(target=t, text=text, key=key, row=placed[gi][0], append=append))
     return out
 
 
@@ -336,7 +365,8 @@ def dry_run_lines(groups: list[Group], kp: Keypath) -> list[str]:
     for g in groups:
         t = g.target
         w = f" 幅 {t.width}" if t.width is not None else ""
-        what = f"打つ {mask(g.text)} → {g.key}" if g.text is not None else f"{g.key}"
+        verb = "名前の後ろに書き足す" if g.append else "打つ"
+        what = f"{verb} {mask(g.text)} → {g.key}" if g.text is not None else f"{g.key}"
         if g.text is None and t.require_nonempty:
             what += "（Name が空でないことを確かめてから）"
         lines.append(f"{t.field:<14} {t.class_name} ({t.x}, {t.y}) ±{kp.tolerance}{w}  {what}")
@@ -407,8 +437,15 @@ def _tick_after(a: int, b: int) -> int:
 
 
 class Sender:
-    def __init__(self, desk: Desktop, kp: Keypath, groups: list[Group], log: Callable[[str], None]):
+    def __init__(self, desk: Desktop, kp: Keypath, groups: list[Group], log: Callable[[str], None],
+                 customer_name: str | None = None):
         self.desk, self.kp, self.groups, self.log = desk, kp, groups, log
+        # 客の名前（DB の KOK_NAMEJ1）。渡されたら、前面の窓の題名の客の部分（「 - [」の前）が「[ 名前 ]」とぴったり同じかを毎回確かめる。
+        # 部分一致にすると「山田 太郎商店」が「山田 太郎」で通る（Codex の指摘）。題名の形は 2026-11-08 に店の窓で確かめた
+        # 名前は出力に出さない
+        if customer_name is not None and not name_usable(customer_name):
+            raise Stop("客の名前が短いか、前後に空白・見えない文字があり、窓の題名と照らせない")
+        self.customer_name = customer_name
         self.hwnd: int | None = None
         self.pid: int | None = None
         self.tick = 0
@@ -423,8 +460,14 @@ class Sender:
             return "前面にダイアログ（#32770）が出ている"
         if w.exe.lower() != self.kp.exe.lower():
             return f"前面の窓が {self.kp.exe} でない"
-        if w.class_name != self.kp.window_class or self.kp.title_contains not in w.title:
+        if w.class_name != self.kp.window_class or not any(t in w.title for t in self.kp.titles):
             return "前面の窓が伝票の画面でない（クラスか題名が違う）"
+        # 題名は全体で比べる。客の部分だけを切り出すと、名前に「 ] - [」が入った別の客ですり抜ける（Codex の指摘）。
+        # 前後の空白・見えない文字も削らない。形は 2026-11-08 に店の窓で確かめた「[ 客 ] - [ 画面名 ] - RacroSⅢ」
+        if self.customer_name is not None and w.title not in {
+            f"[ {self.customer_name} ] - [ {t} ] - {TITLE_TAIL}" for t in self.kp.titles
+        }:
+            return "前面の窓の題名に、請求の客の名前が無い（別の客の伝票か、客を選んでいない）"
         if self.hwnd is not None and (w.hwnd != self.hwnd or w.pid != self.pid):
             return "前面の窓が、始めたときの伝票の画面と違う"
         return None
@@ -558,6 +601,24 @@ class Sender:
             raise Stop(f"{t.field}: 文字を送ってよい欄でない")
         self._send(t, lambda: self.desk.send_char(ch))
 
+    def _append(self, t: Target, text: str) -> None:
+        """マスタの名前（元）の後ろに 1 文字ずつ書き足す。読み返しが「元＋ここまで打った分」でなければ止める。
+        カーソルが末尾にない・名前が選ばれていて上書きされる、といった場合はここで止まる。"""
+        self._wait_name(t, lambda name: name != "", "名前が入っていない（マスタの品目でない）")
+        orig = self._check_all(t).name
+        self.desk.sleep(STABLE_S)
+        if self._check_all(t).name != orig:
+            raise Stop(f"{t.field}: 書き足す前の名前が落ち着かない")
+        if orig == "":
+            raise Stop(f"{t.field}: 名前が入っていない（マスタの品目でない）")
+        for i, ch in enumerate(text):
+            if i:
+                want = orig + text[:i]
+                self._wait_name(t, lambda name: name == want, "書き足している途中の読み返しが合わない")
+            self._send_char(t, ch)
+        self._wait_name(t, lambda name: name == orig + text, "書き足した名前の読み返しが合わない")
+        self.log(f"{t.field}: 名前の後ろに {mask(text)} を書き足した、読み返し一致")
+
     def _send_key(self, t: Target, key: str) -> None:
         if key not in SEND_KEYS:
             raise Stop(f"送ってよいキーでない: {key!r}")
@@ -597,7 +658,9 @@ class Sender:
         for g in self.groups:
             t = g.target
             f = self._wait_focus(t)
-            if g.text is not None:
+            if g.append:
+                self._append(t, g.text)
+            elif g.text is not None:
                 if not _empty(t, f.name):
                     raise Stop(f"{t.field}: 打つ前の欄が空でない（読み返し {mask(f.name)}）")
                 for i, ch in enumerate(g.text):
@@ -621,5 +684,13 @@ class Sender:
         self.log(f"明細 {rows} 行を入れ終えました。ここで止まります。中身を画面で確かめ、保存は人が押してください。")
 
 
-def run(desk: Desktop, kp: Keypath, groups: list[Group], log: Callable[[str], None]) -> None:
-    Sender(desk, kp, groups, log).run()
+def name_usable(name: str) -> bool:
+    """客の名前を窓の題名と照らしてよい形か。2 文字以上で、前後に空白・見えない文字が無く、
+    中は印字できる文字と半角・全角の空白（姓と名の間）だけ。"""
+    return (len(name) >= 2 and name == name.strip()
+            and all(ch.isprintable() or ch in (" ", "　") for ch in name))
+
+
+def run(desk: Desktop, kp: Keypath, groups: list[Group], log: Callable[[str], None],
+        customer_name: str | None = None) -> None:
+    Sender(desk, kp, groups, log, customer_name).run()

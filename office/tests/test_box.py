@@ -83,6 +83,34 @@ class CheckTest(unittest.TestCase):
                     {"allowed_customers": ["1"], "item_codes": {"a": 1}, "pi_url": "http://x/other", "secret": "s" * 16}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 load_config(bad)
+        # free_work_kind は item_codes で 0 の品目にだけ、1〜999 の番号で書ける
+        for kinds in ({"a": 31}, {"z": 31}, {"f": 0}, {"f": 1000}, {"f": "31"}, ["f"]):
+            with self.subTest(kinds=kinds), self.assertRaises(ValueError):
+                load_config({"allowed_customers": ["1"], "item_codes": {"a": 1, "f": 0}, "free_work_kind": kinds})
+
+    def test_free_entry_and_name_append(self):
+        cfg = load_config({"allowed_customers": ["9001"], "item_codes": {"架空の部品A": 101, "架空の処分": 0},
+                           "free_work_kind": {"架空の処分": 31}})
+        base = copy.deepcopy(request()["lines"][0])
+        free = {**base, "item": "架空の処分", "qty": 4, "unitPrice": 300, "amount": 1200}
+        appended = {**base, "nameAppend": "･架空 W1 145/80R12"}
+        job = check_request(request(lines=[appended, free]), cfg)
+        self.assertEqual(job["lines"][0]["name_append"], "･架空 W1 145/80R12")
+        self.assertNotIn("name_append", job["lines"][1])
+        steps = boxmain._plan(job, cfg)[2]
+        self.assertTrue(steps[1].append)
+        self.assertEqual([g.text for g in steps if g.row == 2][:3], ["0", "架空の処分", "31"])
+        for bad in ("", " 空白", "x" * 41, 5, "改\n行"):
+            with self.subTest(bad=bad), self.assertRaises(Reject) as cm:
+                check_request(request(lines=[{**base, "nameAppend": bad}]), cfg)
+            self.assertEqual(cm.exception.reason, "invalid")
+        with self.assertRaises(Reject) as cm:
+            check_request(request(lines=[{**free, "nameAppend": "･足す"}]), cfg)
+        self.assertEqual(cm.exception.reason, "invalid")
+        no_kind = load_config({"allowed_customers": ["9001"], "item_codes": {"架空の部品A": 101, "架空の処分": 0}})
+        with self.assertRaises(Reject) as cm:
+            check_request(request(lines=[free]), no_kind)
+        self.assertEqual(cm.exception.reason, "unknownItem")
 
 
 class FakeHooks:
@@ -386,13 +414,65 @@ class CodexFixTest(unittest.TestCase):
     def test_confirm_rechecks_confirmed_after_operator(self):
         saved = (boxmain.ask_operator, boxmain.confirmed)
         try:
-            boxmain.ask_operator = lambda job: True
+            boxmain.ask_operator = lambda job, cfg=None, ctx=None: True
             boxmain.confirmed = lambda: False
             self.assertFalse(boxmain.confirm_then_check({}))
             boxmain.confirmed = lambda: True
             self.assertTrue(boxmain.confirm_then_check({}))
         finally:
             boxmain.ask_operator, boxmain.confirmed = saved
+
+    def test_operator_confirms_with_plate_number_not_customer_number(self):
+        import builtins
+        import io
+        from contextlib import redirect_stdout
+        from box import lookup
+        info = lookup.CarInfo(plate="架空 500 さ 7319", no=7319, name="架空 太郎", title_name="架空 太郎")
+        job = {"lines": [1], "customer_code": 9001, "car_code": 9002}
+        cfg = {"db_reader_file": "x"}
+        saved = (lookup.lookup, builtins.input)
+        try:
+            lookup.lookup = lambda f, k, c: info
+            for typed, ok in (("7319", True), (" 7319 ", True), ("9001", False), ("", False), ("７３１９", False), ("07319", True)):
+                builtins.input = lambda prompt: typed
+                buf = io.StringIO()
+                ctx = {}
+                with self.subTest(typed=typed), redirect_stdout(buf):
+                    self.assertIs(boxmain.ask_operator(job, cfg, ctx), ok)
+                    self.assertEqual(ctx.get("customer_name"), "架空 太郎" if ok else None)
+                self.assertNotIn("顧客番号", buf.getvalue())
+                self.assertNotIn("9001", buf.getvalue())
+            # 車を 1 台に決められない・設定が無いときは、聞かずに入れない
+            def fail(f, k, c):
+                raise lookup.LookupError_("ちょうど 1 台でない")
+            lookup.lookup = fail
+            builtins.input = lambda prompt: self.fail("聞いてはいけない")
+            with redirect_stdout(io.StringIO()):
+                self.assertFalse(boxmain.ask_operator(job, cfg))
+                self.assertFalse(boxmain.ask_operator(job, {}))
+        finally:
+            lookup.lookup, builtins.input = saved
+
+    def test_real_enter_needs_customer_name(self):
+        with self.assertRaises(Abort):
+            boxmain.real_enter(None, None)
+        with self.assertRaises(Abort):
+            boxmain.real_enter(None, "")
+
+    def test_lookup_parse(self):
+        from box import lookup
+        one = '[{"rikuji":"架空","bango":"500","kana":"さ","no":7319,"name":"架空 太郎 様方","title_name":"架空 太郎","same_no":1}]'
+        self.assertEqual(lookup.parse(one), lookup.CarInfo(plate="架空 500 さ 7319", no=7319, name="架空 太郎 様方",
+                                                            title_name="架空 太郎"))
+        no_title = '[{"rikuji":"架空","bango":"500","kana":"さ","no":7319,"name":"架空","title_name":" ","same_no":1}]'
+        two_cars = one.replace('"same_no":1', '"same_no":2')
+        nbsp = one.replace('"title_name":"架空 太郎"', '"title_name":"\u00a0架空 太郎"')
+        tab = one.replace('"title_name":"架空 太郎"', '"title_name":"架空 太郎\t"')
+        padded = one.replace('"title_name":"架空 太郎"', '"title_name":"架空　太郎   "')  # 姓と名の間の全角空白は使える
+        self.assertEqual(lookup.parse(padded).title_name, "架空　太郎")  # 固定長の後ろの半角空白だけは落とす
+        for bad in ("[]", one[:-1] + ',' + one[1:], "x", '[{"no":0}]', '[{"no":"7319"}]', '{"no":7319}', no_title, two_cars, nbsp, tab):
+            with self.subTest(bad=bad), self.assertRaises(lookup.LookupError_):
+                lookup.parse(bad)
 
     def test_recover_does_not_reopen_entered_session(self):
         # A を入れ終えた後、同じ作業の B が work に残って落ちた → 再起動しても A の状態は entered のまま

@@ -114,7 +114,7 @@ class Watcher:
 
     def _window_ok(self, w: WindowInfo | None) -> bool:
         return (w is not None and w.exe.lower() == self.kp.exe.lower() and w.class_name == self.kp.window_class
-                and self.kp.title_contains in w.title)
+                and any(t in w.title for t in self.kp.titles))
 
     def step(self) -> None:
         dialogs = sum(1 for t in self.desk.visible_windows() if t.class_name == DIALOG_CLASS)

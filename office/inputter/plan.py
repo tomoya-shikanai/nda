@@ -1,6 +1,6 @@
 """承認済みの明細から、伝票の画面（M_NOU）の明細の表に入れる手順を作る。
 
-手順は {"field", "action": "type"|"key", "value"} の list。作った手順は必ず guard.check_plan を通す。
+手順は {"field", "action": "type"|"append"|"key", "value"} の list。append はマスタの名前の後ろに書き足す。作った手順は必ず guard.check_plan を通す。
 推測で埋めない: 数量・単価が null の行、品目の表に無い品目があれば、手順を作らずに止める。
 欄の順は columns.json（未確認）で決める。
 """
@@ -15,11 +15,14 @@ from . import guard
 
 COLUMNS_PATH = Path(__file__).with_name("columns.json")
 # 列に入れるもの。none はその欄に何も打たず、次の欄へ進むだけ
-SOURCES = ("code", "name", "qty", "unit_price", "amount", "none")
+# work_kind は作業区分。自由入力の行（項目CD 0）だけ作業区分の数を打ち、ほかの行は打たずに進む
+SOURCES = ("code", "name", "qty", "unit_price", "amount", "work_kind", "none")
 REQUIRED_SOURCES = ("code", "name", "qty", "unit_price")
 # 作業の行（labor_codes の項目CD）は、担当の後に点数・技術料へ進む。技術料に 数量 × 単価 の金額を直に打つ（2026-11-06 に店で決めた）
 LABOR_REQUIRED_SOURCES = ("code", "name", "amount")
 FREE_ENTRY_CODE = 0
+MAX_NAME_APPEND = 40
+MAX_WORK_KIND = 999
 
 
 class PlanError(ValueError):
@@ -57,6 +60,28 @@ def load_items(data: object) -> dict[str, int]:
         if not name or not _is_int(code) or code < 0:
             raise PlanError(f"品目の表の項目CD が 0 以上の整数でない: {name!r} → {code!r}")
     return items
+
+
+def load_work_kinds(data: object) -> dict[str, int]:
+    """自由入力の品目 → 作業区分の番号（free_work_kind）。無ければ空。"""
+    kinds = data.get("free_work_kind", {}) if isinstance(data, dict) else {}
+    if not isinstance(kinds, dict):
+        raise PlanError("品目の表の free_work_kind が dict でない")
+    for name, k in kinds.items():
+        if not name or not _is_int(k) or not 0 < k <= MAX_WORK_KIND:
+            raise PlanError(f"free_work_kind の作業区分が 1〜{MAX_WORK_KIND} の整数でない: {name!r} → {k!r}")
+    return kinds
+
+
+def _check_name_text(text: object, what: str) -> str:
+    if not isinstance(text, str) or not text or not text.isprintable() or len(text) > MAX_NAME_APPEND:
+        raise PlanError(f"{what}が、空でない {MAX_NAME_APPEND} 文字までの印字できる文字でない")
+    if text != text.strip(" 　"):
+        # 前後の空白は画面とDBで落ちることがあり、読み返しで見分けにくいので断る
+        raise PlanError(f"{what}の前後に空白がある")
+    if any(ord(c) > 0xFFFF for c in text):
+        raise PlanError(f"{what}に送れない文字がある")
+    return text
 
 
 def _check_cols(cols: object, what: str, required: tuple[str, ...], banned: tuple[str, ...]) -> None:
@@ -139,7 +164,7 @@ def _qty_text(qty: float) -> str:
     return str(tenths // 10) if tenths % 10 == 0 else f"{tenths // 10}.{tenths % 10}"
 
 
-def _line_values(i: int, line: object, items: dict[str, int]) -> dict:
+def _line_values(i: int, line: object, items: dict[str, int], kinds: dict[str, int]) -> dict:
     where = f"明細 {i + 1}"
     if not isinstance(line, dict):
         raise PlanError(f"{where}: dict でない")
@@ -163,11 +188,25 @@ def _line_values(i: int, line: object, items: dict[str, int]) -> dict:
     tenths = qty_tenths(qty) * int(price)
     # 金額は作業の行の技術料に打つときだけ使う。1 円単位にならなければ None（作業の行なら build_plan で止める）
     amount = tenths // 10 if tenths % 10 == 0 else None
-    return {"code": items[item], "name": item, "qty": qty, "unit_price": int(price), "amount": amount}
+    code = items[item]
+    append = line.get("name_append")
+    work_kind = None
+    if code == FREE_ENTRY_CODE:
+        # 自由入力の行は品目の名前そのものを打つ。作業区分は表（free_work_kind）から取り、推測しない
+        _check_name_text(item, f"{where}: 自由入力の品目の名前")
+        if item not in kinds:
+            raise PlanError(f"{where}: 自由入力の品目の作業区分が free_work_kind に無い")
+        work_kind = kinds[item]
+        if append is not None:
+            raise PlanError(f"{where}: 自由入力の行に名前の書き足し（name_append）は付けられない")
+    elif append is not None:
+        _check_name_text(append, f"{where}: 名前の書き足し")
+    return {"code": code, "name": item, "qty": qty, "unit_price": int(price), "amount": amount,
+            "name_append": append, "work_kind": work_kind}
 
 
-def expected_lines(job: object, items: dict[str, int]) -> list[dict]:
-    """入れる明細を {code, name, qty, unit_price} で返す（読み返しの照合の期待値にも使う）。"""
+def expected_lines(job: object, items: dict[str, int], kinds: dict[str, int] | None = None) -> list[dict]:
+    """入れる明細を {code, name, qty, unit_price, amount, name_append, work_kind} で返す（読み返しの照合の期待値にも使う）。"""
     if not isinstance(job, dict):
         raise PlanError("伝票の JSON が dict でない")
     if not isinstance(job.get("job_id"), str) or not job["job_id"]:
@@ -178,29 +217,41 @@ def expected_lines(job: object, items: dict[str, int]) -> list[dict]:
     lines = job.get("lines")
     if not isinstance(lines, list) or not lines:
         raise PlanError("明細（lines）が無い")
-    return [_line_values(i, line, items) for i, line in enumerate(lines)]
+    return [_line_values(i, line, items, kinds or {}) for i, line in enumerate(lines)]
 
 
 def build_plan(job: object, items_data: object, columns_data: object | None = None) -> list[dict]:
     """明細の表に入れる手順を作り、許可リストを通してから返す。"""
     items = load_items(items_data)
+    kinds = load_work_kinds(items_data)
     cfg = load_columns(load_json(COLUMNS_PATH) if columns_data is None else columns_data)
     advance = {"action": "key", "value": cfg["advance_key"]}
     steps: list[dict] = []
     labor_codes = set(cfg.get("labor_codes", []))
-    for n, v in enumerate(expected_lines(job, items), start=1):
+    for n, v in enumerate(expected_lines(job, items, kinds), start=1):
         free = v["code"] == FREE_ENTRY_CODE
         labor = v["code"] in labor_codes
         if labor and v["amount"] is None:
             raise PlanError(f"明細 {n}（{v['name']}）: 数量 × 単価 が 1 円単位にならないので、技術料に打てない")
         cols = cfg["labor_columns"] if labor else cfg["columns"]
+        if free and not any(c["source"] == "work_kind" for c in cols):
+            raise PlanError(f"明細 {n}（{v['name']}）: 欄の設定に作業区分（work_kind）の欄が無いので、自由入力の行を入れられない")
         for col in cols:
             field = f"明細{n}.{col['field']}"
             src = col["source"]
+            action = "type"
             if src == "code":
-                text = None if free else str(v["code"])  # 自由入力の行は項目CD を打たない（未確認）
+                text = str(v["code"])  # 自由入力の行も 0 を打つ（DB の項目CD 0 と合わせる）
             elif src == "name":
-                text = v["name"] if free else None  # マスタの品目は名前がマスタから入る（未確認）
+                # 自由入力の行は名前を打つ。マスタの品目は名前がマスタから入り、name_append があれば後ろに書き足す
+                if free:
+                    text = v["name"]
+                elif v["name_append"] is not None:
+                    text, action = v["name_append"], "append"
+                else:
+                    text = None
+            elif src == "work_kind":
+                text = str(v["work_kind"]) if free else None
             elif src == "qty":
                 text = _qty_text(v["qty"])
             elif src == "unit_price":
@@ -210,7 +261,7 @@ def build_plan(job: object, items_data: object, columns_data: object | None = No
             else:
                 text = None
             if text is not None:
-                steps.append({"field": field, "action": "type", "value": text})
+                steps.append({"field": field, "action": action, "value": text})
             steps.append({"field": field, **advance})
         for key in cfg.get("row_end_keys", []):
             steps.append({"field": f"明細{n}.行の終わり", "action": "key", "value": key})

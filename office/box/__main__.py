@@ -10,7 +10,10 @@
 
 設定は <root>\\config.json（Git に入れない）:
   {"allowed_customers": ["<練習用の客の番号>"], "item_codes": {"<品目の正式名>": <項目CD>},
+   "free_work_kind": {"<項目CD 0 の品目>": <作業区分>},
+   "db_reader_file": "<DB を読むだけの接続の文字列を書いたファイル>",
    "pi_url": "http://<工場>:3000/api/office/reply", "secret": "<合言葉>"}   ← pi_url・secret は無くてよい
+  送る前に、db_reader_file で車のナンバーと客の名前を引いて画面に出し、人にナンバーの番号を打ってもらう。
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from inputter import guard
 from inputter import send as sendmod
 from inputter.plan import COLUMNS_PATH, build_plan, load_json
 
+from . import lookup
 from .inbox import MAX_FILE_BYTES, Abort, Hooks, Inbox
 from .message import Reject, check_request, envelope, load_config, read_message
 
@@ -43,7 +47,8 @@ def _plan(job: dict, cfg: dict, need_confirmed: bool = False):
     if need_confirmed and not (isinstance(columns, dict) and columns.get("confirmed") is True):
         # 起動の後に columns.json が書き換わっても、依頼ごとに読み直した方で判定する（Codex の指摘）
         raise RuntimeError("columns.json が確認済みでない")
-    steps = guard.check_plan(build_plan(job, {"items": cfg["item_codes"]}, columns))
+    items = {"items": cfg["item_codes"], "free_work_kind": cfg.get("free_work_kind", {})}
+    steps = guard.check_plan(build_plan(job, items, columns))
     kp = sendmod.load_keypath(load_json(sendmod.KEYPATH_PATH))
     if need_confirmed and not kp.confirmed:
         raise RuntimeError("keypath.json が確認済みでない")
@@ -81,19 +86,32 @@ def make_post(cfg: dict):
     return post
 
 
-def ask_operator(job: dict) -> bool:
-    """人に正しい客の伝票を開いてもらい、顧客番号を打ってもらう。番号はこの PC の画面にだけ出す。"""
+def ask_operator(job: dict, cfg: dict | None = None, ctx: dict | None = None) -> bool:
+    """人に正しい客の伝票を開いてもらい、ナンバーの番号を打ってもらう。
+    人は顧客番号を覚えていないので、DB（読むだけ）で引いたナンバーと客の名前を出す（2026-11-08 鹿内さん）。
+    ナンバー・名前はこの PC の画面にだけ出し、記録・工場への返事には書かない。"""
     print("", flush=True)
     print(f"  工場から請求が届きました（明細 {len(job['lines'])} 行）。", flush=True)
-    print(f"  業務ソフトで 顧客番号 {job['customer_code']}・車両 {job['car_code']} の伝票を開いてください。", flush=True)
-    print("  開いたら、ここに顧客番号を打って Enter。やめるときは何も打たずに Enter。", flush=True)
+    reader = (cfg or {}).get("db_reader_file")
+    if not reader:
+        print("  config.json に db_reader_file が無く、車のナンバーを引けないので、入れません。", flush=True)
+        return False
     try:
-        typed = input("  顧客番号> ").strip()
+        info = lookup.lookup(reader, job["customer_code"], job["car_code"])
+    except lookup.LookupError_ as ex:
+        print(f"  {ex}。入れません。", flush=True)
+        return False
+    print(f"  業務ソフトで、ナンバー「{info.plate}」（{info.name} 様）の見積を開いてください。", flush=True)
+    print("  開いたら、ナンバーの番号（4 桁）をここに打って Enter。やめるときは何も打たずに Enter。", flush=True)
+    try:
+        typed = input("  ナンバーの番号> ").strip()
     except EOFError:
         return False
-    if typed != str(job["customer_code"]):
+    if not (typed.isascii() and typed.isdigit() and int(typed) == info.no):
         print("  番号が違うか空なので、入れません。", flush=True)
         return False
+    if ctx is not None:
+        ctx["customer_name"] = info.title_name  # 送る間、伝票の窓の題名と照らす
     return True
 
 
@@ -111,22 +129,27 @@ def wait_closed() -> None:
             return
 
 
-def confirm_then_check(job: dict) -> bool:
+def confirm_then_check(job: dict, cfg: dict | None = None, ctx: dict | None = None) -> bool:
     """人の確かめの後、送る直前にもう一度 keypath・columns の確認済みを読み直す（待つ間に取り消されても送らない。Codex 2 回目）。"""
-    if not ask_operator(job):
+    if ctx is not None:
+        ctx.pop("customer_name", None)  # 前の請求の名前を使い回さない
+    if not ask_operator(job, cfg, ctx):
         return False
     if not confirmed():
         print("  keypath.json か columns.json が確認済みでなくなったので、入れません。", flush=True)
         return False
     return True
 
-def real_enter(prepared) -> int:
+def real_enter(prepared, customer_name: str | None) -> int:
     from inputter.winsend import WinDesktop
 
+    if not customer_name:
+        # 人の確かめで客の名前を引けていなければ、窓の題名と照らせないので送らない
+        raise Abort("other", "客の名前を窓の題名と照らせないので、入れない")
     kp, _, groups = prepared
     desk = WinDesktop()
     try:
-        sendmod.run(desk, kp, groups, lambda m: log(m))
+        sendmod.run(desk, kp, groups, lambda m: log(m), customer_name)
     except sendmod.Stop as ex:
         log(f"止めた（これ以上は何も送らない）: {ex}")  # send の文は値を *** にしてある
         raise Abort("other", "入力が途中で止まった。画面は人が確かめて閉じる") from None
@@ -171,7 +194,10 @@ def cmd_run(args) -> int:
         if not confirmed():
             print("keypath.json と columns.json の confirmed が両方 true でないので、送らない。店で画面を確かめてから人が true にする。", file=sys.stderr)
             return 2
-        hooks = Hooks(prepare=lambda job: _plan(job, cfg, need_confirmed=True), confirm=confirm_then_check, enter=real_enter,
+        ctx: dict = {}  # 人の確かめで引いた客の名前を、送る所へ渡す
+        hooks = Hooks(prepare=lambda job: _plan(job, cfg, need_confirmed=True),
+                      confirm=lambda job: confirm_then_check(job, cfg, ctx),
+                      enter=lambda prepared: real_enter(prepared, ctx.pop("customer_name", None)),
                       post=make_post(cfg), log=log, closed=wait_closed)
         box = Inbox(root, cfg, hooks)
         try:
