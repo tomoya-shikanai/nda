@@ -107,6 +107,12 @@ def read_message(path: Path, max_bytes: int) -> object:
 
 ENVELOPE_KEYS = {"v", "id", "sessionId", "sentAt", "kind"}
 REQUEST_KEYS = ENVELOPE_KEYS | {"attempt", "customer", "approvedAt", "approval", "lines", "total", "totalSpoken"}
+# 客の決め方は 2 通り（#55）。どちらか一方だけを持つ:
+#   "customer": {"customerNo", "carNo"}（番号。今の形）
+#   "vehicle": {"plateNo", 任意で "rikuji"・"bango"・"kana"・"customerWords"・"carWords"}（声の手がかり。box/resolve.py で引く）
+REQUEST_KEYS_VEHICLE = REQUEST_KEYS - {"customer"} | {"vehicle"}
+VEHICLE_KEYS = {"plateNo"}
+VEHICLE_OPTIONAL_KEYS = {"rikuji", "bango", "kana", "customerWords", "carWords"}
 LINE_KEYS = {"item", "qty", "unit", "unitPrice", "amount", "unitPriceFrom", "provenance"}
 
 
@@ -127,23 +133,45 @@ def envelope(msg: object) -> tuple[str, str, str]:
     return msg["kind"], msg["id"].lower(), msg["sessionId"]
 
 
-def check_request(msg: object, cfg: dict) -> dict:
-    """invoice.request を確かめ、入力（inputter）の job を返す。外れたら Reject。"""
+def check_vehicle(v: object):
+    """請求の vehicle（声の手がかり）を確かめ、box/resolve.py の Hints にする。外れたら Reject（invalid）。"""
+    from .resolve import ResolveError, make_hints
+
+    if not isinstance(v, dict) or not VEHICLE_KEYS <= set(v) <= VEHICLE_KEYS | VEHICLE_OPTIONAL_KEYS:
+        raise _bad("vehicle の形が違う")
+    try:
+        return make_hints(v["plateNo"], v.get("rikuji"), v.get("bango"), v.get("kana"),
+                          v.get("customerWords"), v.get("carWords"))
+    except ResolveError as ex:
+        raise _bad(f"vehicle: {ex}") from None
+
+
+def check_request(msg: object, cfg: dict, resolve_vehicle=None) -> dict:
+    """invoice.request を確かめ、入力（inputter）の job を返す。外れたら Reject。
+
+    vehicle（声の手がかり）の請求は、resolve_vehicle（Hints → (顧客コード, 車両コード)、決まらなければ None）を
+    渡したときだけ通す。渡さなければ customerNotFound で止める（解決の道が無いまま番号を推測しない）。
+    """
     kind, mid, sid = envelope(msg)
     if kind != "invoice.request":
         raise _bad("kind が invoice.request でない")
-    if set(msg) != REQUEST_KEYS:
+    if set(msg) not in (REQUEST_KEYS, REQUEST_KEYS_VEHICLE):
         raise _bad("項目が多いか足りない")
     if not _int(msg["attempt"]) or msg["attempt"] < 1:
         raise _bad("attempt が 1 以上の整数でない")
     if not _datetime(msg["approvedAt"]) or not _quoted(msg["approval"]):
         raise _bad("承認の日時か出所が無い")
-    cust = msg["customer"]
-    if not isinstance(cust, dict) or set(cust) != {"customerNo", "carNo"}:
-        raise _bad("customer の形が違う")
-    for k in ("customerNo", "carNo"):
-        if not isinstance(cust[k], str) or not NUM_RE.match(cust[k]) or int(cust[k]) <= 0:
-            raise _bad(f"{k} が正の数字でない")
+    hints = None
+    if "vehicle" in msg:
+        hints = check_vehicle(msg["vehicle"])
+        cust = None
+    else:
+        cust = msg["customer"]
+        if not isinstance(cust, dict) or set(cust) != {"customerNo", "carNo"}:
+            raise _bad("customer の形が違う")
+        for k in ("customerNo", "carNo"):
+            if not isinstance(cust[k], str) or not NUM_RE.match(cust[k]) or int(cust[k]) <= 0:
+                raise _bad(f"{k} が正の数字でない")
     lines = msg["lines"]
     if not isinstance(lines, list) or not 1 <= len(lines) <= MAX_LINES:
         raise _bad(f"lines が 1〜{MAX_LINES} 行でない")
@@ -177,6 +205,21 @@ def check_request(msg: object, cfg: dict) -> dict:
     if msg["totalSpoken"] is not None and not _int(msg["totalSpoken"]):
         raise _bad("totalSpoken が整数でも null でもない")
 
+    if hints is not None:
+        # 形をすべて確かめてから DB を引く。決まった番号も、番号の請求と同じく allowed_customers で止める
+        if resolve_vehicle is None:
+            raise Reject("customerNotFound", "vehicle の請求を解決する道が無い（番号を推測しない）")
+        from .resolve import ResolveError
+
+        try:
+            got = resolve_vehicle(hints)
+        except ResolveError as ex:
+            raise Reject("other", f"客と車を引けない（{ex}）") from None
+        if got is None:
+            raise Reject("customerNotFound", "手がかりに合う客と車が、ちょうど 1 つに決まらない")
+        if not (isinstance(got, tuple) and len(got) == 2 and all(_int(x) and x > 0 for x in got)):
+            raise _bad("解決の答えが (顧客コード, 車両コード) でない")
+        cust = {"customerNo": str(got[0]), "carNo": str(got[1])}
     allowed = cfg["allowed_customers"]
     if cust["customerNo"] not in allowed:
         raise Reject("customerNotAllowed", "練習用の客の番号（allowed_customers）に無い")
