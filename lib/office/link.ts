@@ -13,7 +13,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { access, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { logEvent, since } from "../log/events";
-import { withSessionLock } from "../session/lock";
+import { outsideSessionLocks, withSessionLock } from "../session/lock";
 import { readSession, type Session, writeSession } from "../session/store";
 import { dropClue, getClue } from "./clues";
 import {
@@ -159,15 +159,35 @@ export function officeFromEnv(env: NodeJS.ProcessEnv = process.env): OfficeLink 
   return null;
 }
 
+/** 期限を過ぎた（元の書き込みはまだ走っているかもしれない）。 */
+export class PutTimeoutError extends Error {}
+
+/**
+ * 作業ごとの「書き込み中」（依頼・声の指示の、元の書き込みの Promise）。期限を過ぎても元の書き込みは止まらないので、
+ * それが終わるまで送り直しを始めない（同じ id を 2 回置かない）。route ごとにモジュールが分かれても同じ入れ物を使うよう globalThis に置く。
+ */
+const INFLIGHT = Symbol.for("nda.office.inflight");
+function inflight(): Map<string, Promise<void>> {
+  const g = globalThis as unknown as Record<symbol, Map<string, Promise<void>> | undefined>;
+  g[INFLIGHT] ??= new Map();
+  return g[INFLIGHT];
+}
+/** その作業の元の書き込みがまだ終わっていないか。 */
+export const isWriting = (sessionId: string) => inflight().has(sessionId);
+/** その作業の元の書き込み（と遅れて成功したときの後始末）が終わるまで待つ（試験用）。 */
+export const writingDone = async (sessionId: string) => {
+  await inflight().get(sessionId);
+};
+
 /** 形を確かめてから、期限つきで受け箱に置く。かかった ms と、置けなかった種類を記録する（中身は記録しない）。 */
-export async function putMessage(link: OfficeLink, m: ToOffice): Promise<void> {
+export async function putMessage(link: OfficeLink, m: ToOffice, onPut?: (put: Promise<void>) => void): Promise<void> {
   const msg = ToOfficeSchema.parse(m);
   let timer: NodeJS.Timeout | undefined;
   let timedOut = false;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
-      reject(new Error("受け箱に置くのが期限を過ぎた"));
+      reject(new PutTimeoutError("受け箱に置くのが期限を過ぎた"));
     }, link.timeoutMs);
   });
   const t0 = performance.now();
@@ -182,7 +202,9 @@ export async function putMessage(link: OfficeLink, m: ToOffice): Promise<void> {
       error,
     });
   try {
-    await Promise.race([link.box.put(boxFileName(msg), JSON.stringify(msg)), timeout]);
+    const put = link.box.put(boxFileName(msg), JSON.stringify(msg));
+    onPut?.(put);
+    await Promise.race([put, timeout]);
     log(null);
   } catch (e) {
     log(timedOut ? "timeout" : unreachableReason(e));
@@ -233,12 +255,33 @@ async function putRequest(dir: string, link: OfficeLink, s: Session, now: Date):
   } else {
     message = buildInvoiceRequest(s, o.requestId, now);
   }
-  if (message === null) return s;
+  if (message === null || isWriting(s.id)) return s;
+  const sent = message.kind === "estimate.instruction" ? () => dropClue(s.id) : () => {};
+  // 期限を過ぎた後に元の書き込みが成功したら、排他の中で読み直して sent にする（手がかりも消す）。終わるまで「書き込み中」
+  // 期限を過ぎたかは、この呼び出しの結果が決まってから見る（書き込みが期限の直後に終わっても取りこぼさない）
+  let decide!: (timedOut: boolean) => void;
+  const timedOut = new Promise<boolean>((r) => (decide = r));
+  const track = (put: Promise<void>) => {
+    const done = put.then(
+      async () => {
+        if (!(await timedOut)) return;
+        await outsideSessionLocks(async () => {
+          sent();
+          await updateSession(dir, s.id, (x) => markSent(x, o.requestId, new Date()));
+        });
+      },
+      () => {},
+    );
+    const tracked = done.catch(() => {}).finally(() => inflight().delete(s.id));
+    inflight().set(s.id, tracked);
+  };
   try {
-    await putMessage(link, message);
-    if (message.kind === "estimate.instruction") dropClue(s.id);
+    await putMessage(link, message, track);
+    decide(false);
+    sent();
     return (await updateSession(dir, s.id, (x) => markSent(x, o.requestId, now))) ?? s;
   } catch (e) {
+    decide(e instanceof PutTimeoutError);
     return (await updateSession(dir, s.id, (x) => markSendFailed(x, o.requestId, sendError(e), now))) ?? s;
   }
 }
@@ -282,7 +325,8 @@ export async function tickOffice(dir: string, link: OfficeLink | null, s: Sessio
       cur = expired;
       await writeSession(dir, cur);
     }
-    if (link === null || !shouldResend(cur, now)) return cur;
+    // 前の書き込みが期限を過ぎてもまだ走っている間は送り直さない（同じ id を 2 回置かない）
+    if (link === null || !shouldResend(cur, now) || isWriting(cur.id)) return cur;
     const marked = markRetrying(cur, now);
     await writeSession(dir, marked);
     return putRequest(dir, link, marked, now);

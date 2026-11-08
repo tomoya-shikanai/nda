@@ -32,3 +32,11 @@ export async function withSessionLock<T>(id: string, f: () => Promise<T>): Promi
     if (l.tails.get(id) === tail) l.tails.delete(id);
   }
 }
+
+/**
+ * 持っている鍵を外した文脈で f を動かす（期限の後に遅れて終わった書き込みの後始末など、排他の外で後から走る処理のため。
+ * そのままでは呼んだ時の鍵を受け継ぎ、排他を取らずに書いてしまう）。
+ */
+export function outsideSessionLocks<T>(f: () => T): T {
+  return locks().held.exit(f);
+}
