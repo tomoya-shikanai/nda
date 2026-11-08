@@ -51,7 +51,7 @@ Built with Claude: Japan 2026 の提出作品「んだ (nDa)」。父（整備�
 ## 技術
 - 構成は `docs/architecture.md`。工場は Pi 5 だけで、nDa の本体（Next.js）も Pi で動かす。審査員向けは同じコードを hosted。DB は libSQL（ローカルはファイル）。
 - 事務所の PC（Windows）は、Pi が受け箱のフォルダに置いた承認済みの明細を拾い、業務ソフトに保存の手前まで入れる。Pi と事務所の間は Claude（モデル）を通さない。
-- Claude: Messages API Tool Runner（betaZodTool）＋ structured outputs ＋ vision。分離と一問は `claude-opus-5-5`、補助は `claude-haiku-5-5`。
+- Claude: Messages API ＋ structured outputs（`output_config.format` に zod）。製品で呼ぶのは明細の対応づけ（`lib/invoice/extract.ts`、`claude-opus-5-5`）の 1 か所だけ。答えの読み取り・照合・運びには使わない。`claude-haiku-5-5` は夜間の点検の疎通にだけ使う。vision は旧主軸の `lib/karte/separate.ts` にだけ残る。Tool Runner は使っていない。
 - STT は外部ベンダ（Scribe v2／AmiVoice／Gemini 3.5 Transcribe を実録音で比較して 1 社に決める。基準線は kotoba-whisper）。ストリーミングは使わない。ファイル取込が正。
 - 不採用: computer use（例外条件を満たした場合のみ 4h 上限）、Managed Agents、異音分類、話者分離の自作。
 
