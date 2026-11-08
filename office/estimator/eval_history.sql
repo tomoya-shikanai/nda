@@ -1,0 +1,16 @@
+-- 当たり率を測るための、最近の納品書（請求書）の明細（読むだけ）。客・車・伝票番号の値は出さず、伝票ごとの通し番号だけ。
+-- @since は YYYYMMDD の int。明細が 2〜8 行で、項目CD 0 の行が無い伝票から、新しい順に 20 枚。
+WITH H AS (
+  SELECT TOP 20 h.TJNL_DENNO dn
+  FROM TJNL_DAT h
+  WHERE h.TJNL_DENSYU = 1 AND h.TJNL_DEL = 0 AND h.TJNL_KDEL = 0 AND h.TJNL_YMD >= @since
+    AND (SELECT COUNT(*) FROM SYAJNL_DAT d WHERE d.SYAJNL_DENNO = h.TJNL_DENNO AND d.SYAJNL_DEL = 0) BETWEEN 2 AND 8
+    AND NOT EXISTS (SELECT 1 FROM SYAJNL_DAT d WHERE d.SYAJNL_DENNO = h.TJNL_DENNO AND d.SYAJNL_DEL = 0 AND d.SYAJNL_KOUCD = 0)
+  ORDER BY h.TJNL_DENNO DESC
+)
+SELECT DENSE_RANK() OVER (ORDER BY H.dn DESC) slip, d.SYAJNL_DENSEQ seq, d.SYAJNL_KOUCD code,
+       d.SYAJNL_B_SU su, d.SYAJNL_B_TAN tan, d.SYAJNL_B_KIN bkin, d.SYAJNL_S_KIN skin
+FROM H JOIN SYAJNL_DAT d ON d.SYAJNL_DENNO = H.dn AND d.SYAJNL_DEL = 0
+ORDER BY slip, seq;
+-- 表の数を catalog.ps1 の形（5 つ）にそろえるための空の表
+SELECT TOP 0 0 AS x; SELECT TOP 0 0 AS x; SELECT TOP 0 0 AS x; SELECT TOP 0 0 AS x;
