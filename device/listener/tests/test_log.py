@@ -87,6 +87,24 @@ class LogTest(unittest.TestCase):
             if old is not None:
                 os.environ["NDA_LOG_DIR"] = old
 
+    def test_シンボリックリンクをたどらない_FIFOで止まらない(self):
+        outside = os.path.join(self.dir, "outside.txt")
+        Path(outside).write_text("")
+        logs = os.path.join(self.dir, "logs")
+        os.makedirs(logs)
+        os.symlink(outside, os.path.join(logs, "listener-2026-11-08.jsonl"))
+        log_event("record", {"sec": 1.0, "spoke": True}, logs, NOW)
+        self.assertEqual(Path(outside).read_text(), "", "リンクの先に書いていない")
+        fifo_dir = os.path.join(self.dir, "fifo")
+        os.makedirs(fifo_dir)
+        os.mkfifo(os.path.join(fifo_dir, "listener-2026-11-08.jsonl"))
+        log_event("record", {"sec": 1.0, "spoke": True}, fifo_dir, NOW)  # 読み手の無い FIFO でも止まらずに戻る
+
+    def test_新しいファイルは0600(self):
+        log_event("record", {"sec": 1.0, "spoke": True}, self.dir, NOW)
+        mode = os.stat(os.path.join(self.dir, "listener-2026-11-08.jsonl")).st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
     def test_送信の結果の種類(self):
         self.assertEqual([send_result(s) for s in (200, 201, 409, 422, 502, None)], ["ok", "ok", "conflict", "rejected", "rejected", "unreachable"])
 

@@ -5,8 +5,9 @@
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { readFileSync, statSync } from "node:fs";
+import { mkdir, symlink, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, test } from "node:test";
@@ -401,3 +402,23 @@ test("Codex 1: 自由な文字列は id・例外名・of に入らない。無�
   assert.deepEqual([...EVENT_KINDS].sort(), schemaKinds(), "of の enum は出来事の種類と同じ");
 });
 
+test("Codex 2: 記録のファイルがシンボリックリンクならたどらない、FIFO で止まらない、新しいファイルは 0600", async () => {
+  const logs = await tmp();
+  process.env.NDA_LOG_DIR = logs;
+  const now = new Date(2026, 10, 8, 9, 0, 0);
+  const outside = join(await tmp(), "outside.txt");
+  await writeFile(outside, "");
+  await symlink(outside, eventsFile(logs, now));
+  logEvent("tts", { ms: 1, ok: true, error: null }, now);
+  assert.equal(await readFile(outside, "utf8"), "", "リンクの先に書いていない");
+
+  const fifoDir = await tmp();
+  process.env.NDA_LOG_DIR = fifoDir;
+  execFileSync("mkfifo", [eventsFile(fifoDir, now)]);
+  logEvent("tts", { ms: 1, ok: true, error: null }, now); // 読み手の無い FIFO でも止まらずに戻る
+
+  const fresh = await tmp();
+  process.env.NDA_LOG_DIR = fresh;
+  logEvent("tts", { ms: 1, ok: true, error: null }, now);
+  assert.equal(statSync(eventsFile(fresh, now)).mode & 0o777, 0o600);
+});

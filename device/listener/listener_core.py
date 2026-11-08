@@ -8,6 +8,7 @@ import io
 import json
 import math
 import os
+import stat
 import uuid
 import wave
 from array import array
@@ -189,7 +190,10 @@ def _valid(kind: str, fields: dict) -> bool:
 
 
 def log_event(kind: str, fields: dict, log_dir: str | None = None, now: datetime | None = None) -> None:
-    """1 行足す。log_dir（無ければ NDA_LOG_DIR）が無ければ何もしない。形が合わなければ捨てて log.invalid。投げない。"""
+    """1 行足す。log_dir（無ければ NDA_LOG_DIR）が無ければ何もしない。形が合わなければ捨てて log.invalid。投げない。
+
+    シンボリックリンクはたどらず（O_NOFOLLOW）、FIFO で止まらず（O_NONBLOCK）、開いた後に通常のファイルでなければ書かない。新規は 0600。
+    """
     d = log_dir if log_dir is not None else os.environ.get("NDA_LOG_DIR")
     if not d:
         return
@@ -201,9 +205,13 @@ def log_event(kind: str, fields: dict, log_dir: str | None = None, now: datetime
     try:
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, f"listener-{now.strftime('%Y-%m-%d')}.jsonl")
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path, flags, 0o600)
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                os.write(fd, (json.dumps(line, ensure_ascii=False) + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
     except OSError:
         pass  # 記録の失敗で聞き役を止めない
 

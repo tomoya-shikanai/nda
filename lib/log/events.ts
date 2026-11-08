@@ -6,7 +6,7 @@
  * 記録するのは、数・時間・種類名（閉じた enum）・id（作業 id・メッセージ id。形を確かめる）だけ。
  * 出来事ごとに形を zod で決め（strict で余計な欄を許さない）、合わなければその行を捨てて log.invalid（種類だけ）を残す。
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { MODEL_AUX, MODEL_MAIN } from "../claude";
@@ -205,9 +205,23 @@ export const localDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1
 
 export const eventsFile = (dir: string, d: Date) => join(dir, `events-${localDate(d)}.jsonl`);
 
+/**
+ * 追記する。シンボリックリンクはたどらず（O_NOFOLLOW）、FIFO で止まらず（O_NONBLOCK）、開いた後に通常のファイルであることを確かめる。
+ * 違えば閉じて書かない。新しく作るファイルは 0600。
+ */
 function append(dir: string, now: Date, line: Record<string, unknown>): void {
   mkdirSync(dir, { recursive: true });
-  appendFileSync(eventsFile(dir, now), `${JSON.stringify(line)}\n`, { encoding: "utf8", mode: 0o600 });
+  const fd = openSync(
+    eventsFile(dir, now),
+    constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    0o600,
+  );
+  try {
+    if (!fstatSync(fd).isFile()) return;
+    writeSync(fd, `${JSON.stringify(line)}\n`);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** 1 行足す。NDA_LOG_DIR が無ければ何もしない。形が合わなければ捨てて log.invalid。投げない。 */
