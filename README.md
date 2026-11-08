@@ -79,7 +79,7 @@ python device/listener/listen.py --model <vosk-model-small-ja-0.22 の置き場>
 | 開発 | サブエージェント・Skill | 朝の検収。書いた本人ではないエージェントが差分を受け入れ条件と規則に照らして独立にレビュー | `.claude/agents/night-reviewer.md`・`.claude/skills/night-review/` |
 | 開発 | 並行の実装 | 仕様が決まった作業を git worktree で分け、サブエージェントに並行で進めさせる。同じ作業ツリーでぶつかった失敗から切り替えた | `tasks/lessons.md`（11/4） |
 | 開発 | モデルの使い分け | 製品: 明細の対応づけは Opus 5.5（正しさ）、会話の受け皿は Sonnet 5.5（速さ）。開発: 普段は Opus 5.5、取り消しにくい設計判断 2 件（明細の検証の作り直し、工場と事務所の約束事）と README・台本の仕上げだけ Fable 5.1、夜間の点検の疎通は Haiku 5.5 | `lib/claude.ts`・`CLAUDE.md`・`docs/design/invoice-verify.md`・`docs/design/pi-office.md`・`scripts/night-probe.sh` |
-| 開発 | 敵対レビュー | 捏造を止める仕組みと客の情報を扱うコードを変えるたびに、別の会社のモデル（Codex）に `.env` と `data/` の無い worktree で穴を探させ、確定した欠陥だけ Claude Code が確かめて直した。9 回、修正 17 コミット | `git log --grep Codex`・`progress.md` |
+| 開発 | 敵対レビュー | 捏造を止める仕組みと客の情報を扱うコードを変えるたびに、別の会社のモデル（Codex）に `.env` と `data/` の無い worktree で穴を探させ、確定した欠陥だけ Claude Code が確かめて直した。10 回以上、修正 27 コミット | `git log --no-merges -i --grep=codex`・`progress.md` |
 | 開発 | 事務所の PC でも Claude Code | 業務ソフトの DB を読むだけのログイン（SELECT だけ）で構造を調べ、記録と集計のプログラムを作った。客の情報は PC の外に出さない | `office/`・`docs/racros-schema.md` |
 | 開発 | 直すための材料を残す | 工場で動いたときの出来事を JSONL で記録し、日ごとに集計して「気になる点」を出す。自動で直す仕組みは作らず、人と Claude Code が読んで直す。記録に言葉・客の情報が入らないことは試験で確かめる | `lib/log/`・`docs/logging.md`・`tests/log-events.test.ts` |
 | 不採用 | — | computer use、Managed Agents、ストリーミングの STT、異音の分類、話者分離の自作。MCP は使う場面が無かった | `docs/decisions.md` |
@@ -109,7 +109,7 @@ python device/listener/listen.py --model <vosk-model-small-ja-0.22 の置き場>
 | 推測で埋めた件数 | 誤った金額が確認事項なしで合計に入った件数。0 が合格 | **0 / 10**（架空のタイヤ交換の文字起こし 10 件。言い直し・否定・断り・合計の食い違いを含む。`docs/experiments.md` 11/4） |
 | 時間・費用 | 1 件の処理の秒数と Claude の費用 | 1 件 2.3〜5.1 秒、10 件で約 $0.17（1 件約 $0.017） |
 | 試験 | 自動試験の件数（`pnpm check` が流すもの） | TypeScript 299 件、Python 91 件（事務所 52・聞き役 39）、PowerShell 73 件（事務所の PC で実行） |
-| 敵対レビュー | Codex に穴を探させた回数と、直したコミット | 9 回、19 コミット |
+| 敵対レビュー | Codex に穴を探させた回数と、直したコミット | 10 回以上、27 コミット（11/8 夕方） |
 | 開発の量 | 期間中のコミット | 208 件（11/2〜11/8 夕方） |
 | 父の実録音での評価 | 明細の正しさ（父の判定）・質問の数と不要だった数 | **未**。期待を先に固定してから測る決まり（`docs/preregistration.md`、`lib/eval/prereg.ts`）で、提出時点では測っていない。11/9 以降に測って追記する |
 
