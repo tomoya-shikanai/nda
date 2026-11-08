@@ -324,4 +324,7 @@ def load_config(data: object) -> dict:
         raise ValueError("pi_url は http://<工場>/api/office/reply の形")
     if secret is not None and (not isinstance(secret, str) or len(secret) < 16):
         raise ValueError("secret は 16 文字以上")
-    return {"allowed_customers": allowed, "item_codes": codes, "free_work_kind": kinds, "db_reader_file": reader, "pi_url": pi_url, "secret": secret}
+    from .pull import load_pull_config  # 工場の Pi へ取りに行く設定（無ければ取りに行かない）
+
+    return {"allowed_customers": allowed, "item_codes": codes, "free_work_kind": kinds, "db_reader_file": reader,
+            "pi_url": pi_url, "secret": secret, "pi_pull": load_pull_config(data.get("pi_pull"))}

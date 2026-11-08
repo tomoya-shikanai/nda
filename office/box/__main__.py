@@ -12,7 +12,9 @@
   {"allowed_customers": ["<練習用の客の番号>"], "item_codes": {"<品目の正式名>": <項目CD>},
    "free_work_kind": {"<項目CD 0 の品目>": <作業区分>},
    "db_reader_file": "<DB を読むだけの接続の文字列を書いたファイル>",
-   "pi_url": "http://<工場>:3000/api/office/reply", "secret": "<合言葉>"}   ← pi_url・secret は無くてよい
+   "pi_url": "http://<工場>:3000/api/office/reply", "secret": "<合言葉>",   ← pi_url・secret は無くてよい
+   "pi_pull": {"host": "<Pi の名前>.local", "user": "<Pi のユーザー>", "key_file": "<鍵>", "known_hosts": "<Pi の鍵の控え>",
+               "interval_s": 3}}   ← 無くてよい。あれば run --send のとき Pi の送り箱へ取りに行く（box/pull.py）
   送る前に、db_reader_file で車のナンバーと客の名前を引いて画面に出し、人にナンバーの番号を打ってもらう。
 """
 
@@ -240,9 +242,17 @@ def cmd_run(args) -> int:
             return 2
         box.recover()
         box.resend()
+        puller = None
+        if cfg.get("pi_pull") is not None:
+            from .pull import Puller
+
+            puller = Puller(root, cfg["pi_pull"], log)
+            log(f"工場の Pi の送り箱へ {cfg['pi_pull'].interval_s:g} 秒おきに取りに行く")
         log(f"受け箱を見ています: {box.inbox}（Ctrl+C で終わる）")
         try:
             while True:
+                if puller is not None:
+                    puller.tick()  # 入れている間は取りに行かない（届いた分は Pi の送り箱で待つ）
                 box.run_once()
                 time.sleep(POLL_S)
         except KeyboardInterrupt:
@@ -296,9 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     sy.add_argument("--customer", action="append", default=[])
     sy.add_argument("--kind", choices=("estimate", "invoice"), default="invoice")
     sy.add_argument("--root", default=str(DEFAULT_ROOT))
+    pi = sub.add_parser("pi", allow_abbrev=False, help="工場の Pi の送り箱が見えるかだけ確かめる（取らない・印も付けない）")
+    pi.add_argument("--root", default=str(DEFAULT_ROOT))
     args = p.parse_args(argv)
     if args.cmd == "say":
         return cmd_say(args)
+    if args.cmd == "pi":
+        return cmd_pi(args)
     if args.cmd == "run" and (args.auto or args.until_list) and not args.send:
         print("--auto と --until-list は --send と一緒にだけ使える。", file=sys.stderr)
         return 2
@@ -306,6 +320,28 @@ def main(argv: list[str] | None = None) -> int:
         print("--until-list は --auto と一緒にだけ使える。", file=sys.stderr)
         return 2
     return cmd_check(args) if args.cmd == "check" else cmd_run(args)
+
+
+def cmd_pi(args) -> int:
+    """pi_pull の設定で 1 回つなぎ、送り箱に何件あるかだけを出す（list だけ。get・ack はしない）。"""
+    from .pull import NAME_RE, run_ssh
+
+    cfg = load_config(json.loads((Path(args.root) / "config.json").read_text(encoding="utf-8")))
+    c = cfg.get("pi_pull")
+    if c is None:
+        print("config.json に pi_pull が無い。", file=sys.stderr)
+        return 2
+    try:
+        code, out = run_ssh(c, "list")
+    except Exception as ex:
+        print(f"つながらない（{type(ex).__name__}）。", file=sys.stderr)
+        return 1
+    if code != 0:
+        print(f"つながらない・門番が断った（終わりの番号 {code}）。", file=sys.stderr)
+        return 1
+    names = [n for n in out.decode("ascii", "replace").splitlines() if NAME_RE.match(n)]
+    print(f"工場の Pi の送り箱につながった。届いている指示: {len(names)} 件（取っていない）。")
+    return 0
 
 
 def cmd_say(args) -> int:
