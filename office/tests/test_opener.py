@@ -202,6 +202,17 @@ class OpenerTest(unittest.TestCase):
                     run(s, rows=n)
                 self.assertEqual(s.state, "list")  # 一覧の上で止まり、客を選ばない
 
+    def test_stop_at_list_selects_nothing(self):
+        s = FakeScreen()
+        log = []
+        w = Opener(s, PATH, log.append).run(Target(vehicle_no=7319, customer_name=NAME, kind="estimate", plate_bango="500",
+                                                   plate_kana="あ", list_rows=2), stop_at_list=True)
+        self.assertIsNone(w)
+        self.assertEqual(s.state, "list")
+        self.assertFalse([x for x in s.sent if x[0] == "key" and x[1] in ("PageUp", "Down")])
+        self.assertIn("ナンバーの合う行 1", log[-1])
+        self.assertNotIn("7319", log[-1])
+
     def test_header_row_is_not_counted(self):
         s = FakeScreen(rows=("顧客 名前 ナンバー", "架空 500 さ 1234 架空", "架空 500 あ 7319 架空"))
         run(s)
@@ -273,6 +284,13 @@ class OpenerTest(unittest.TestCase):
         with self.assertRaises(Stop):
             run(s)
         self.assertFalse([x for x in s.sent if x[0] == "click"])
+
+    def test_unknown_own_window_while_waiting_stops(self):
+        s = FakeScreen()
+        s.selected_title = "[ 架空 ] - [ 知らない画面 ] - RacroSⅢ"  # 客を選んだ後に、予定に無い窓が出る
+        with self.assertRaisesRegex(Stop, "予定に無い窓"):
+            run(s)
+        self.assertNotIn(("char", "4"), s.sent)
 
     def test_dialog_stops(self):
         s = FakeScreen()

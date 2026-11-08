@@ -78,6 +78,7 @@ class Opener:
         self.desk, self.p, self.log = desk, load_openpath(path), log
         self.tol = int(self.p.get("position_tolerance_px", 3))
         self.pid: int | None = None
+        self.expected_titles: set[str] = {"", "お待ちください"}  # 起動した業務ソフトで、前に出てよい窓の題名
         self.tick = 0
         self.cursor = (0, 0)
 
@@ -101,6 +102,13 @@ class Opener:
             if w.title not in allow_titles and any(s in w.title for s in self.p.get("stop_titles", [])):
                 raise Stop("止める小窓が出ている")
 
+    def _check_own_windows(self) -> None:
+        if self.pid is None:
+            return
+        fg = self._fg()
+        if fg is not None and fg.pid == self.pid and fg.title not in self.expected_titles:
+            raise Stop("業務ソフトの、予定に無い窓が前に出た")
+
     def _fg(self) -> WindowInfo | None:
         try:
             return self.desk.foreground()
@@ -120,6 +128,7 @@ class Opener:
         while True:
             self._check_input()
             self._check_dialogs()  # 待つ間に出て消えるダイアログも見逃さない（Codex の指摘）
+            self._check_own_windows()  # 自分の起動した業務ソフトの、予定に無い窓が前に出たら止める（Codex の指摘）
             got = ok()
             if got:
                 if held >= stable:
@@ -177,7 +186,8 @@ class Opener:
         tail = self.p["title_tail"]
         return f"[ {name} ] - [ {screen} ] - {tail}" if name else f"[ {screen} ] - {tail}"
 
-    def run(self, t: Target) -> WindowInfo:
+    def run(self, t: Target, stop_at_list: bool = False) -> WindowInfo | None:
+        """stop_at_list: 初回の確かめ用。一覧を読んで、行の数と合う行の数だけを出し、何も選ばずに止まる（None を返す）。"""
         kind = self.p["kinds"].get(t.kind)
         if not isinstance(kind, dict):
             raise Stop("伝票の種類が openpath.json に無い")
@@ -185,6 +195,7 @@ class Opener:
             raise Stop("客の名前かナンバーの番号が使えない形")
         screen, densyu = kind["screen"], int(kind["densyu"])
         slip_title = self._title(screen, t.customer_name)
+        self.expected_titles |= {self._title(screen), slip_title, self.p["search"]["title"]}
         # 同じ客の伝票の窓がもう開いていれば、2 つの窓で同じ伝票を開かないよう止める
         if any(w.title == slip_title for w in self.desk.visible_windows()):
             raise Stop("同じ客の伝票の窓がもう開いている")
@@ -252,6 +263,11 @@ class Opener:
         # 数字のある行だけを車の行とみる（見出しの行は数えない）。その数が DB で数えた台数と違えば、
         # 読み落としか見出しの数え違いなので止める（Codex の指摘）
         data = [r for r in rows if re.search(r"\d", r)]
+        if stop_at_list:
+            plate0 = re.compile(rf"(?<!\d){re.escape(t.plate_bango)}\s*{re.escape(t.plate_kana)}\s*{t.vehicle_no}(?!\d)")
+            self.log(f"一覧: 読めた行 {len(rows)}・数字のある行 {len(data)}（DB の台数 {t.list_rows}）・ナンバーの合う行 "
+                     f"{sum(1 for r in data if plate0.search(r))}。ここで止まる（何も選んでいない）。")
+            return None
         if len(data) != t.list_rows:
             raise Stop(f"一覧の車の行の数が、DB の台数と合わない（読めた {len(data)} 行）")
         no = str(t.vehicle_no)
@@ -311,5 +327,6 @@ class Opener:
         raise Stop("Enter を決まった回数送っても、明細 1 行目に来ない")
 
 
-def run(desk: OpenDesktop, t: Target, log: Callable[[str], None], path: dict | None = None) -> WindowInfo:
-    return Opener(desk, path if path is not None else json.loads(OPENPATH.read_text(encoding="utf-8")), log).run(t)
+def run(desk: OpenDesktop, t: Target, log: Callable[[str], None], path: dict | None = None,
+        stop_at_list: bool = False) -> WindowInfo | None:
+    return Opener(desk, path if path is not None else json.loads(OPENPATH.read_text(encoding="utf-8")), log).run(t, stop_at_list)
