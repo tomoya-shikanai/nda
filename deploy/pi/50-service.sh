@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
-# 50-service.sh: nDa 本体を systemd のサービスにする（docs/pi-setup.md §6-5）
+# 50-service.sh: nDa 本体を systemd のサービスにする（docs/pi-setup.md §6-5）。一度だけの土台。本体の更新と build は 52-deploy.sh。
 #   本体は管理用の nda ではなく、専用の nda-app（--system、sudo なし、ログインシェルなし）で動かす。
 #   置き場:
-#     /opt/nda           本体（nda が配置する。nda-app は読むだけ）
-#     /var/lib/nda       データ（libSQL のファイル・録音。nda-app だけが書ける。nda-app のホーム）
-#     /etc/nda/nda.env   秘密の値（nda-app:nda-app、600。systemd が EnvironmentFile として読む）
+#     /opt/nda                本体（公開リポジトリを nda が clone する。nda-app は読むだけ）
+#     /var/lib/nda            データ（nda-app だけが書ける。nda-app のホーム）
+#       sessions/             作業の状態（NDA_SESSION_DIR）
+#       ledger.json           料金表（NDA_LEDGER_PATH。初回だけ /opt/nda/data/ledger.json から写す）
+#       next-cache/           next start が書くキャッシュ（/opt/nda/.next/cache をここへ向ける。52 が張る）
+#     /etc/nda/nda.env        秘密の値（nda-app:nda-app、600。systemd が EnvironmentFile として読む）
+#     /mnt/nda-office         事務所の受け箱（58-office-share.sh が mount する。nda.service はここにも書ける）
 #   このスクリプトは .env の中身を読まない・作らない（権限だけ見る）。
 # 流し方: ssh nda-pi 'bash -s' < deploy/pi/50-service.sh
-#   Node の場所が /usr/local/bin でないとき: ssh nda-pi 'NDA_NODE_BIN_DIR=/usr/bin bash -s' < deploy/pi/50-service.sh
+# 環境変数:
+#   NDA_NODE_BIN_DIR  node の置き場（既定 /usr/local/bin。既定のときだけ Node を公式の tar から入れる）
+#   NDA_BIND          next start の待ち受け（既定 0.0.0.0。事務所の返し POST /api/office/reply を LAN で受けるため。危険は README）
+#   NDA_REPO_URL      本体の取り元（既定 https://github.com/tomoya-shikanai/nda.git）
 #
-# 仮: ExecStart は `pnpm start`（nDa 本体の起動命令が決まったら UNIT の ExecStart を直す）。
 # 実機で確かめる:
-#   - Node と pnpm の入れ方と場所（このスクリプトは入れない。NODE_BIN_DIR を合わせる）
 #   - systemd の保護を入れた状態で next start が動くか（systemd-analyze security nda.service も見る）
 #   - 停電後の復帰（sudo reboot の 2 分後に systemctl is-active nda が active）
 set -euo pipefail
@@ -23,13 +28,18 @@ APP_DIR=/opt/nda
 DATA_DIR=/var/lib/nda
 ENV_DIR=/etc/nda
 ENV_FILE=/etc/nda/nda.env
-# node と pnpm の置き場はここ 1 か所で決める（入れ方は実機で決める。README 参照）
+OFFICE_MNT=/mnt/nda-office
 NODE_BIN_DIR="${NDA_NODE_BIN_DIR:-/usr/local/bin}"
+BIND="${NDA_BIND:-0.0.0.0}"
+REPO_URL="${NDA_REPO_URL:-https://github.com/tomoya-shikanai/nda.git}"
+# Node は版と SHA-256 を固定する（https://nodejs.org/dist/v24.22.1/SHASUMS256.txt の linux-arm64.tar.xz の行。Mac の開発と同じ版）
+NODE_VERSION=24.22.1
+NODE_SHA256=dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13fca336e
 
 # ディレクトリを 所有者:グループ と権限つきで用意する（すでに正しければ何もしない）
 ensure_dir() { # パス 所有者 グループ 権限 説明
   local p=$1 o=$2 g=$3 m=$4 what=$5
-  if [ -d "$p" ] && [ "$(stat -c '%U:%G %a' "$p")" = "${o}:${g} ${m}" ]; then
+  if sudo test -d "$p" && [ "$(sudo stat -c '%U:%G %a' "$p")" = "${o}:${g} ${m}" ]; then
     say "[済] ${p}（${o}:${g} ${m}、${what}）"
   else
     sudo install -d -o "$o" -g "$g" -m "$m" "$p"
@@ -37,9 +47,50 @@ ensure_dir() { # パス 所有者 グループ 権限 説明
   fi
 }
 
+ensure_pkgs() { # パッケージ...
+  local missing=() p
+  for p in "$@"; do dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p"); done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    say "[済] apt: $*"
+  else
+    sudo apt-get update -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+    say "[変更] apt で入れた: ${missing[*]}"
+  fi
+}
+
+install_node() {
+  if [ "$("$NODE_BIN_DIR/node" -v 2>/dev/null || true)" = "v${NODE_VERSION}" ]; then
+    say "[済] node v${NODE_VERSION}（${NODE_BIN_DIR}/node）"
+    return
+  fi
+  if [ "$NODE_BIN_DIR" != /usr/local/bin ]; then
+    say "[警告] ${NODE_BIN_DIR}/node が v${NODE_VERSION} でない（NDA_NODE_BIN_DIR を指定したときは自分で入れる）"
+    return
+  fi
+  [ "$(uname -m)" = aarch64 ] || { say "[失敗] aarch64 でない（$(uname -m)）"; exit 1; }
+  local name="node-v${NODE_VERSION}-linux-arm64" tmp b
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/$name.tar.xz" "https://nodejs.org/dist/v${NODE_VERSION}/$name.tar.xz"
+  if ! printf '%s  %s\n' "$NODE_SHA256" "$tmp/$name.tar.xz" | sha256sum -c --status; then
+    rm -rf "$tmp"; say "[失敗] Node の tar の SHA-256 が合わない"; exit 1
+  fi
+  sudo install -d -m 755 /usr/local/lib/nodejs
+  sudo rm -rf "/usr/local/lib/nodejs/$name"
+  sudo tar -xJf "$tmp/$name.tar.xz" -C /usr/local/lib/nodejs --no-same-owner
+  rm -rf "$tmp"
+  for b in node npm npx corepack; do
+    sudo ln -sfn "/usr/local/lib/nodejs/$name/bin/$b" "/usr/local/bin/$b"
+  done
+  say "[変更] Node v${NODE_VERSION} を /usr/local/lib/nodejs/$name に入れ、/usr/local/bin に node・npm・npx・corepack を張った"
+}
+
 main() {
   sudo -n true 2>/dev/null || { say "[失敗] パスワードなしの sudo が使えない"; exit 1; }
   [ "$(id -un)" = "nda" ] || { say "[失敗] nda ユーザーで流す想定（今は $(id -un)）"; exit 1; }
+
+  ensure_pkgs git curl xz-utils ca-certificates
+  install_node
 
   # --- 本体を動かす専用のユーザー ---
   nologin=$(PATH="$PATH:/usr/sbin:/sbin" type -P nologin || echo /usr/sbin/nologin)
@@ -65,7 +116,15 @@ main() {
   # --- 置き場 ---
   ensure_dir "$APP_DIR" nda nda 755 "本体。nda が配置し、${APP_USER} は読むだけ"
   ensure_dir "$DATA_DIR" "$APP_USER" "$APP_USER" 750 "データ。${APP_USER} だけが書ける"
+  ensure_dir "$DATA_DIR/sessions" "$APP_USER" "$APP_USER" 750 "作業の状態（NDA_SESSION_DIR）"
+  ensure_dir "$DATA_DIR/next-cache" "$APP_USER" "$APP_USER" 750 "next start のキャッシュ"
   ensure_dir "$ENV_DIR" root root 755 "秘密の値の置き場"
+  # 受け箱の mount 先（mount は 58。先に作っておくと nda.service の ReadWritePaths が効く）
+  if findmnt -n "$OFFICE_MNT" >/dev/null 2>&1; then
+    say "[済] ${OFFICE_MNT} は mount 済み（58-office-share.sh）"
+  else
+    ensure_dir "$OFFICE_MNT" root root 755 "事務所の受け箱の mount 先"
+  fi
 
   # .env は権限だけ見る（読まない・作らない・変えない）
   if [ -e "$ENV_FILE" ]; then
@@ -82,24 +141,34 @@ main() {
     say "[警告] 旧い置き場の /home/nda/nda/.env がある（もう使わない。中身を ${ENV_FILE} へ移すのは鹿内さん）"
   fi
 
-  # --- node と pnpm ---
-  node_ok=1
-  for b in node pnpm; do
-    if [ -x "$NODE_BIN_DIR/$b" ]; then
-      say "[済] ${NODE_BIN_DIR}/${b} がある"
-    else
-      say "[警告] ${NODE_BIN_DIR}/${b} が無い（Node と pnpm を入れるか、NDA_NODE_BIN_DIR で場所を合わせる）"
-      node_ok=0
-    fi
-  done
+  # --- 本体のコード（初回だけ clone。更新は 52-deploy.sh） ---
+  if [ -d "$APP_DIR/.git" ]; then
+    say "[済] ${APP_DIR} は clone 済み（$(git -C "$APP_DIR" rev-parse --short HEAD)。更新は 52-deploy.sh）"
+  elif [ -z "$(ls -A "$APP_DIR")" ]; then
+    git clone --quiet "$REPO_URL" "$APP_DIR"
+    say "[変更] ${REPO_URL} を ${APP_DIR} に clone した（$(git -C "$APP_DIR" rev-parse --short HEAD)）"
+  else
+    say "[失敗] ${APP_DIR} が空でなく git でもない（中を確かめてから空にする）"; exit 1
+  fi
 
-  # ExecStart は絶対パス（bash -lc を使わない）。pnpm は中で node と next を呼ぶので、PATH は NODE_BIN_DIR を先頭に固定する。
-  # MemoryDenyWriteExecute は V8 の JIT を壊すので入れない。
+  # --- 料金表（初回だけ写す。その後は /var/lib/nda の方が正。直すときはパスワード付きの sudo で） ---
+  if sudo test -f "$DATA_DIR/ledger.json"; then
+    say "[済] ${DATA_DIR}/ledger.json がある（上書きしない）"
+  elif [ -f "$APP_DIR/data/ledger.json" ]; then
+    sudo install -o "$APP_USER" -g "$APP_USER" -m 640 "$APP_DIR/data/ledger.json" "$DATA_DIR/ledger.json"
+    say "[変更] ${APP_DIR}/data/ledger.json を ${DATA_DIR}/ledger.json に写した（NDA_LEDGER_PATH）"
+  else
+    say "[警告] ${APP_DIR}/data/ledger.json が無い（料金表が引けない）"
+  fi
+
+  # ExecStart は絶対パス。pnpm を挟まず node で next を直に起動する（実行時に corepack が pnpm を取りに行かないように）。
+  # EnvironmentFile は Environment= より優先される（nda.env に同じ名前を書けばそちらが勝つ）。
+  # MemoryDenyWriteExecute は V8 の JIT を壊すので入れない。ReadWritePaths の '-' は、無くても起動を止めない印。
   unit=$(cat <<UNIT
 # deploy/pi/50-service.sh が管理する（手で編集しない）
 [Unit]
 Description=nDa (Next.js + libSQL)
-After=network-online.target
+After=network-online.target remote-fs.target
 Wants=network-online.target
 
 [Service]
@@ -107,12 +176,13 @@ Type=simple
 User=${APP_USER}
 Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
-EnvironmentFile=-${ENV_FILE}
 Environment=NODE_ENV=production
-Environment=PORT=3000
+Environment=NEXT_TELEMETRY_DISABLED=1
 Environment=PATH=${NODE_BIN_DIR}:/usr/bin:/bin
-# 仮: 起動命令は本体が決まったら直す
-ExecStart=${NODE_BIN_DIR}/pnpm start
+Environment=NDA_SESSION_DIR=${DATA_DIR}/sessions
+Environment=NDA_LEDGER_PATH=${DATA_DIR}/ledger.json
+EnvironmentFile=-${ENV_FILE}
+ExecStart=${NODE_BIN_DIR}/node ${APP_DIR}/node_modules/next/dist/bin/next start -H ${BIND} -p 3000
 Restart=always
 RestartSec=5
 UMask=0027
@@ -121,7 +191,7 @@ UMask=0027
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=${DATA_DIR}
+ReadWritePaths=${DATA_DIR} -${OFFICE_MNT}
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
@@ -150,10 +220,9 @@ UNIT
     printf '%s\n' "$unit" | sudo tee "$UNIT_PATH" >/dev/null
     sudo chmod 644 "$UNIT_PATH"
     sudo systemctl daemon-reload
-    say "[変更] ${UNIT_PATH} を書いて daemon-reload した（User=${APP_USER}、ExecStart=${NODE_BIN_DIR}/pnpm start）"
-    # verify は ExecStart の実体が無いときも文句を言うので、警告にとどめる
+    say "[変更] ${UNIT_PATH} を書いて daemon-reload した（User=${APP_USER}、next start -H ${BIND} -p 3000）"
     if ! systemd-analyze verify "$UNIT_PATH" >/dev/null 2>&1; then
-      say "[警告] systemd-analyze verify ${UNIT_PATH} が通らない（node・pnpm が無い間は正常。あれば内容を見る）"
+      say "[警告] systemd-analyze verify ${UNIT_PATH} が通らない（52 で build する前は正常。あれば内容を見る）"
     fi
     if systemctl is-active --quiet nda.service; then
       sudo systemctl restart nda.service
@@ -168,11 +237,9 @@ UNIT
     say "[変更] nda.service を enable した（停電から戻ったら自動で上がる）"
   fi
 
-  # 本体が置かれる前に起動すると落ち続けるので、package.json と node がある時だけ起動する
-  if [ ! -f "$APP_DIR/package.json" ]; then
-    say "[情報] ${APP_DIR}/package.json が無いので start しない（本体を置いてから sudo systemctl start nda.service）"
-  elif [ "$node_ok" -eq 0 ]; then
-    say "[情報] node か pnpm が無いので start しない"
+  # build の前に起動すると落ち続けるので、build 済みのときだけ起動する（build と起動は 52-deploy.sh）
+  if [ ! -f "$APP_DIR/.next/BUILD_ID" ]; then
+    say "[情報] まだ build していないので start しない（次は 52-deploy.sh）"
   elif systemctl is-active --quiet nda.service; then
     say "[済] nda.service は active"
   else

@@ -12,6 +12,8 @@
 #   - Chromium の実行名（Bookworm は chromium-browser、新しい版は chromium。自動で拾う）
 #   - 画面が消えないこと（labwc に既定の idle 処理は無いはずだが、10 分以上待って確かめる）
 #   - raspi-config nonint の B4（デスクトップ自動ログイン）が版で同じ意味か
+#   - ずんだもんの声が Jabra から鳴るか（PipeWire の既定のシンク。キオスクの起動のたびに pactl で Jabra にする）
+#   - 触らなくても声が鳴るか（--autoplay-policy=no-user-gesture-required。/monitor の <audio> の play()）
 set -euo pipefail
 
 say() { printf '%s\n' "$*"; }
@@ -43,6 +45,15 @@ main() {
   say "[情報] Chromium: ${browser}"
   command -v labwc >/dev/null || say "[警告] labwc が無い。この OS のセッションが違う可能性（実機で確かめる）"
 
+  # PipeWire の既定のシンク・ソースを Jabra にする道具（pipewire-pulse に話す pactl）
+  if command -v pactl >/dev/null; then
+    say "[済] pactl がある"
+  else
+    sudo -n apt-get update -qq
+    sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq pulseaudio-utils
+    say "[変更] apt で pulseaudio-utils（pactl）を入れた"
+  fi
+
   # --- キオスク用の起動スクリプト ---
   # 本体が上がるまで待ってから開く（待たないと起動直後にエラーページが固まる）。
   # 接続できれば 404 でも開く（仮のページが無い間も落ちない）。
@@ -51,11 +62,24 @@ main() {
 # nDa: Chromium のキオスク表示。deploy/pi/40-display.sh が管理する（手で編集しない）。
 URL="${URL}"
 until curl -s -o /dev/null --max-time 2 "\$URL"; do sleep 2; done
+# ずんだもんの声と合図音を Jabra から出す（PipeWire の既定のシンクとソース）。Jabra が出るまで最大 20 秒待つ
+for _ in \$(seq 20); do
+  sink=\$(pactl list short sinks 2>/dev/null | awk 'tolower(\$2) ~ /jabra/ {print \$2; exit}')
+  [ -n "\$sink" ] && break; sleep 1
+done
+if [ -n "\$sink" ]; then
+  pactl set-default-sink "\$sink"
+  src=\$(pactl list short sources 2>/dev/null | awk 'tolower(\$2) ~ /jabra/ && \$2 !~ /\\.monitor\$/ {print \$2; exit}')
+  [ -n "\$src" ] && pactl set-default-source "\$src"
+else
+  echo "nda-kiosk: Jabra のシンクが見つからない（既定のまま）" >&2
+fi
 # 前回の異常終了の「復元しますか」を出さない
 prefs="\$HOME/.config/chromium/Default/Preferences"
 [ -f "\$prefs" ] && sed -i 's/"exited_cleanly":false/"exited_cleanly":true/; s/"exit_type":"Crashed"/"exit_type":"Normal"/' "\$prefs"
 exec ${browser} --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble \\
   --no-first-run --disable-translate --overscroll-history-navigation=0 \\
+  --autoplay-policy=no-user-gesture-required \\
   --ozone-platform=wayland "\$URL"
 KIOSK
 )
